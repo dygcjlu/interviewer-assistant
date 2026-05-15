@@ -251,7 +251,7 @@ progress/
 具体内容：
 - `src/models/session.py` — `InterviewSession` dataclass（含所有字段，不可为 Any）
 - `src/models/candidate.py` — `CandidateProfile` dataclass
-- `src/models/eval.py` — `EvalReport` dataclass
+- `src/models/evaluation.py` — `EvalReport` dataclass
 - `src/audio/protocol.py` — `AudioCapturer` / `STTEngine` Protocol
 - `src/llm/protocol.py` — `LLMClient` Protocol
 - `src/audio/mock.py` — `MockAudioCapturer` 实现（返回静音数据，用于 Linux 开发环境替代 WASAPI）
