@@ -14,6 +14,16 @@ from .candidate import (
 )
 from .evaluation import EvalReport, DimensionScore
 from .message import Message, ToolCallInfo, FunctionCallInfo
+from .exceptions import (
+    InterviewAssistantError,
+    SessionError,
+    LLMTimeoutError,
+    LLMRateLimitError,
+    LLMResponseError,
+    StorageError,
+    AudioError,
+    STTError,
+)
 
 __all__ = [
     "InterviewStage",
@@ -31,4 +41,12 @@ __all__ = [
     "Message",
     "ToolCallInfo",
     "FunctionCallInfo",
+    "InterviewAssistantError",
+    "SessionError",
+    "LLMTimeoutError",
+    "LLMRateLimitError",
+    "LLMResponseError",
+    "StorageError",
+    "AudioError",
+    "STTError",
 ]

@@ -218,3 +218,10 @@ __marimo__/
 .streamlit/secrets.toml
 
 reference/
+# Frontend dependencies
+frontend/node_modules/
+frontend/dist/
+
+# Editor / AI tool configs
+.claude/
+.cursor/settings.json

@@ -72,4 +72,50 @@ docs/arc/                 # 详细架构文档
 4. **层间隔离**：下层不感知上层；同层通过 `InterviewSession` 或事件通信。
 5. **配置分离**：业务参数放 `config.yaml`，API Key 等敏感信息放 `.env`。
 
+---
+
+## 代码规范约束
+
+### 文件大小
+- 每个 Python 源文件不超过 **1000 行**（不含空行和注释）；超过时拆分为子模块。
+- 每个 Vue 单文件组件（`.vue`）不超过 **1000 行**；逻辑复杂时提取 composable。
+- 每个非入口 Python 文件（非 `main.py`）不超过 **1000 行**（含注释）。
+
+### 函数 / 方法
+- 单个函数 / 方法不超过 **100 行**；超过时提取辅助函数。
+- 函数参数不超过 **5 个**；更多参数改用 dataclass / TypedDict 封装。
+
+### 模块与导入
+- 禁止循环导入；依赖方向严格遵循分层规则（基础设施 → 框架 → Agent → Web）。
+- 同一模块内禁止 `from x import *`；所有导入须显式列出符号。
+
+### 类型标注
+- 所有 Python 函数签名须有完整类型标注（参数 + 返回值）。
+- 禁止裸 `Any`；如必须使用须在注释中说明原因。
+
+### 异步规范
+- 凡涉及 IO（网络、文件、数据库）的函数一律 `async def`。
+- 不得在 async 上下文中调用阻塞 IO（如 `open()`、`requests.get()`）；文件 IO 用 `aiofiles`，HTTP 用 `httpx`。
+- `asyncio.sleep(0)` 仅用于主动让出控制权，不得用于替代真实等待。
+
+### 错误处理
+- 不得使用裸 `except:`；至少捕获 `Exception` 并记录日志。
+- 业务异常定义在 `src/models/exceptions.py`，不得直接抛出内建异常（`ValueError` 等）作为业务错误。
+
+### 日志
+- 统一使用标准库 `logging`；禁止在生产代码中使用 `print()`。
+- 日志级别规范：调试信息用 `DEBUG`，正常流程用 `INFO`，可恢复异常用 `WARNING`，需人工介入用 `ERROR`。
+
+### 测试
+- 新增核心逻辑须附带单元测试，测试文件放 `tests/` 并与源码目录结构对应。
+
+
 注意：当你在进行方案调研时，若访问中国之外的网站或者下载数据速度较慢时，可以通过"clashctl on"开启vpn. "clashctl off"是关闭vpn的命令
+
+
+其他信息：
+git仓库的token为：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
+
+qwen 大模型信息：
+QWEN_API_KEY="sk-f59f99e7d83d4abc958f8477efbe1392"
+QWEN_API_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
