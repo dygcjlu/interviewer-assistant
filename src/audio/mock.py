@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from typing import AsyncIterator, Callable
 
-from .protocol import AudioFrame
+from .protocol import AudioFrame, TranscriptSegment
 
 
 class MockAudioCapturer:
@@ -70,10 +70,14 @@ class MockSTTEngine:
     async def send_audio(self, audio_data: bytes) -> None:
         pass
 
-    async def receive(self):
-        # 永不产出片段，模拟静音
-        return
-        yield  # make this an async generator
+    def receive(self) -> AsyncIterator[TranscriptSegment]:
+        # Protocol 要求 receive 是普通 def，返回 AsyncIterator。
+        # 内部 async generator 函数确保调用方可以 `async for` 迭代（永不产出片段）。
+        async def _empty() -> AsyncIterator[TranscriptSegment]:
+            return
+            yield  # noqa: unreachable — 使 _empty 成为 async generator 而非 coroutine
+
+        return _empty()
 
     async def close(self) -> None:
         pass

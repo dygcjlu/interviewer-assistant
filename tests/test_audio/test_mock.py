@@ -36,3 +36,12 @@ async def test_mock_stt_engine():
     await stt.connect()
     await stt.send_audio(b"\x00" * 100)
     await stt.close()
+
+
+@pytest.mark.asyncio
+async def test_mock_stt_receive_is_async_iterable():
+    """receive() 是普通 def（非 async def），返回值可被 async for 迭代，永不产出片段。"""
+    stt = MockSTTEngine()
+    iterator = stt.receive()
+    segments = [seg async for seg in iterator]
+    assert segments == []
