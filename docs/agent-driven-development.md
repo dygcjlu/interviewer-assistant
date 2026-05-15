@@ -242,60 +242,72 @@ progress/
 
 > "架构和指令比 Agent 能力更重要。Agent 会严格按指令执行，指令写差了结果就差。" — Cursor Research
 
-### 0. 手动提交共享数据结构和 Protocol 定义（最高优先级）
+> ✅ **准备工作已完成**（2026-05-15）。提交记录：`ab51188`（脚手架）、`6aaf77c`（修复）。以下各节保留说明供参考，可直接跳至[已知限制](#已知限制agent-teams-实验性阶段)。
 
-**必须在启动任何 Agent 之前由人工完成并 git commit**，原因：
+### 0. 手动提交共享数据结构和 Protocol 定义（最高优先级）✅
+
+~~**必须在启动任何 Agent 之前由人工完成并 git commit**~~，已完成，原因：
 - `src/models/` 是所有 Teammate 的公共合同；infra-storage 和 agent-framework 同时需要它
 - Protocol 定义（`AudioCapturer`、`STTEngine`、`LLMClient`）让第二批 Teammate 无需等待底层
 
-具体内容：
-- `src/models/session.py` — `InterviewSession` dataclass（含所有字段，不可为 Any）
-- `src/models/candidate.py` — `CandidateProfile` dataclass
-- `src/models/evaluation.py` — `EvalReport` dataclass
-- `src/audio/protocol.py` — `AudioCapturer` / `STTEngine` Protocol
-- `src/llm/protocol.py` — `LLMClient` Protocol
-- `src/audio/mock.py` — `MockAudioCapturer` 实现（返回静音数据，用于 Linux 开发环境替代 WASAPI）
+已提交文件：
+- `src/models/session.py` — `InterviewSession` dataclass（含所有字段，无 Any）✅
+- `src/models/candidate.py` — `CandidateProfile` dataclass ✅
+- `src/models/evaluation.py` — `EvalReport` dataclass ✅
+- `src/models/message.py` — `Message` / `ToolCallInfo` / `FunctionCallInfo` ✅
+- `src/audio/protocol.py` — `AudioCapturer` / `STTEngine` Protocol ✅
+- `src/llm/protocol.py` — `LLMClient` Protocol 及返回类型（`ChatResponse`、`StreamChunk`、`ToolSchema`）✅
+- `src/audio/mock.py` — `MockAudioCapturer` + `MockSTTEngine`（Linux 开发环境替代 WASAPI）✅
 
-### 1. 精炼 CLAUDE.md 层级
+### 1. 精炼 CLAUDE.md 层级 ✅
 
-基于 `AGENTS.md` 和 `docs/arc/` 各文档，为每个模块目录写专属 CLAUDE.md（200 行以内），重点写：
-- 本模块的边界（负责什么、不负责什么）
-- 禁止事项（有 "绝不" 字样的硬约束）
-- 与相邻模块的接口约定
-- **进度记录义务**：每完成一个子任务，向 `progress/<模块名>.md` 追加一条记录
+已为以下目录写专属 CLAUDE.md（均在 200 行以内）：
 
-每个模块 CLAUDE.md 还需声明平台兼容规则：`src/audio/CLAUDE.md` 中注明"绝不直接 import pyaudio 或 wasapi；开发阶段使用 MockAudioCapturer"。
+| 文件 | 覆盖内容 |
+|------|---------|
+| `src/CLAUDE.md` | 后端总规：asyncio 单进程、层间隔离、配置分离 |
+| `src/models/CLAUDE.md` | 数据契约边界、禁止 Any、禁止业务方法 |
+| `src/audio/CLAUDE.md` | 禁止直接 import pyaudio/wasapi、Protocol 实现规则 |
+| `src/llm/CLAUDE.md` | 接口约定、重试/超时规则、token 余量 |
+| `src/storage/CLAUDE.md` | aiosqlite、禁止 ORM、禁止存二进制 |
+| `src/agents/CLAUDE.md` | Agent 切换只经 Orchestrator、禁止跨 Agent 直调 |
+| `src/framework/CLAUDE.md` | PromptBuilder 唯一出口、后台压缩不阻塞主流程 |
+| `src/web/CLAUDE.md` | Route Handler 只转发 Orchestrator、统一错误格式 |
+| `frontend/CLAUDE.md` | Vue 3 规则、禁止直接调用 LLM API |
 
-### 2. 建立测试框架骨架
+### 2. 建立测试框架骨架 ✅
 
-在 `tests/` 目录下按模块预建测试目录结构，每个模块至少有一个 `test_*.py` 占位文件，说明"什么通过算完成"。Agent 将以此作为完成标准。
+已建立，6 个真实测试全部通过：
 
 ```
 tests/
-├── conftest.py
-├── test_llm/
-├── test_audio/
-├── test_agents/
-├── test_framework/
-├── test_storage/
-└── test_web/
+├── conftest.py              # 共享 fixtures（sample_candidate / sample_session）
+├── test_llm/                # Protocol 类型测试（3 个）✅
+├── test_audio/              # MockAudioCapturer + MockSTTEngine 测试（3 个）✅
+├── test_agents/             # 占位（完成标准已写入文件）
+├── test_framework/          # 占位（完成标准已写入文件）
+├── test_storage/            # 占位（完成标准已写入文件）
+└── test_web/                # 占位（完成标准已写入文件）
 ```
 
-### 3. 建立进度目录骨架
+### 3. 建立进度目录骨架 ✅
 
-创建 `progress/` 目录并为每个模块建立初始文件，这是会话中断恢复的基础：
+`progress/` 目录已创建，7 个模块文件均已初始化：
 
-```bash
-mkdir -p progress
-for m in infra-storage llm-client audio-stt agent-framework context-prompt web-layer frontend; do
-  echo "# Progress: $m" > progress/$m.md
-done
-git add progress/ && git commit -m "init: progress tracking files"
+```
+progress/
+├── infra-storage.md
+├── llm-client.md
+├── audio-stt.md
+├── agent-framework.md
+├── context-prompt.md
+├── web-layer.md
+└── frontend.md
 ```
 
-### 4. 接口契约文档
+### 4. 接口契约文档 ✅
 
-为底层模块（LLMClient、STTEngine、AudioCapturer 等 Protocol 抽象）预先写好 Protocol 定义（已在步骤 0 中完成），让上层 Teammate 可以独立开发而不等待底层完成。
+已在步骤 0 中完成，上层 Teammate 可直接依赖 Protocol 独立开发，无需等待底层实现。
 
 ---
 
