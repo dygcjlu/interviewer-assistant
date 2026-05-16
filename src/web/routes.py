@@ -55,7 +55,13 @@ async def upload_resume(
     except SessionError as exc:
         raise _session_err(exc)
 
-    suffix = os.path.splitext(file.filename or "resume.pdf")[1] or ".pdf"
+    suffix = os.path.splitext(file.filename or "resume.pdf")[1].lower() or ".pdf"
+    allowed_suffixes = {".pdf"}
+    if suffix not in allowed_suffixes:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_file_type", "message": f"仅支持 PDF 格式简历，收到的文件类型为 {suffix!r}"},
+        )
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(await file.read())
         tmp_path = tmp.name
@@ -72,6 +78,13 @@ async def upload_resume(
 
     if not parse_resp.success:
         raise HTTPException(status_code=500, detail={"code": "parse_error", "message": parse_resp.error})
+
+    # Persist candidate to DB so it can be retrieved by candidate_id later
+    memory = _memory(request)
+    try:
+        await memory.save_candidate(session.candidate)
+    except Exception:
+        logger.exception("upload_resume: failed to persist candidate")
 
     q_resp: AgentResponse = await orch.handle_request(
         AgentRequest(type="generate_questions", payload={}, session=session)
@@ -228,6 +241,12 @@ async def get_eval(request: Request, interview_id: str | None = None):
     session = await orch.get_session()
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
+
+    # Save interview record first so EvalReport FK constraint is satisfied
+    try:
+        await memory.save_interview(session)
+    except Exception:
+        logger.exception("get_eval: pre-save interview failed")
 
     resp = await orch.handle_request(
         AgentRequest(type="generate_eval", payload={}, session=session)

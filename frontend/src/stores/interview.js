@@ -22,7 +22,7 @@ export const useInterviewStore = defineStore('interview', () => {
   function connect() {
     if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    ws = new WebSocket(`${proto}//${location.hostname}:8000/ws/interview`)
+    ws = new WebSocket(`${proto}//${location.host}/ws/interview`)
 
     ws.onopen = () => {
       wsConnected.value = true
@@ -84,6 +84,25 @@ export const useInterviewStore = defineStore('interview', () => {
           currentSuggestion.value = msg.text
         } else {
           currentSuggestion.value += msg.delta || ''
+        }
+        break
+
+      case 'suggestion_delta':
+        if (msg.request_id !== currentRequestId.value) {
+          if (currentSuggestion.value) {
+            suggestionHistory.value.push(currentSuggestion.value)
+            if (suggestionHistory.value.length > 10) suggestionHistory.value.shift()
+          }
+          currentSuggestion.value = ''
+          currentRequestId.value = msg.request_id
+        }
+        currentSuggestion.value += msg.delta || ''
+        break
+
+      case 'suggestion_final':
+        if (msg.request_id === currentRequestId.value && currentSuggestion.value) {
+          suggestionHistory.value.push(currentSuggestion.value)
+          if (suggestionHistory.value.length > 10) suggestionHistory.value.shift()
         }
         break
 

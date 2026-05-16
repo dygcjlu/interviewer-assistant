@@ -23,6 +23,7 @@ async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
             logger.debug("WebSocket: send failed (client disconnected)")
 
     orchestrator.attach_ws_sender(ws_sender)
+    conn_id = id(ws_sender)
 
     session = await orchestrator.get_session()
     if session:
@@ -48,7 +49,7 @@ async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
     except Exception:
         logger.exception("WebSocket: unexpected error")
     finally:
-        orchestrator.attach_ws_sender(None)
+        orchestrator.detach_ws_sender(conn_id)
 
 
 async def _dispatch(msg: dict, orchestrator, ws_sender) -> None:

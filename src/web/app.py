@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .routes import router
@@ -41,7 +42,7 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://localhost:8000"],
+        allow_origins=["http://localhost:5173", "http://localhost:8000", "http://localhost:8001"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -55,7 +56,17 @@ def create_app(
 
     frontend_dist = Path(__file__).parents[2] / "frontend" / "dist"
     if frontend_dist.exists():
-        app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
         logger.info("Serving frontend from %s", frontend_dist)
+        index_html = frontend_dist / "index.html"
+
+        # Serve /assets/* (js/css bundles) before the SPA catch-all
+        assets_dir = frontend_dist / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+        # SPA catch-all: serve index.html for any non-API, non-WS, non-asset path
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str) -> FileResponse:
+            return FileResponse(str(index_html))
 
     return app

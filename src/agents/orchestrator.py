@@ -48,6 +48,15 @@ async def _noop_ws_sender(_msg: dict) -> None:
     return None
 
 
+async def _broadcast(senders: dict[int, WsSender], msg: dict) -> None:
+    """向所有已注册客户端广播消息。"""
+    for sender in list(senders.values()):
+        try:
+            await sender(msg)
+        except Exception:
+            pass
+
+
 class Orchestrator:
     """Agent 调度器 — 维护 InterviewSession、Agent 切换及相应资源副作用。"""
 
@@ -68,7 +77,17 @@ class Orchestrator:
         self._audio = audio_manager
         self._session: InterviewSession | None = None
         self._active_agent_name: str | None = None
-        self._ws_sender: WsSender | None = None
+        self._ws_senders: dict[int, WsSender] = {}
+
+    @property
+    def _ws_sender(self) -> WsSender:
+        """合并广播 sender，供 InterviewAgent 使用。"""
+        senders = self._ws_senders
+
+        async def _broadcast_sender(msg: dict) -> None:
+            await _broadcast(senders, msg)
+
+        return _broadcast_sender
 
     # ── session lifecycle ─────────────────────────────────────────────────────
 
@@ -162,7 +181,7 @@ class Orchestrator:
             raise SessionError(precondition_err)
 
         if ws_sender is not None:
-            self._ws_sender = ws_sender
+            self._ws_senders[id(ws_sender)] = ws_sender
 
         # Deactivate current agent (with associated side effects)
         if self._active_agent_name is not None:
@@ -188,8 +207,8 @@ class Orchestrator:
         if target == "interview":
             interview_agent = self._agents["interview"]
             assert isinstance(interview_agent, InterviewAgent)
-            sender = self._ws_sender or _noop_ws_sender
-            interview_agent.attach_ws_sender(sender)
+            broadcast = self._ws_sender
+            interview_agent.attach_ws_sender(broadcast)
             trigger = interview_agent.suggestion_trigger
             if trigger is not None:
                 try:
@@ -200,7 +219,7 @@ class Orchestrator:
                     )
                     await self._audio.start(
                         session=self._session,
-                        ws_sender=sender,
+                        ws_sender=broadcast,
                         suggestion_trigger=trigger,
                         on_round_finalized=on_round_finalized,
                     )
@@ -223,12 +242,22 @@ class Orchestrator:
         """Active TranscriptionManager (available while interview audio is running)."""
         return self._audio.transcription_manager
 
-    def attach_ws_sender(self, ws_sender: WsSender | None) -> None:
-        """更新 WebSocket 推送回调（WebSocket 连接/重连时调用）。"""
-        self._ws_sender = ws_sender
+    def attach_ws_sender(self, ws_sender: WsSender) -> None:
+        """注册新的 WebSocket 连接推送回调（广播到所有已连接客户端）。"""
+        self._ws_senders[id(ws_sender)] = ws_sender
         interview_agent = self._agents.get("interview")
         if isinstance(interview_agent, InterviewAgent):
-            interview_agent.attach_ws_sender(ws_sender or _noop_ws_sender)
+            interview_agent.attach_ws_sender(self._ws_sender)
+
+    def detach_ws_sender(self, conn_id: int) -> None:
+        """移除指定连接的推送回调。"""
+        self._ws_senders.pop(conn_id, None)
+        interview_agent = self._agents.get("interview")
+        if isinstance(interview_agent, InterviewAgent):
+            if self._ws_senders:
+                interview_agent.attach_ws_sender(self._ws_sender)
+            else:
+                interview_agent.attach_ws_sender(_noop_ws_sender)
 
     @property
     def active_agent(self) -> BaseAgent | None:

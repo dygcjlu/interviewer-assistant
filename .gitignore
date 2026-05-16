@@ -225,3 +225,4 @@ frontend/dist/
 # Editor / AI tool configs
 .claude/
 .cursor/settings.json
+*.wav
