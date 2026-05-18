@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import AsyncIterator, TYPE_CHECKING
+
+from src.log_context import bind_op, text_summary
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from ..audio.trigger import SuggestionTrigger
@@ -77,25 +80,72 @@ class InterviewAgent(BaseAgent):
     # ── public interface ──────────────────────────────────────────────────────
 
     async def handle_request(self, request: AgentRequest) -> AgentResponse:
+        bind_op(request.type)
+        start = time.perf_counter()
+        logger.info(
+            "InterviewAgent handle_request start type=%s session_id=%s",
+            request.type,
+            request.session.id,
+        )
+
         if request.type == "set_trigger_mode":
             mode = request.payload.get("mode", "auto")
             if self._suggestion_trigger is None:
-                return AgentResponse(
+                resp = AgentResponse(
                     success=False, error="SuggestionTrigger 未初始化（Agent 尚未激活）"
                 )
-            try:
-                self._suggestion_trigger.set_mode(mode)
-            except ValueError as exc:
-                return AgentResponse(success=False, error=str(exc))
-            return AgentResponse(success=True, data={"mode": mode})
+            else:
+                try:
+                    self._suggestion_trigger.set_mode(mode)
+                    resp = AgentResponse(success=True, data={"mode": mode})
+                except ValueError as exc:
+                    resp = AgentResponse(success=False, error=str(exc))
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            if resp.success:
+                logger.info(
+                    "InterviewAgent set_trigger_mode done mode=%s elapsed_ms=%.1f",
+                    mode,
+                    elapsed_ms,
+                )
+            else:
+                logger.error(
+                    "InterviewAgent set_trigger_mode failed mode=%s error=%s elapsed_ms=%.1f",
+                    mode,
+                    resp.error,
+                    elapsed_ms,
+                )
+            return resp
 
         if request.type == "trigger_suggestion":
             if self._suggestion_trigger is None:
-                return AgentResponse(success=False, error="Agent 尚未激活")
+                resp = AgentResponse(success=False, error="Agent 尚未激活")
+                logger.error(
+                    "InterviewAgent trigger_suggestion failed error=%s",
+                    resp.error,
+                )
+                return resp
             req_id = self._request_counter
+            trigger_mode = (
+                self._suggestion_trigger.mode
+                if self._suggestion_trigger is not None
+                else "unknown"
+            )
+            logger.info(
+                "InterviewAgent trigger_suggestion start request_id=%d rounds_count=%d trigger_mode=%s",
+                req_id,
+                len(request.session.rounds),
+                trigger_mode,
+            )
             await self._on_trigger_fired(req_id)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "InterviewAgent trigger_suggestion accepted request_id=%d status=generating elapsed_ms=%.1f",
+                req_id,
+                elapsed_ms,
+            )
             return AgentResponse(success=True, data={"request_id": req_id, "status": "generating"})
 
+        logger.error("InterviewAgent handle_request unknown type=%r", request.type)
         return AgentResponse(
             success=False, error=f"Unknown request type: {request.type!r}"
         )
@@ -110,6 +160,24 @@ class InterviewAgent(BaseAgent):
         if self._session is None:
             logger.warning("InterviewAgent.generate_suggestion called without active session")
             return
+
+        bind_op("generate_suggestion")
+        start = time.perf_counter()
+        rounds_count = len(self._session.rounds)
+        if self._session.rounds:
+            last_round = self._session.rounds[-1]
+            context_hint = (
+                f"ivr={text_summary(last_round.interviewer_text)} "
+                f"cand={text_summary(last_round.candidate_text)}"
+            )
+        else:
+            context_hint = "no_rounds"
+        logger.info(
+            "InterviewAgent generate_suggestion start request_id=%d rounds_count=%d %s",
+            request_id,
+            rounds_count,
+            context_hint,
+        )
 
         # 取消上一次进行中的流式请求（候选人继续说话 → 旧建议作废）
         if self._current_stream_task and not self._current_stream_task.done():
@@ -137,18 +205,44 @@ class InterviewAgent(BaseAgent):
                 Message(role="user", content="面试刚开始，请给出一个开场问题建议。")
             )
 
+        token_count = 0
+        prompt_tokens = 0
+        completion_tokens = 0
         try:
             stream_iter = self.llm_client.chat_stream(messages)
             async for chunk in stream_iter:
                 if chunk.delta:
+                    token_count += len(chunk.delta)
                     yield chunk.delta
                 if chunk.is_final:
+                    prompt_tokens = chunk.prompt_tokens
+                    completion_tokens = chunk.completion_tokens
                     break
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "InterviewAgent generate_suggestion done request_id=%d "
+                "output_chars=%d prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f",
+                request_id,
+                token_count,
+                prompt_tokens,
+                completion_tokens,
+                elapsed_ms,
+            )
         except asyncio.CancelledError:
-            logger.debug("InterviewAgent: generate_suggestion cancelled")
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info(
+                "InterviewAgent generate_suggestion cancelled request_id=%d elapsed_ms=%.1f",
+                request_id,
+                elapsed_ms,
+            )
             raise
         except Exception:
-            logger.exception("InterviewAgent: generate_suggestion failed")
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "InterviewAgent generate_suggestion failed request_id=%d elapsed_ms=%.1f",
+                request_id,
+                elapsed_ms,
+            )
 
     @property
     def suggestion_trigger(self) -> SuggestionTrigger | None:
@@ -158,9 +252,17 @@ class InterviewAgent(BaseAgent):
 
     async def _on_trigger_fired(self, request_id: int) -> None:
         """SuggestionTrigger 回调：在后台 task 内消费 generate_suggestion 流。"""
+        trigger_mode = (
+            self._suggestion_trigger.mode if self._suggestion_trigger is not None else "unknown"
+        )
+        logger.info(
+            "InterviewAgent on_trigger_fired request_id=%d trigger_mode=%s has_ws_sender=%s",
+            request_id,
+            trigger_mode,
+            self._ws_sender is not None,
+        )
         if self._ws_sender is None:
-            # WS sender 由上层在激活时注入；缺失时仅记录日志，不阻断
-            logger.debug("InterviewAgent: trigger fired but no ws_sender attached")
+            logger.warning("InterviewAgent on_trigger_fired without ws_sender")
 
         async def _runner() -> None:
             try:
@@ -186,8 +288,15 @@ class InterviewAgent(BaseAgent):
                         )
                     except Exception:
                         logger.exception("InterviewAgent: ws_sender final failed")
+                logger.info(
+                    "InterviewAgent suggestion_stream finished request_id=%d",
+                    request_id,
+                )
             except asyncio.CancelledError:
-                pass
+                logger.info(
+                    "InterviewAgent suggestion_stream cancelled request_id=%d",
+                    request_id,
+                )
 
         self._current_stream_task = asyncio.create_task(_runner())
 

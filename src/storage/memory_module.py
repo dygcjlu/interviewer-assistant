@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -242,6 +243,14 @@ def _question_plan_to_json(session: InterviewSession) -> str:
     )
 
 
+def _question_plan_from_json(raw: str) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
 def _format_history_summary(
     candidate_name: str, summaries: list[InterviewSummary]
 ) -> str:
@@ -282,7 +291,9 @@ class MemoryModule:
         return _profile_from_row(row)
 
     async def save_candidate(self, profile: CandidateProfile) -> str:
+        start = time.perf_counter()
         candidate_id = profile.id or f"c-{uuid.uuid4().hex[:12]}"
+        logger.info("save_candidate start candidate_id=%s name=%r", candidate_id, profile.name or "")
         payload = _profile_to_json(profile)
         await self._candidates.insert(
             id=candidate_id,
@@ -290,7 +301,16 @@ class MemoryModule:
             resume_text=profile.resume_text or "",
             profile_json=json.dumps(payload, ensure_ascii=False),
         )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info("save_candidate done candidate_id=%s elapsed_ms=%.1f", candidate_id, elapsed_ms)
         return candidate_id
+
+    async def get_latest_question_plan(self, candidate_id: str) -> list[dict[str, Any]]:
+        """从该候选人最近一次面试记录中恢复题目清单。"""
+        rows = await self._interviews.get_by_candidate(candidate_id, limit=1)
+        if not rows:
+            return []
+        return _question_plan_from_json(rows[0].get("question_plan_json") or "[]")
 
     async def search_candidates(
         self, keyword: str = "", limit: int = 20
@@ -343,6 +363,13 @@ class MemoryModule:
         if not session.id:
             raise StorageError("InterviewSession.id is empty; cannot persist")
 
+        start = time.perf_counter()
+        logger.info(
+            "save_interview start session_id=%s rounds_count=%d",
+            session.id,
+            len(session.rounds),
+        )
+
         # Upsert candidate first; CandidateRepository uses INSERT OR REPLACE
         try:
             await self.save_candidate(session.candidate)
@@ -382,6 +409,13 @@ class MemoryModule:
                 prompt_tokens=prompt,
                 completion_tokens=completion,
             )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "save_interview done session_id=%s rounds_count=%d elapsed_ms=%.1f",
+            session.id,
+            len(session.rounds),
+            elapsed_ms,
+        )
 
     async def get_interview_detail(
         self, interview_id: str

@@ -226,3 +226,4 @@ frontend/dist/
 .claude/
 .cursor/settings.json
 *.wav
+temp/

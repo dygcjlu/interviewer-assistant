@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime
 
 from fastapi import WebSocket, WebSocketDisconnect
+
+from src.log_context import bind_connection_id, bind_op, bind_session_id, text_summary
 
 from ..agents.base import AgentRequest
 from ..models.exceptions import SessionError
@@ -15,18 +18,22 @@ logger = logging.getLogger(__name__)
 
 async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
     await websocket.accept()
+    connection_id = uuid.uuid4().hex[:8]
+    bind_connection_id(connection_id)
+    logger.info("WebSocket connected connection_id=%s", connection_id)
 
     async def ws_sender(msg: dict) -> None:
         try:
             await websocket.send_json(msg)
         except Exception:
-            logger.debug("WebSocket: send failed (client disconnected)")
+            logger.debug("WebSocket send failed connection_id=%s type=%s", connection_id, msg.get("type"))
 
     orchestrator.attach_ws_sender(ws_sender)
     conn_id = id(ws_sender)
 
     session = await orchestrator.get_session()
     if session:
+        bind_session_id(session.id)
         await ws_sender({
             "type": "session_snapshot",
             "session_id": session.id,
@@ -41,19 +48,22 @@ async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
+                logger.warning("WebSocket invalid_json connection_id=%s", connection_id)
                 await ws_sender({"type": "error", "code": "invalid_json", "message": "无效 JSON", "recoverable": True})
                 continue
-            await _dispatch(msg, orchestrator, ws_sender)
+            await _dispatch(msg, orchestrator, ws_sender, connection_id)
     except WebSocketDisconnect:
-        logger.info("WebSocket: client disconnected")
+        logger.info("WebSocket disconnected connection_id=%s", connection_id)
     except Exception:
-        logger.exception("WebSocket: unexpected error")
+        logger.exception("WebSocket error connection_id=%s", connection_id)
     finally:
         orchestrator.detach_ws_sender(conn_id)
 
 
-async def _dispatch(msg: dict, orchestrator, ws_sender) -> None:
+async def _dispatch(msg: dict, orchestrator, ws_sender, connection_id: str) -> None:
     msg_type = msg.get("type")
+    bind_op(msg_type or "unknown")
+    logger.debug("WebSocket inbound connection_id=%s type=%s", connection_id, msg_type)
 
     if msg_type == "request_suggestion":
         session = await orchestrator.get_session()
@@ -71,12 +81,29 @@ async def _dispatch(msg: dict, orchestrator, ws_sender) -> None:
         text = msg.get("text", "")
         session = await orchestrator.get_session()
         if session is None or not text:
+            logger.debug("WebSocket manual_input skipped no_session_or_empty")
             return
+        bind_session_id(session.id)
+        logger.info(
+            "WebSocket manual_input source=%s %s",
+            source,
+            text_summary(text),
+        )
         from ..audio.protocol import TranscriptSegment
         tm = orchestrator.transcription_manager
         if tm is not None:
             segment = TranscriptSegment(source=source, text=text, is_final=True, timestamp=datetime.now())
             await tm.on_segment(segment)
+            if source == "candidate":
+                round_ = await tm.flush_pending_round()
+                rounds_count = len(session.rounds)
+                logger.info(
+                    "WebSocket manual_input flushed round=%s rounds_count=%d",
+                    round_.round_number if round_ else None,
+                    rounds_count,
+                )
+        else:
+            logger.warning("WebSocket manual_input no transcription_manager")
 
     elif msg_type == "set_trigger_mode":
         mode = msg.get("mode", "auto")

@@ -92,8 +92,15 @@ async function loadProfile(id) {
     const resp = await resumeApi.getProfile(id)
     profile.value = resp.data.profile
     candidateId.value = id
-    const qResp = await questionApi.get(id)
-    questions.value = qResp.data.questions
+    questions.value = resp.data.questions ?? []
+    if (!questions.value.length) {
+      try {
+        const qResp = await questionApi.get(id)
+        questions.value = qResp.data.questions ?? []
+      } catch {
+        /* 无活跃会话时忽略，题目已由 profile 接口从持久化记录恢复 */
+      }
+    }
   } catch {
     uploadError.value = '加载候选人信息失败'
   }

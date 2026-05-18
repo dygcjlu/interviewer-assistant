@@ -4,8 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
+
+from src.log_context import bind_op, text_summary
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from ..framework.prompt_builder import AgentConfig, PromptBuilder
@@ -48,8 +51,15 @@ class EvalAgent(BaseAgent):
         logger.info("EvalAgent deactivated for session %s", session.id)
 
     async def handle_request(self, request: AgentRequest) -> AgentResponse:
+        bind_op(request.type)
+        logger.info(
+            "EvalAgent handle_request start type=%s session_id=%s",
+            request.type,
+            request.session.id,
+        )
         if request.type == "generate_eval":
             return await self._generate_eval(request)
+        logger.error("EvalAgent handle_request unknown type=%r", request.type)
         return AgentResponse(
             success=False, error=f"Unknown request type: {request.type!r}"
         )
@@ -58,12 +68,28 @@ class EvalAgent(BaseAgent):
 
     async def _generate_eval(self, request: AgentRequest) -> AgentResponse:
         session = request.session
+        start = time.perf_counter()
         if not session.rounds:
+            logger.error(
+                "EvalAgent generate_eval failed session_id=%s error=no_rounds",
+                session.id,
+            )
             return AgentResponse(success=False, error="尚无对话记录，无法生成评价")
+
+        logger.info(
+            "EvalAgent generate_eval start session_id=%s rounds_count=%d",
+            session.id,
+            len(session.rounds),
+        )
 
         conversation = "\n\n".join(
             f"第 {r.round_number} 轮\n面试官: {r.interviewer_text}\n候选人: {r.candidate_text}"
             for r in session.rounds
+        )
+
+        logger.info(
+            "EvalAgent generate_eval conversation %s",
+            text_summary(conversation, preview_len=80),
         )
 
         messages = self.prompt_builder.build(session, self.config)
@@ -86,13 +112,22 @@ class EvalAgent(BaseAgent):
         try:
             result_text = await self._run_with_tools(messages)
         except Exception as exc:
-            logger.exception("EvalAgent: LLM call failed")
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "EvalAgent generate_eval LLM failed session_id=%s elapsed_ms=%.1f",
+                session.id,
+                elapsed_ms,
+            )
             return AgentResponse(success=False, error=str(exc))
 
         try:
             data = _parse_eval_json(result_text)
         except json.JSONDecodeError:
-            logger.warning("EvalAgent: LLM output is not valid JSON; using fallback")
+            logger.warning(
+                "EvalAgent generate_eval invalid_json session_id=%s response %s",
+                session.id,
+                text_summary(result_text, preview_len=80),
+            )
             data = {}
 
         report = EvalReport(
@@ -118,16 +153,37 @@ class EvalAgent(BaseAgent):
         try:
             await self._memory_module.save_eval_report(report)
         except Exception:
-            logger.exception("EvalAgent: save_eval_report failed")
+            logger.exception(
+                "EvalAgent generate_eval save_eval_report failed report_id=%s",
+                report.id,
+            )
 
         # 异步整合长期记忆，不阻塞返回；持有 task 引用避免 GC 提前回收
         try:
             self._consolidate_task = asyncio.get_running_loop().create_task(
                 self._memory_module.consolidate_memory(session)
             )
+            logger.info(
+                "EvalAgent generate_eval consolidate_memory scheduled session_id=%s",
+                session.id,
+            )
         except RuntimeError:
-            logger.warning("EvalAgent: no running event loop, skipping consolidate_memory")
+            logger.warning(
+                "EvalAgent generate_eval consolidate_memory skipped session_id=%s",
+                session.id,
+            )
 
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "EvalAgent generate_eval done session_id=%s report_id=%s "
+            "overall_score=%.1f recommendation=%s dimensions_count=%d elapsed_ms=%.1f",
+            session.id,
+            report.id,
+            report.overall_score,
+            report.recommendation,
+            len(report.dimensions),
+            elapsed_ms,
+        )
         return AgentResponse(success=True, data={"report": report})
 
 

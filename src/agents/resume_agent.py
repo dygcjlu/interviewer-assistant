@@ -1,6 +1,7 @@
 """ResumeAgent — 简历解析与面试题目生成。"""
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 
@@ -36,6 +37,7 @@ class ResumeAgent(BaseAgent):
         file_path = request.payload.get("file_path", "")
         if not file_path:
             return AgentResponse(success=False, error="缺少必填参数 file_path")
+        logger.info("ResumeAgent parse_resume start file_path=%r", file_path)
 
         messages = self.prompt_builder.build(request.session, self.config)
         messages.append(
@@ -54,6 +56,10 @@ class ResumeAgent(BaseAgent):
             result_text = await self._run_with_tools(messages)
             data = _extract_json(result_text)
             _update_candidate_from_data(request.session.candidate, data)
+            logger.info(
+                "ResumeAgent parse_resume done candidate_name=%r",
+                request.session.candidate.name or "",
+            )
             return AgentResponse(
                 success=True,
                 data={"profile_data": data, "file_path": file_path},
@@ -63,25 +69,40 @@ class ResumeAgent(BaseAgent):
             return AgentResponse(success=False, error=str(exc))
 
     async def _generate_questions(self, request: AgentRequest) -> AgentResponse:
+        logger.info("ResumeAgent generate_questions start")
+        candidate = request.session.candidate
+        profile_json = json.dumps(
+            dataclasses.asdict(candidate), ensure_ascii=False, default=str
+        )
         messages = self.prompt_builder.build(request.session, self.config)
         messages.append(
             Message(
                 role="user",
                 content=(
-                    "请根据候选人简历生成 8-12 道面试题目清单，"
-                    "每道题目包含 dimension、question、follow_ups (2-3 个)、"
-                    "difficulty (easy/medium/hard) 字段，以 JSON 数组格式输出。"
+                    "请根据以下候选人结构化信息生成 8-12 道面试题目清单。\n"
+                    "仅输出 JSON 数组，不要调用任何工具。每道题目必须包含字段：\n"
+                    '- dimension（如"项目经验"、"系统设计"）\n'
+                    '- question（题目正文）\n'
+                    '- follow_ups（2-3 个追问，字符串数组）\n'
+                    '- difficulty（easy / medium / hard）\n\n'
+                    f"候选人信息：\n{profile_json}"
                 ),
             )
         )
 
         try:
-            result_text = await self._run_with_tools(messages)
-            questions_data = _extract_json(result_text)
-            if not isinstance(questions_data, list):
-                questions_data = questions_data.get("questions", []) if isinstance(
-                    questions_data, dict
-                ) else []
+            response = await self.llm_client.chat(messages, tools=None)
+            result_text = response.content or ""
+            questions_data = _normalize_questions(_extract_json(result_text))
+            if not questions_data:
+                return AgentResponse(
+                    success=False,
+                    error="题目生成结果为空，请检查 LLM 返回格式",
+                )
+            logger.info(
+                "ResumeAgent generate_questions done questions_count=%d",
+                len(questions_data),
+            )
             return AgentResponse(success=True, data={"questions": questions_data})
         except Exception as exc:
             logger.exception("ResumeAgent: generate_questions failed")
@@ -137,6 +158,41 @@ def _update_candidate_from_data(candidate: CandidateProfile, data: dict | list) 
             for p in data["projects"]
             if isinstance(p, dict)
         ]
+
+
+def _normalize_questions(data: dict | list) -> list[dict]:
+    """将 LLM 输出规范为题目 dict 列表。"""
+    if isinstance(data, dict):
+        raw = data.get("questions", data.get("题目", []))
+        if not isinstance(raw, list):
+            return []
+        data = raw
+    if not isinstance(data, list):
+        return []
+    normalized: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        question = (
+            item.get("question")
+            or item.get("题目")
+            or item.get("content")
+            or ""
+        )
+        if not str(question).strip():
+            continue
+        follow_ups = item.get("follow_ups") or item.get("追问") or []
+        if isinstance(follow_ups, str):
+            follow_ups = [follow_ups]
+        normalized.append(
+            {
+                "dimension": item.get("dimension") or item.get("维度") or "通用",
+                "question": str(question),
+                "follow_ups": [str(f) for f in follow_ups if f],
+                "difficulty": item.get("difficulty") or item.get("难度") or "medium",
+            }
+        )
+    return normalized
 
 
 def _extract_json(text: str) -> dict | list:

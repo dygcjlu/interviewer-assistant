@@ -128,6 +128,58 @@ async def test_non_final_segment_not_accumulated() -> None:
 
 
 @pytest.mark.asyncio
+async def test_flush_pending_round_noop_when_empty() -> None:
+    session = _make_session()
+    ws_sender = AsyncMock()
+    trigger = MagicMock(spec=SuggestionTrigger)
+    recorder = MagicMock(spec=AudioRecorder)
+    recorder.mark_round_boundary = MagicMock()
+
+    mgr = TranscriptionManager(session, ws_sender, trigger, recorder)
+    result = await mgr.flush_pending_round()
+    assert result is None
+    assert len(session.rounds) == 0
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_round_finalizes_candidate_text() -> None:
+    session = _make_session()
+    ws_sender = AsyncMock()
+    trigger = MagicMock(spec=SuggestionTrigger)
+    recorder = MagicMock(spec=AudioRecorder)
+    recorder.mark_round_boundary = MagicMock()
+
+    mgr = TranscriptionManager(session, ws_sender, trigger, recorder)
+    await mgr.on_segment(_make_segment("my answer", "candidate"))
+    result = await mgr.flush_pending_round()
+
+    assert result is not None
+    assert len(session.rounds) == 1
+    assert session.rounds[0].candidate_text == "my answer"
+
+
+@pytest.mark.asyncio
+async def test_finalize_round_broadcasts_session_snapshot() -> None:
+    session = _make_session()
+    ws_sender = AsyncMock()
+    trigger = MagicMock(spec=SuggestionTrigger)
+    recorder = MagicMock(spec=AudioRecorder)
+    recorder.mark_round_boundary = MagicMock()
+
+    mgr = TranscriptionManager(session, ws_sender, trigger, recorder)
+    await mgr.on_segment(_make_segment("answer", "candidate"))
+    await mgr.finalize_round()
+
+    snapshot_calls = [
+        c[0][0]
+        for c in ws_sender.call_args_list
+        if c[0][0].get("type") == "session_snapshot"
+    ]
+    assert snapshot_calls
+    assert snapshot_calls[-1]["rounds_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_suggestion_trigger_called_on_candidate_final() -> None:
     session = _make_session()
     ws_sender = AsyncMock()

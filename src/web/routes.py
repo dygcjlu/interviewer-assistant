@@ -5,10 +5,13 @@ import dataclasses
 import logging
 import os
 import tempfile
+import time
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
+
+from src.log_context import bind_op, bind_session_id
 
 from ..agents.base import AgentRequest, AgentResponse
 from ..models.exceptions import SessionError
@@ -45,25 +48,38 @@ async def upload_resume(
     file: UploadFile = File(...),
     candidate_id: str | None = None,
 ):
+    bind_op("upload_resume")
+    start = time.perf_counter()
+    filename = file.filename or "resume.pdf"
     orch = _orchestrator(request)
     session = await orch.get_session()
     if session is None:
         session = await orch.create_session(candidate_id)
+    bind_session_id(session.id)
+
+    logger.info(
+        "upload_resume start filename=%r candidate_id=%s",
+        filename,
+        candidate_id or session.candidate.id,
+    )
 
     try:
         await orch.switch_agent("resume")
     except SessionError as exc:
         raise _session_err(exc)
 
-    suffix = os.path.splitext(file.filename or "resume.pdf")[1].lower() or ".pdf"
+    suffix = os.path.splitext(filename)[1].lower() or ".pdf"
     allowed_suffixes = {".pdf"}
     if suffix not in allowed_suffixes:
+        logger.error("upload_resume invalid_file_type suffix=%r", suffix)
         raise HTTPException(
             status_code=400,
             detail={"code": "invalid_file_type", "message": f"仅支持 PDF 格式简历，收到的文件类型为 {suffix!r}"},
         )
+    file_bytes = await file.read()
+    logger.info("upload_resume file_read bytes=%d", len(file_bytes))
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await file.read())
+        tmp.write(file_bytes)
         tmp_path = tmp.name
 
     try:
@@ -77,14 +93,19 @@ async def upload_resume(
             pass
 
     if not parse_resp.success:
+        logger.error("upload_resume parse_failed error=%s", parse_resp.error)
         raise HTTPException(status_code=500, detail={"code": "parse_error", "message": parse_resp.error})
 
-    # Persist candidate to DB so it can be retrieved by candidate_id later
+    logger.info(
+        "upload_resume parse_ok candidate_name=%r",
+        session.candidate.name or "",
+    )
+
     memory = _memory(request)
     try:
         await memory.save_candidate(session.candidate)
     except Exception:
-        logger.exception("upload_resume: failed to persist candidate")
+        logger.exception("upload_resume persist_candidate failed")
 
     q_resp: AgentResponse = await orch.handle_request(
         AgentRequest(type="generate_questions", payload={}, session=session)
@@ -104,11 +125,24 @@ async def upload_resume(
             for i, q in enumerate(questions_data)
             if isinstance(q, dict)
         ]
+        logger.info(
+            "upload_resume generate_questions_ok questions_count=%d",
+            len(session.question_plan),
+        )
+    elif not q_resp.success:
+        logger.warning("upload_resume generate_questions_failed error=%s", q_resp.error)
 
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.info(
+        "upload_resume done candidate_id=%s questions_count=%d elapsed_ms=%.1f",
+        session.candidate.id,
+        len(session.question_plan),
+        elapsed_ms,
+    )
     return {
         "candidate_id": session.candidate.id,
         "profile": _to_dict(session.candidate),
-        "questions": q_resp.data.get("questions", []) if q_resp.success else [],
+        "questions": _to_dict(session.question_plan),
     }
 
 
@@ -119,7 +153,13 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
     if candidate is None:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
     session = await _orchestrator(request).get_session()
-    questions = _to_dict(session.question_plan) if session and session.candidate.id == candidate_id else []
+    questions: list[Any] = (
+        _to_dict(session.question_plan)
+        if session and session.candidate.id == candidate_id and session.question_plan
+        else []
+    )
+    if not questions:
+        questions = await memory.get_latest_question_plan(candidate_id)
     return {"candidate_id": candidate_id, "profile": _to_dict(candidate), "questions": questions}
 
 
@@ -156,6 +196,7 @@ async def update_questions(request: Request, body: QuestionsUpdateRequest):
 
 @router.post("/interview/start")
 async def start_interview(request: Request, body: StartInterviewRequest):
+    bind_op("start_interview")
     orch = _orchestrator(request)
     session = await orch.get_session()
     if session is None:
@@ -175,11 +216,19 @@ async def start_interview(request: Request, body: StartInterviewRequest):
             )
         )
     session.metadata.trigger_mode = body.trigger_mode
+    bind_session_id(session.id)
+    logger.info(
+        "start_interview done session_id=%s trigger_mode=%s stage=%s",
+        session.id,
+        body.trigger_mode,
+        session.stage.value,
+    )
     return {"session_id": session.id, "stage": session.stage.value}
 
 
 @router.post("/interview/stop")
 async def stop_interview(request: Request):
+    bind_op("stop_interview")
     orch = _orchestrator(request)
     session = await orch.get_session()
     if session is None:
@@ -190,6 +239,13 @@ async def stop_interview(request: Request):
     except SessionError as exc:
         raise _session_err(exc)
 
+    bind_session_id(session.id)
+    logger.info(
+        "stop_interview done session_id=%s total_rounds=%d stage=%s",
+        session.id,
+        len(session.rounds),
+        session.stage.value,
+    )
     return {
         "session_id": session.id,
         "stage": session.stage.value,

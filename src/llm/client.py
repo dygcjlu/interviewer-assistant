@@ -5,7 +5,10 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, AsyncIterator
+
+from src.log_context import bind_op
 
 import openai
 import tiktoken
@@ -47,9 +50,11 @@ class OpenAICompatibleClient:
         payload_tools = [self._tool_to_dict(t) for t in tools] if tools else None
         timeout = timeout_sec if timeout_sec is not None else self._config.timeout_sec
 
+        bind_op("llm_chat")
         last_exc: Exception | None = None
         attempts = max(self._config.max_retries, 1)
         for attempt in range(attempts):
+            start = time.perf_counter()
             try:
                 kwargs: dict[str, Any] = {
                     "model": self._config.model,
@@ -59,8 +64,25 @@ class OpenAICompatibleClient:
                 }
                 if payload_tools:
                     kwargs["tools"] = payload_tools
+                logger.info(
+                    "LLM chat start model=%s messages=%d tools=%s attempt=%d/%d",
+                    self._config.model,
+                    len(payload_messages),
+                    bool(payload_tools),
+                    attempt + 1,
+                    attempts,
+                )
                 response = await self._client.chat.completions.create(**kwargs)
-                return self._build_chat_response(response)
+                result = self._build_chat_response(response)
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                logger.info(
+                    "LLM chat done model=%s prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f",
+                    self._config.model,
+                    result.prompt_tokens,
+                    result.completion_tokens,
+                    elapsed_ms,
+                )
+                return result
             except openai.RateLimitError as exc:
                 logger.warning(
                     "LLM rate limit hit (attempt %d/%d): %s", attempt + 1, attempts, exc
@@ -84,8 +106,11 @@ class OpenAICompatibleClient:
         payload_messages = [self._message_to_dict(m) for m in messages]
         timeout = timeout_sec if timeout_sec is not None else self._config.timeout_sec
 
+        bind_op("llm_chat_stream")
         prompt_tokens = 0
         completion_tokens = 0
+        start = time.perf_counter()
+        logger.info("LLM chat_stream start model=%s messages=%d", self._config.model, len(payload_messages))
         try:
             stream = await self._client.chat.completions.create(
                 model=self._config.model,
@@ -112,6 +137,14 @@ class OpenAICompatibleClient:
             logger.warning("LLM stream timed out: %s", exc)
             raise LLMTimeoutError(str(exc)) from exc
 
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "LLM chat_stream done model=%s prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f",
+            self._config.model,
+            prompt_tokens,
+            completion_tokens,
+            elapsed_ms,
+        )
         yield StreamChunk(
             delta="",
             is_final=True,

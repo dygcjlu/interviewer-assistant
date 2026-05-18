@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Awaitable, Callable, AsyncIterator
+
+from src.log_context import bind_agent, bind_op, bind_session_id
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from .eval_agent import EvalAgent
@@ -123,7 +126,12 @@ class Orchestrator:
         )
         self._session = session
         self._active_agent_name = None
-        logger.info("Orchestrator: created session %s", session.id)
+        bind_session_id(session.id)
+        logger.info(
+            "create_session done session_id=%s candidate_id=%s",
+            session.id,
+            candidate.id,
+        )
         return session
 
     async def get_session(self) -> InterviewSession | None:
@@ -175,6 +183,26 @@ class Orchestrator:
             raise SessionError("当前没有活跃会话")
         if target not in self._agents:
             raise SessionError(f"未知 Agent: {target!r}")
+
+        bind_op("switch_agent")
+        bind_session_id(self._session.id)
+        bind_agent(target)
+        from_agent = self._active_agent_name
+        start = time.perf_counter()
+        logger.info(
+            "switch_agent start target=%s from=%s rounds_count=%d",
+            target,
+            from_agent,
+            len(self._session.rounds),
+        )
+
+        if target == "eval":
+            tm = self._audio.transcription_manager
+            if tm is not None:
+                try:
+                    await tm.flush_pending_round()
+                except Exception:
+                    logger.exception("Orchestrator: flush_pending_round failed")
 
         precondition_err = _check_precondition(target, self._session)
         if precondition_err is not None:
@@ -231,10 +259,12 @@ class Orchestrator:
 
         self._active_agent_name = target
         self._session.stage = _AGENT_TO_STAGE.get(target, InterviewStage.IDLE)
+        elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
-            "Orchestrator: switched to agent=%s stage=%s",
+            "switch_agent done target=%s stage=%s elapsed_ms=%.1f",
             target,
-            self._session.stage,
+            self._session.stage.value,
+            elapsed_ms,
         )
 
     @property
@@ -281,7 +311,28 @@ class Orchestrator:
         agent = self.active_agent
         if agent is None:
             return AgentResponse(success=False, error="当前没有活跃 Agent")
-        return await agent.handle_request(request)
+        bind_op(request.type)
+        if self._session is not None:
+            bind_session_id(self._session.id)
+        bind_agent(self._active_agent_name)
+        start = time.perf_counter()
+        logger.info("handle_request start type=%s", request.type)
+        resp = await agent.handle_request(request)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        if resp.success:
+            logger.info(
+                "handle_request done type=%s success elapsed_ms=%.1f",
+                request.type,
+                elapsed_ms,
+            )
+        else:
+            logger.error(
+                "handle_request failed type=%s error=%s elapsed_ms=%.1f",
+                request.type,
+                resp.error,
+                elapsed_ms,
+            )
+        return resp
 
     async def handle_stream(
         self, request: AgentRequest

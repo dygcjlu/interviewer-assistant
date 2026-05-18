@@ -8,6 +8,8 @@ from pathlib import Path
 
 import uvicorn
 
+from src.logging_config import setup_logging
+
 from src.agents.eval_agent import EvalAgent
 from src.agents.interview_agent import InterviewAgent
 from src.agents.orchestrator import Orchestrator
@@ -32,10 +34,8 @@ from src.tools.resume_parser import parse_resume_pdf
 from src.tools.skill_tools import make_skill_tools
 from src.web.app import create_app
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+LOGS_DIR = Path(__file__).parent.parent / "logs"
+setup_logging(log_dir=LOGS_DIR, level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 SKILLS_DIR = Path(__file__).parent.parent / "skills"

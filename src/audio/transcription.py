@@ -76,6 +76,18 @@ class TranscriptionManager:
         """Returns (interviewer_text, candidate_text) for the current round."""
         return self._interviewer_text, self._candidate_text
 
+    def has_pending_round(self) -> bool:
+        """当前轮次是否有尚未归档的转写内容。"""
+        return bool(self._interviewer_text or self._candidate_text)
+
+    async def flush_pending_round(self) -> ConversationRound | None:
+        """若有未归档内容则结束当前轮次，否则无操作。"""
+        if not self.has_pending_round():
+            logger.debug("flush_pending_round skipped session_id=%s (no pending)", self._session.id)
+            return None
+        logger.info("flush_pending_round start session_id=%s", self._session.id)
+        return await self.finalize_round()
+
     async def finalize_round(self) -> ConversationRound:
         """结束当前轮次，归档到 session.rounds，重置累积器。"""
         round_ = ConversationRound(
@@ -100,6 +112,18 @@ class TranscriptionManager:
                 await self._on_round_finalized(round_)
             except Exception:
                 logger.exception("TranscriptionManager: on_round_finalized callback failed")
+        try:
+            await self._ws_sender(
+                {
+                    "type": "session_snapshot",
+                    "session_id": self._session.id,
+                    "stage": self._session.stage.value,
+                    "trigger_mode": self._session.metadata.trigger_mode,
+                    "rounds_count": len(self._session.rounds),
+                }
+            )
+        except Exception:
+            logger.debug("TranscriptionManager: session_snapshot broadcast failed")
         return round_
 
     # ── internals ─────────────────────────────────────────────────────────────
