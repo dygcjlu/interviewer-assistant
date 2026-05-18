@@ -87,6 +87,8 @@ def _profile_to_json(profile: CandidateProfile) -> dict[str, Any]:
     return {
         "email": profile.email,
         "phone": profile.phone,
+        "age": profile.age,
+        "resume_markdown_path": profile.resume_markdown_path,
         "education": [
             {
                 "school": e.school,
@@ -161,17 +163,27 @@ def _profile_from_row(row: dict[str, Any]) -> CandidateProfile:
         for p in payload.get("projects", [])
     ]
 
+    age_val = payload.get("age")
+    age: int | None = None
+    if age_val is not None:
+        try:
+            age = int(age_val)
+        except (TypeError, ValueError):
+            pass
+
     return CandidateProfile(
         id=row["id"],
         name=row["name"],
         email=payload.get("email"),
         phone=payload.get("phone"),
+        age=age,
         education=education,
         work_experience=work_experience,
         skills=list(payload.get("skills", [])),
         projects=projects,
         resume_text=row.get("resume_text", "") or "",
         resume_summary=payload.get("resume_summary", "") or "",
+        resume_markdown_path=payload.get("resume_markdown_path"),
         history_summary=None,
     )
 

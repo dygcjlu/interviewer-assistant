@@ -90,8 +90,8 @@ class AppConfig(BaseSettings):
 
 | 文件 | 内容 | 策略 |
 |------|------|------|
-| `logs/agent.log` | Agent 决策、LLM 调用、工具执行、压缩事件等所有运行日志 | 轮转，单文件最大 10MB，保留 5 份 |
-| `logs/error.log` | WARNING 及以上级别的错误日志 | 轮转，单文件最大 5MB，保留 3 份 |
+| `logs/app.log` | Agent 决策、LLM 调用、工具执行、压缩事件等所有运行日志 | 轮转，单文件最大 10MB，保留 5 份 |
+| `logs/app.error.log` | ERROR 及以上级别的错误日志 | 轮转，单文件最大 10MB，保留 5 份 |
 
 日志格式：`[时间戳] [级别] [模块] 消息`，敏感信息（API Key）在 Formatter 层过滤。
 
@@ -124,7 +124,7 @@ class AppConfig(BaseSettings):
 
 - **实时**：通过 WebSocket 推送 `token_usage` 消息到前端（参见 [Web 层](./web-layer.md) WebSocket 协议）
 - **持久化**：写入 `TokenUsage` 表（参见 [记忆与数据持久化](./memory-and-storage.md) 数据模型）
-- **预算告警**：当 token 用量超过预算的 80% 时，在 `agent.log` 中记录 WARNING
+- **预算告警**：当 token 用量超过预算的 80% 时，在 `app.log` 中记录 WARNING
 
 ```python
 class TokenTracker:

@@ -46,8 +46,9 @@ class ResumeAgent(BaseAgent):
                 content=(
                     f"请解析候选人简历文件：{file_path}\n"
                     "请调用 parse_resume_pdf 工具读取 PDF 内容，"
-                    "然后以 JSON 格式输出包含 name/email/phone/education/work_experience/"
-                    "skills/projects/resume_summary 字段的候选人结构化信息。"
+                    "然后以 JSON 格式输出包含以下字段的候选人结构化信息：\n"
+                    "name, email, phone, age（整数，无则 null）, "
+                    "education, work_experience, skills, projects, resume_summary"
                 ),
             )
         )
@@ -119,6 +120,11 @@ def _update_candidate_from_data(candidate: CandidateProfile, data: dict | list) 
         candidate.email = str(data["email"])
     if data.get("phone"):
         candidate.phone = str(data["phone"])
+    if data.get("age") is not None:
+        try:
+            candidate.age = int(data["age"])
+        except (TypeError, ValueError):
+            pass
     if data.get("resume_summary"):
         candidate.resume_summary = str(data["resume_summary"])
     if isinstance(data.get("skills"), list):

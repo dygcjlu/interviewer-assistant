@@ -8,7 +8,7 @@ from datetime import datetime
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from src.log_context import bind_connection_id, bind_op, bind_session_id, text_summary
+from src.logging import bind_connection_id, bind_op, bind_session_id, text_summary
 
 from ..agents.base import AgentRequest
 from ..models.exceptions import SessionError
@@ -40,6 +40,7 @@ async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
             "stage": session.stage.value,
             "trigger_mode": session.metadata.trigger_mode,
             "rounds_count": len(session.rounds),
+            "candidate_name": session.candidate.name or "",
         })
 
     try:

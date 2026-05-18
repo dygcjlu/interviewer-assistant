@@ -6,7 +6,7 @@ import logging
 import time
 from typing import AsyncIterator, TYPE_CHECKING
 
-from src.log_context import bind_op, text_summary
+from src.logging import bind_op, text_summary
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from ..audio.trigger import SuggestionTrigger

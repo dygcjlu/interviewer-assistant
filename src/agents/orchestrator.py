@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Awaitable, Callable, AsyncIterator
 
-from src.log_context import bind_agent, bind_op, bind_session_id
+from src.logging import bind_agent, bind_op, bind_session_id
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from .eval_agent import EvalAgent

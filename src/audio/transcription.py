@@ -120,6 +120,7 @@ class TranscriptionManager:
                     "stage": self._session.stage.value,
                     "trigger_mode": self._session.metadata.trigger_mode,
                     "rounds_count": len(self._session.rounds),
+                    "candidate_name": self._session.candidate.name or "",
                 }
             )
         except Exception:

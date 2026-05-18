@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from src.log_context import bind_request_id, bind_session_id
+from src.logging import bind_request_id, bind_session_id
 
 logger = logging.getLogger(__name__)
 

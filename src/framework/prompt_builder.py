@@ -116,9 +116,17 @@ class PromptBuilder:
 
 
 def _build_fixed_zone(session: InterviewSession) -> str:
-    lines = [f"候选人：{session.candidate.name}"]
-    if session.candidate.resume_summary:
-        lines.append(f"\n简历摘要：\n{session.candidate.resume_summary}")
+    c = session.candidate
+    lines = [f"候选人：{c.name}"]
+    if c.age is not None:
+        lines.append(f"年龄：{c.age}")
+    if c.education:
+        edu_parts = [f"{e.school} {e.degree} {e.major}" for e in c.education]
+        lines.append(f"教育背景：{'; '.join(edu_parts)}")
+    if c.skills:
+        lines.append(f"技能：{', '.join(c.skills)}")
+    if c.resume_summary:
+        lines.append(f"\n简历摘要：\n{c.resume_summary}")
     if session.question_plan:
         lines.append("\n面试题目清单：")
         for q in session.question_plan:

@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime
 
-from src.log_context import bind_op, text_summary
+from src.logging import bind_op, text_summary
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from ..framework.prompt_builder import AgentConfig, PromptBuilder

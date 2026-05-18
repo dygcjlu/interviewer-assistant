@@ -25,3 +25,6 @@ pyyaml>=6.0.1
 
 # HTTP client
 httpx>=0.27.0
+
+# UI
+nicegui>=3.12.0

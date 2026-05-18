@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any, AsyncIterator
 
-from src.log_context import bind_op
+from src.logging import bind_op
 
 import openai
 import tiktoken

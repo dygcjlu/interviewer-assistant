@@ -42,3 +42,5 @@ class CandidateProfile:
     resume_text: str = ""
     resume_summary: str = ""
     history_summary: str | None = None
+    age: int | None = None
+    resume_markdown_path: str | None = None

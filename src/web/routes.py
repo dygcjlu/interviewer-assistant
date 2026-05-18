@@ -2,18 +2,20 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
-import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from src.log_context import bind_op, bind_session_id
+from src.logging import bind_op, bind_session_id
 
 from ..agents.base import AgentRequest, AgentResponse
+from ..tools.resume_parser import parse_resume_pdf
 from ..models.exceptions import SessionError
 from .schemas import QuestionsUpdateRequest, StartInterviewRequest, SwitchAgentRequest
 
@@ -78,19 +80,26 @@ async def upload_resume(
         )
     file_bytes = await file.read()
     logger.info("upload_resume file_read bytes=%d", len(file_bytes))
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(file_bytes)
-        tmp_path = tmp.name
 
+    resumes_dir = Path("resumes")
+    resumes_dir.mkdir(exist_ok=True)
+    timestamp = int(time.time())
+    pdf_path = resumes_dir / f"{session.id}_{timestamp}.pdf"
+    pdf_path.write_bytes(file_bytes)
+    logger.info("upload_resume saved_pdf path=%s", pdf_path)
+
+    # Pre-extract raw text so resume_text is available before/after agent parsing
     try:
-        parse_resp: AgentResponse = await orch.handle_request(
-            AgentRequest(type="parse_resume", payload={"file_path": tmp_path}, session=session)
-        )
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        raw_extract = json.loads(await parse_resume_pdf(str(pdf_path)))
+        if extracted := raw_extract.get("text", ""):
+            session.candidate.resume_text = extracted
+            logger.info("upload_resume pdf_text_extracted chars=%d", len(extracted))
+    except Exception:
+        logger.warning("upload_resume: pre-extract PDF text failed, continuing without it")
+
+    parse_resp: AgentResponse = await orch.handle_request(
+        AgentRequest(type="parse_resume", payload={"file_path": str(pdf_path)}, session=session)
+    )
 
     if not parse_resp.success:
         logger.error("upload_resume parse_failed error=%s", parse_resp.error)
@@ -100,6 +109,15 @@ async def upload_resume(
         "upload_resume parse_ok candidate_name=%r",
         session.candidate.name or "",
     )
+
+    # Persist resume text as Markdown
+    if session.candidate.resume_text:
+        md_path = resumes_dir / f"{session.id}.md"
+        cand_name = session.candidate.name or "候选人"
+        md_content = f"# 简历 — {cand_name}\n\n{session.candidate.resume_text}"
+        md_path.write_text(md_content, encoding="utf-8")
+        session.candidate.resume_markdown_path = str(md_path.resolve())
+        logger.info("upload_resume saved_markdown path=%s", md_path)
 
     memory = _memory(request)
     try:
