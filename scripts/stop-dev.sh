@@ -21,7 +21,6 @@ stop_pid_file() {
 }
 
 stop_pid_file "$LOGS/backend.pid" "后端"
-stop_pid_file "$LOGS/frontend.pid" "前端"
 
 # 兜底：按端口清理（需 lsof）
 read_env_port() {
@@ -34,13 +33,11 @@ read_env_port() {
 
 if command -v lsof >/dev/null 2>&1; then
   PORT="$(read_env_port)"
-  for p in "$PORT" 5173 5174 5175; do
-    pids="$(lsof -ti tcp:"$p" -sTCP:LISTEN 2>/dev/null || true)"
-    if [[ -n "$pids" ]]; then
-      echo "$pids" | xargs kill -9 2>/dev/null || true
-      echo "已释放端口 $p"
-    fi
-  done
+  pids="$(lsof -ti tcp:"$PORT" -sTCP:LISTEN 2>/dev/null || true)"
+  if [[ -n "$pids" ]]; then
+    echo "$pids" | xargs kill -9 2>/dev/null || true
+    echo "已释放端口 $PORT"
+  fi
 fi
 
 echo "完成。"

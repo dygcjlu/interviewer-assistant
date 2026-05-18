@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# 一键启动前后端（macOS / Linux / Git Bash）
+# 启动后端（NiceGUI 前端已内嵌）（macOS / Linux / Git Bash）
 # 用法: ./scripts/start-dev.sh
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FRONTEND="$ROOT/frontend"
 LOGS="$ROOT/logs"
 CONDA_ENV="${CONDA_ENV:-interview-assistant}"
 
@@ -81,18 +80,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 
-# 前端
-if [[ ! -d "$FRONTEND/node_modules" ]]; then
-  echo "安装前端依赖..."
-  (cd "$FRONTEND" && npm install)
-fi
-
-echo "启动前端..."
-(cd "$FRONTEND" && npm run dev >>"$LOGS/frontend.out.log" 2>>"$LOGS/frontend.err.log") &
-FRONTEND_PID=$!
-echo $FRONTEND_PID >"$LOGS/frontend.pid"
-
 echo ""
-echo "访问: http://localhost:5173 （端口占用时见 $LOGS/frontend.out.log）"
+echo "访问: ${BACKEND_URL}"
 echo "停止: ./scripts/stop-dev.sh"
 echo ""

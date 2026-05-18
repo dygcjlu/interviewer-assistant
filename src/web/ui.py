@@ -72,6 +72,7 @@ async def index() -> None:
         "suggestion_text": "",
         "suggestion_card": None,    # ui.card for streaming bubble
         "agent_history": [],        # LLM conversation history
+        "candidates": [],           # 缓存候选人列表供下拉框使用
     }
     recv_queue: Queue[dict] = Queue()
     send_queue: Queue[str] = Queue()
@@ -156,6 +157,11 @@ async def index() -> None:
             user_in = ui.textarea(placeholder="输入指令或问题…").props(
                 "autogrow rows=1 outlined dense"
             ).classes("flex-1")
+            candidate_sel = ui.select(
+                options={},
+                label="选择候选人",
+                clearable=True,
+            ).props("dense outlined").classes("w-40").tooltip("从历史候选人中选择")
             ui.upload(
                 label="",
                 on_upload=lambda e: asyncio.create_task(
@@ -164,6 +170,81 @@ async def index() -> None:
                 auto_upload=True,
             ).props("accept=.pdf flat dense").tooltip("上传简历 PDF")
             send_btn = ui.button(icon="send").props("flat dense color=primary")
+
+    # ── 候选人选择器 ──────────────────────────────────────────────────────────────
+
+    async def _load_candidates() -> None:
+        """页面加载时拉取历史候选人列表，填充下拉框。"""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(f"{_base_url}/api/candidates", params={"limit": 50})
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:
+            logger.debug("load_candidates failed: %s", exc)
+            return
+
+        candidates = data.get("candidates", [])
+        state["candidates"] = candidates
+        opts = {}
+        for c in candidates:
+            cid = c.get("id", "")
+            name = c.get("name") or "—"
+            skills = c.get("skills", [])
+            preview = "、".join(skills[:3]) if skills else ""
+            label = f"{name}  {preview}" if preview else name
+            opts[cid] = label
+        candidate_sel.set_options(opts)
+
+    async def _on_candidate_select(cid: str | None) -> None:
+        """候选人选中后：加载其 profile + 最新题目计划，跳过上传流程。"""
+        if not cid:
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"{_base_url}/api/resume/profile", params={"candidate_id": cid}
+                )
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:
+            _error(chat_col, f"加载候选人信息失败：{exc}")
+            await _scroll(chat_scroll)
+            return
+
+        profile = data.get("profile", {})
+        questions = data.get("questions", [])
+
+        state["candidate_id"] = cid
+        state["candidate_name"] = profile.get("name") or "—"
+        _refresh_bar(stage_badge, candidate_label, round_label, state)
+
+        skills = ", ".join((profile.get("skills") or [])[:8])
+        q_lines = "\n".join(
+            f"  {i+1}. {q.get('question', '')}" for i, q in enumerate(questions[:10])
+        )
+        if len(questions) > 10:
+            q_lines += f"\n  …共 {len(questions)} 道"
+        reply = (
+            f"已选择历史候选人：{profile.get('name', '—')}\n"
+            f"技能：{skills or '—'}\n\n"
+            + (
+                f"面试题目（{len(questions)} 道）：\n{q_lines}"
+                if questions
+                else "暂无历史题目，可点击「开始面试」重新生成。"
+            )
+        )
+        _bubble(chat_col, reply, sent=False, name="Agent")
+        if questions:
+            _render_questions(q_col, questions, cid)
+        await _scroll(chat_scroll)
+
+    candidate_sel.on(
+        "update:model-value",
+        lambda e: asyncio.create_task(_on_candidate_select(e.args)),
+    )
+    asyncio.create_task(_load_candidates())
 
     # ── Interaction handlers ───────────────────────────────────────────────────
 

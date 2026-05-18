@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     CONTEXT_TOKEN_BUDGET: int = 80000
     CONTEXT_COMPRESSION_THRESHOLD: int = 8
 
+    # 百度 ASR（实时语音识别）
+    BAIDU_APP_ID: str = ""
+    BAIDU_API_KEY: str = ""
+    BAIDU_SECRET_KEY: str = ""
+
 
 _settings: Settings | None = None
 

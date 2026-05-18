@@ -33,12 +33,11 @@ function Stop-PortListeners {
 }
 
 $backendPort = Get-DotEnvPort
-$frontendPorts = @(5173, 5174, 5175, 5176)
 
-Write-Host "Stopping dev servers..."
-$n = Stop-PortListeners -Ports (@($backendPort) + $frontendPorts)
+Write-Host "Stopping backend..."
+$n = Stop-PortListeners -Ports @($backendPort)
 if ($n -eq 0) {
-    Write-Host "No listeners on ports $backendPort / $($frontendPorts -join ',')."
+    Write-Host "No listener on port $backendPort."
 } else {
     Write-Host "Done." -ForegroundColor Green
 }
