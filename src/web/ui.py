@@ -92,6 +92,7 @@ async def index() -> None:
         "candidate_name": "—",
         "stage": "idle",
         "round_count": 0,
+        "trigger_mode": "auto",
         "suggestion_label": None,   # ui.label inside streaming card
         "suggestion_text": "",
         "suggestion_card": None,    # ui.card for streaming bubble
@@ -188,21 +189,17 @@ async def index() -> None:
                         tx_scroll = ui.scroll_area().classes("flex-1 w-full")
                         with tx_scroll:
                             tx_col = ui.column().classes("w-full gap-1 p-1")
-                        with ui.row().classes("w-full gap-2 items-center shrink-0"):
-                            src_sel = ui.select(
-                                {"candidate": "候选人", "interviewer": "面试官"},
-                                value="candidate",
-                                label="来源",
-                            ).classes("w-28")
-                            manual_in = ui.input(placeholder="手动输入转写…").classes(
-                                "flex-1"
+                        with ui.row().classes("w-full gap-2 items-center shrink-0 py-1"):
+                            mode_btn = ui.button("⚡ 自动追问").props(
+                                "unelevated dense color=positive no-caps"
                             )
-                            ui.button(
-                                icon="send",
-                                on_click=lambda: asyncio.create_task(
-                                    _send_manual(manual_in, src_sel, send_queue)
-                                ),
-                            ).props("flat dense color=primary")
+                            with mode_btn:
+                                mode_tooltip = ui.tooltip("点击切换为手动模式")
+                            ui.space()
+                            trigger_btn = ui.button("触发追问", icon="play_circle").props(
+                                "unelevated dense color=warning no-caps"
+                            ).tooltip("手动触发 AI 追问建议")
+                            trigger_btn.disable()
 
                     # Questions tab
                     with ui.tab_panel(tab_q).classes("h-full p-2"):
@@ -298,6 +295,7 @@ async def index() -> None:
             stage = result.get("stage", "interviewing")
             state["stage"] = stage
             _refresh_bar(stage_badge, candidate_label, round_label, state)
+            _refresh_trigger_controls()
             _bubble(chat_col, f"面试已开始！当前阶段：{stage}", sent=False, name="Agent")
         except Exception as exc:
             _error(chat_col, f"开始面试失败：{exc}")
@@ -312,6 +310,7 @@ async def index() -> None:
             total = result.get("total_rounds", 0)
             state["stage"] = "completed"
             _refresh_bar(stage_badge, candidate_label, round_label, state)
+            _refresh_trigger_controls()
             if total == 0:
                 _bubble(chat_col, "面试已结束（无对话记录，跳过评价生成）。", sent=False, name="Agent")
             else:
@@ -332,6 +331,38 @@ async def index() -> None:
 
     start_btn.on("click", lambda: asyncio.create_task(_on_start()))
     stop_btn.on("click", lambda: asyncio.create_task(_on_stop()))
+
+    # ── Trigger mode controls ─────────────────────────────────────────────────
+
+    def _refresh_trigger_controls() -> None:
+        mode = state.get("trigger_mode", "auto")
+        interviewing = state.get("stage") == "interviewing"
+        if mode == "auto":
+            mode_btn.set_text("⚡ 自动追问")
+            mode_btn.props("color=positive")
+            mode_tooltip.set_text("点击切换为手动模式")
+            trigger_btn.disable()
+        else:
+            mode_btn.set_text("✋ 手动追问")
+            mode_btn.props("color=warning")
+            mode_tooltip.set_text("点击切换为自动模式")
+            if interviewing:
+                trigger_btn.enable()
+            else:
+                trigger_btn.disable()
+
+    async def _on_toggle_mode() -> None:
+        current = state.get("trigger_mode", "auto")
+        new_mode = "manual" if current == "auto" else "auto"
+        state["trigger_mode"] = new_mode
+        _refresh_trigger_controls()
+        await send_queue.put(json.dumps({"type": "set_trigger_mode", "mode": new_mode}))
+
+    async def _on_trigger_suggestion() -> None:
+        await send_queue.put(json.dumps({"type": "request_suggestion"}))
+
+    mode_btn.on("click", lambda: asyncio.create_task(_on_toggle_mode()))
+    trigger_btn.on("click", lambda: asyncio.create_task(_on_trigger_suggestion()))
 
     # ── WebSocket background tasks ─────────────────────────────────────────────
 
@@ -382,6 +413,7 @@ async def index() -> None:
                 panels, tab_r,
                 stage_badge, candidate_label, round_label,
             )
+            _refresh_trigger_controls()
 
     ui.timer(0.1, _poll)
 
@@ -404,8 +436,10 @@ async def _dispatch(
         is_final = msg.get("is_final", False)
         label = "候选人" if source == "candidate" else "面试官"
         border_color = "#3B82F6" if source == "candidate" else "#F97316"
-        with tx_col:
-            if is_final:
+        partial_key = f"partial_label_{source}"
+        if is_final:
+            state.pop(partial_key, None)
+            with tx_col:
                 with ui.column().classes("w-full gap-0 py-1").style(
                     f"border-left:3px solid {border_color}; padding-left:8px;"
                 ):
@@ -413,8 +447,16 @@ async def _dispatch(
                         f"color:{border_color};"
                     )
                     ui.label(text).classes("text-sm text-grey-9")
+        else:
+            existing = state.get(partial_key)
+            if existing is not None:
+                existing.set_text(f"{label}：{text}")
             else:
-                ui.label(f"{label}：{text}").classes("text-xs text-grey-4 italic pl-3")
+                with tx_col:
+                    lbl = ui.label(f"{label}：{text}").classes(
+                        "text-xs text-grey-4 italic pl-3"
+                    )
+                state[partial_key] = lbl
         tx_scroll.scroll_to(percent=1.0)
         if is_final:
             with chat_col:
@@ -480,6 +522,9 @@ async def _dispatch(
         rounds_count = msg.get("rounds_count", state.get("round_count", 0))
         state["stage"] = stage
         state["round_count"] = rounds_count
+        trigger_mode = msg.get("trigger_mode")
+        if trigger_mode:
+            state["trigger_mode"] = trigger_mode
         candidate_name = msg.get("candidate_name", "")
         if candidate_name and candidate_name != "—":
             state["candidate_name"] = candidate_name
@@ -815,15 +860,6 @@ async def _confirm_overwrite_dialog(candidate_name: str) -> bool:
 
     dialog.open()
     return await dialog_done
-
-
-async def _send_manual(manual_in: Any, src_sel: Any, send_queue: Queue[str]) -> None:
-    text = manual_in.value.strip()
-    if not text:
-        return
-    manual_in.value = ""
-    payload = json.dumps({"type": "manual_input", "source": src_sel.value, "text": text})
-    await send_queue.put(payload)
 
 
 def _render_candidate_list(

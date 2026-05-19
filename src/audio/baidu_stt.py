@@ -25,7 +25,12 @@ _SAMPLE_RATE = 16000
 _FORMAT = "pcm"
 
 
-_RECONNECT_DELAY_SEC = 2.0   # 断连后等待重连的秒数
+_RECONNECT_DELAY_SEC = 1.5   # 断连后等待重连的秒数
+_SEND_CHUNK_BYTES = 5120     # 百度建议每次发送 5120 字节（160ms）
+
+# 致命错误码：服务端会关闭连接，需要重连
+# -3005（本句无有效语音）是非致命错误，连接仍活跃，不应触发重连
+_FATAL_ERR_NOS = {4002, -3004}
 
 
 class BaiduRealtimeSTT:
@@ -45,6 +50,8 @@ class BaiduRealtimeSTT:
         self._reconnecting = False # 防止并发重连
         self._recv_queue: asyncio.Queue[TranscriptSegment] = asyncio.Queue()
         self._recv_task: asyncio.Task | None = None
+        self._audio_buf: bytes = b""   # 累积缓冲，攒满 _SEND_CHUNK_BYTES 再发
+        self._send_count: int = 0
         settings = get_settings()
         self._app_id: str = getattr(settings, "BAIDU_APP_ID", "")
         self._api_key: str = getattr(settings, "BAIDU_API_KEY", "")
@@ -70,7 +77,7 @@ class BaiduRealtimeSTT:
                 "data": {
                     "appid": int(self._app_id),
                     "appkey": self._api_key,
-                    "dev_pid": 80001,       # 普通话，支持标点
+                    "dev_pid": 15372,       # 普通话（与 demo 一致）
                     "cuid": f"interviewer-assistant-{self._channel}",
                     "format": _FORMAT,
                     "sample": _SAMPLE_RATE,
@@ -87,15 +94,35 @@ class BaiduRealtimeSTT:
     async def send_audio(self, audio_data: bytes) -> None:
         """发送 PCM 音频帧到百度 ASR。
 
-        若连接已断开（如百度后端超时），自动触发后台重连，本帧丢弃。
+        累积到 _SEND_CHUNK_BYTES 字节后再整块发送（百度建议 5120 字节/次）。
+        若连接已断开（如百度后端超时），自动触发后台重连，缓冲区清空。
         """
         if not self._connected or self._ws is None:
+            self._audio_buf = b""  # 断连时清空缓冲，避免旧音频混入下次连接
             # 触发重连（不等待，丢弃本帧）
             if not self._closed and not self._reconnecting and self._app_id:
                 asyncio.create_task(self._reconnect())
             return
+
+        self._audio_buf += audio_data
+
+        if len(self._audio_buf) < _SEND_CHUNK_BYTES:
+            return  # 缓冲不够，继续积累
+
+        chunk = self._audio_buf[:_SEND_CHUNK_BYTES]
+        self._audio_buf = self._audio_buf[_SEND_CHUNK_BYTES:]
+
+        self._send_count += 1
+        if self._send_count == 1:
+            import numpy as np  # noqa: PLC0415
+            arr = np.frombuffer(chunk, dtype=np.int16)
+            rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+            logger.debug(
+                "BaiduRealtimeSTT [%s]: first_chunk bytes=%d rms=%.1f",
+                self._channel, len(chunk), rms,
+            )
         try:
-            await self._ws.send(audio_data)
+            await self._ws.send(chunk)
         except Exception:
             logger.debug("BaiduRealtimeSTT [%s]: send_audio error", self._channel)
             self._connected = False
@@ -109,6 +136,10 @@ class BaiduRealtimeSTT:
         self._closed = True   # 阻止 send_audio 触发重连
         if self._ws is not None and self._connected:
             try:
+                # 发送缓冲区剩余数据
+                if self._audio_buf:
+                    await self._ws.send(self._audio_buf)
+                    self._audio_buf = b""
                 await self._ws.send(json.dumps({"type": "FINISH"}))
                 await self._ws.close()
             except Exception:
@@ -146,10 +177,12 @@ class BaiduRealtimeSTT:
                         err_no,
                         msg.get("err_msg", ""),
                     )
-                    # 服务端返回错误后连接通常即将关闭，立即标记断连并退出
-                    # 让 send_audio 在下次调用时立即触发重连，避免 ~10s 的延迟
-                    self._connected = False
-                    break
+                    if err_no in _FATAL_ERR_NOS:
+                        # 致命错误（如 4002 后端超时），服务端会关闭连接，标记断连退出
+                        self._connected = False
+                        break
+                    # -3005（本句无有效语音）等非致命错误：连接仍活跃，继续接收下一句
+                    continue
 
                 result = msg.get("result", "")
                 if not result:

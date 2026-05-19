@@ -73,7 +73,14 @@ class AudioManager:
         def _sync_frame_callback(frame: AudioFrame) -> None:
             try:
                 if self._loop is not None and self._bridge is not None:
-                    asyncio.run_coroutine_threadsafe(self._bridge.on_frame(frame), self._loop)
+                    fut = asyncio.run_coroutine_threadsafe(self._bridge.on_frame(frame), self._loop)
+
+                    def _on_done(f: "asyncio.Future") -> None:
+                        exc = f.exception() if not f.cancelled() else None
+                        if exc is not None:
+                            logger.error("AudioManager: on_frame future exception: %s", exc)
+
+                    fut.add_done_callback(_on_done)
             except Exception:
                 logger.exception("AudioManager: frame callback error")
 

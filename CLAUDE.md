@@ -72,7 +72,7 @@ src/
 skills/              # SKILL.md 面试技巧文件
 recordings/          # 录音文件，按 {session_id}/ 分目录
 resumes/             # 上传 PDF 和生成的 Markdown
-logs/                # 运行日志
+logs/                # 运行日志 (logs\app.log)
 ```
 
 
