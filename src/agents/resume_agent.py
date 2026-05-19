@@ -45,16 +45,20 @@ class ResumeAgent(BaseAgent):
                 role="user",
                 content=(
                     f"请解析候选人简历文件：{file_path}\n"
-                    "请调用 parse_resume_pdf 工具读取 PDF 内容，"
+                    "请调用 parse_resume 工具读取 PDF 内容，"
                     "然后以 JSON 格式输出包含以下字段的候选人结构化信息：\n"
                     "name, email, phone, age（整数，无则 null）, "
-                    "education, work_experience, skills, projects, resume_summary"
+                    "education, work_experience, skills, projects, resume_summary, "
+                    "years_of_experience（总工作年限整数，无则 null）, "
+                    "current_position（当前/最近职位字符串，无则 null）"
                 ),
             )
         )
 
         try:
             result_text = await self._run_with_tools(messages)
+            if not result_text or not result_text.strip():
+                raise ValueError("LLM 未返回任何内容，请检查工具调用是否正常")
             data = _extract_json(result_text)
             _update_candidate_from_data(request.session.candidate, data)
             logger.info(
@@ -127,6 +131,13 @@ def _update_candidate_from_data(candidate: CandidateProfile, data: dict | list) 
             pass
     if data.get("resume_summary"):
         candidate.resume_summary = str(data["resume_summary"])
+    if data.get("current_position") is not None:
+        candidate.current_position = str(data["current_position"])
+    if data.get("years_of_experience") is not None:
+        try:
+            candidate.years_of_experience = int(data["years_of_experience"])
+        except (TypeError, ValueError):
+            pass
     if isinstance(data.get("skills"), list):
         candidate.skills = [str(s) for s in data["skills"]]
     if isinstance(data.get("education"), list):
@@ -203,28 +214,39 @@ def _normalize_questions(data: dict | list) -> list[dict]:
 
 def _extract_json(text: str) -> dict | list:
     """从 LLM 输出中尽力提取 JSON。容错处理 ```json 代码块包裹。"""
+    if not text:
+        raise json.JSONDecodeError("empty response", "", 0)
     text = text.strip()
     if text.startswith("```"):
-        # strip leading code fence header line
         lines = text.splitlines()
         if lines and lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].startswith("```"):
             lines = lines[:-1]
         text = "\n".join(lines).strip()
+
+    # 先整体尝试
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # try to find first { or [ and last } or ]
-        start_obj = text.find("{")
-        start_arr = text.find("[")
-        candidates = [c for c in (start_obj, start_arr) if c >= 0]
-        if not candidates:
-            raise
-        start = min(candidates)
+        pass
+
+    # 找到第一个 { 或 [ 的位置，用 raw_decode 精确提取第一个完整 JSON 对象
+    decoder = json.JSONDecoder()
+    start_obj = text.find("{")
+    start_arr = text.find("[")
+    candidates = [c for c in (start_obj, start_arr) if c >= 0]
+    if not candidates:
+        raise json.JSONDecodeError("no JSON object found", text, 0)
+    start = min(candidates)
+    try:
+        obj, _ = decoder.raw_decode(text, start)
+        return obj
+    except json.JSONDecodeError:
+        # 最后尝试 rfind 截断
         end_obj = text.rfind("}")
         end_arr = text.rfind("]")
         end = max(end_obj, end_arr)
-        if end <= start:
-            raise
-        return json.loads(text[start : end + 1])
+        if end > start:
+            return json.loads(text[start : end + 1])
+        raise json.JSONDecodeError("no valid JSON found", text, start)

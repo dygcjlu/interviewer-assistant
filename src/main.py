@@ -32,7 +32,7 @@ from src.llm.client import OpenAICompatibleClient
 from src.llm.config import LLMConfig
 from src.storage.database import Database
 from src.storage.memory_module import MemoryModule
-from src.tools.resume_parser import parse_resume_pdf
+from src.tools.resume_parser import parse_resume_pdf, read_resume_markdown
 from src.tools.skill_tools import make_skill_tools
 from src.web.app import create_app
 import src.web.ui as _web_ui  # noqa: F401 — registers @ui.page("/") at import time
@@ -80,6 +80,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async def parse_resume(file_path: str) -> str:
         return await parse_resume_pdf(file_path)
 
+    tool_registry.register(description="读取候选人简历 Markdown 文件的完整内容")(read_resume_markdown)
+
     skills_list_fn, skill_view_fn = make_skill_tools(skill_loader)
     tool_registry.register(description="列出可用面试技巧索引")(skills_list_fn)
     tool_registry.register(description="查看指定面试技巧的完整内容")(skill_view_fn)
@@ -98,13 +100,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         name="resume",
         system_prompt=RESUME_AGENT_SYSTEM_PROMPT,
         skill_names=["resume_anchor"],
-        tool_names=["parse_resume", "skills_list", "skill_view"],
+        tool_names=["parse_resume", "read_resume_markdown", "skills_list", "skill_view"],
     )
     interview_config = AgentConfig(
         name="interview",
         system_prompt=INTERVIEW_AGENT_SYSTEM_PROMPT,
         skill_names=["deep_dive", "dimension_switch", "behavioral_probe"],
-        tool_names=[],
+        tool_names=["read_resume_markdown"],
     )
     eval_config = AgentConfig(
         name="eval",

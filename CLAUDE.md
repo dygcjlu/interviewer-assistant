@@ -40,6 +40,20 @@ python -m src.main
 # http://127.0.0.1:8000
 ```
 
+也可以通过 `scripts/` 目录下的脚本启动和停止服务：
+
+```powershell
+# Windows PowerShell
+.\scripts\start-dev.ps1   # 启动
+.\scripts\stop-dev.ps1    # 停止
+```
+
+```bash
+# Linux / macOS
+./scripts/start-dev.sh    # 启动
+./scripts/stop-dev.sh     # 停止
+```
+
 ## 目录结构
 
 ```
@@ -60,6 +74,7 @@ recordings/          # 录音文件，按 {session_id}/ 分目录
 resumes/             # 上传 PDF 和生成的 Markdown
 logs/                # 运行日志
 ```
+
 
 ## 架构文档
 

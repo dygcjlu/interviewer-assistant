@@ -43,6 +43,14 @@ _STAGE_COLORS = {
     "completed": "purple",
 }
 
+_STAGE_LABELS = {
+    "idle": "空闲",
+    "resume_analysis": "分析中",
+    "interviewing": "面试中",
+    "evaluating": "评价中",
+    "completed": "已完成",
+}
+
 
 def set_dependencies(orchestrator: Any, memory_module: Any, llm_client: Any,
                      tool_registry: Any, settings: Any) -> None:
@@ -62,6 +70,22 @@ def set_dependencies(orchestrator: Any, memory_module: Any, llm_client: Any,
 async def index() -> None:
     """Main Agent dialog page — one instance per browser connection."""
 
+    ui.add_head_html("""
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body {
+    font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: #F0F2F5 !important;
+  }
+  .q-page-container { background: #F0F2F5 !important; }
+  /* 保留图标字体，不让 body 继承覆盖 */
+  .q-icon, .material-icons, .material-icons-outlined,
+  .material-icons-round, .material-icons-sharp {
+    font-family: 'Material Icons', 'Material Icons Outlined', 'Material Icons Round', 'Material Icons Sharp' !important;
+  }
+</style>
+""")
+
     # Per-page state
     state: dict[str, Any] = {
         "candidate_id": None,
@@ -72,47 +96,89 @@ async def index() -> None:
         "suggestion_text": "",
         "suggestion_card": None,    # ui.card for streaming bubble
         "agent_history": [],        # LLM conversation history
-        "candidates": [],           # 缓存候选人列表供下拉框使用
+        "candidates": [],           # 缓存候选人列表
+        "candidate_list_col": None, # 左侧候选人列表容器
     }
     recv_queue: Queue[dict] = Queue()
     send_queue: Queue[str] = Queue()
 
     # ── Layout ────────────────────────────────────────────────────────────────
-    ui.query("body").style("margin:0; overflow:hidden")
+    ui.query("body").style("margin:0; overflow:hidden; background:#F0F2F5;")
 
     with ui.column().classes("w-full h-screen gap-0"):
         # Top status bar
         with ui.row().classes(
-            "w-full items-center px-4 py-2 bg-white shadow-sm border-b gap-3 flex-shrink-0"
+            "w-full items-center px-5 py-3 gap-4 flex-shrink-0"
+        ).style(
+            "background:white; border-bottom:1px solid #E5E7EB; "
+            "box-shadow:0 1px 4px rgba(0,0,0,0.07);"
         ):
-            stage_badge = ui.badge("idle").props("rounded color=grey")
-            candidate_label = ui.label("候选人：—").classes("text-sm font-semibold")
-            round_label = ui.label("轮次：0").classes("text-sm text-grey-6")
+            stage_badge = ui.badge("空闲").props("rounded color=grey")
+            with ui.column().classes("gap-0 leading-none"):
+                candidate_label = ui.label("—").classes("text-sm font-semibold text-grey-9")
+                round_label = ui.label("轮次：0").classes("text-xs text-grey-5")
             ui.space()
             start_btn = ui.button("开始面试", icon="play_arrow").props(
-                "flat dense color=positive"
+                "unelevated dense color=positive"
             )
             stop_btn = ui.button("结束面试", icon="stop").props(
-                "flat dense color=negative"
+                "unelevated dense color=negative"
             )
-            ws_icon = ui.icon("wifi_off").classes("text-base text-grey-5")
+            ws_icon = ui.icon("wifi_off").classes("text-base text-grey-4")
 
         # Main body
         with ui.row().classes("flex-1 w-full overflow-hidden"):
-            # Chat area — 60%
-            with ui.column().classes("h-full border-r overflow-hidden").style("width:60%"):
-                chat_scroll = ui.scroll_area().classes("flex-1 w-full").style(
-                    "height: calc(100vh - 120px)"
-                )
-                with chat_scroll:
-                    chat_col = ui.column().classes("w-full gap-2 p-4")
+            # Left panel — candidate list (220px)
+            with ui.column().classes("h-full flex-shrink-0 overflow-hidden").style(
+                "width:220px; background:white; border-right:1px solid #E5E7EB;"
+            ):
+                with ui.row().classes("w-full items-center px-3 py-2 gap-1 shrink-0").style(
+                    "border-bottom:1px solid #F3F4F6;"
+                ):
+                    ui.label("候选人").classes("text-sm font-semibold text-grey-8 flex-1")
+                    async def _do_upload_left(e: Any) -> None:
+                        await _handle_upload(e, chat_col, chat_scroll, q_col, state)
+                        await _load_candidates()
+                        # 上传成功后自动渲染简历 Tab
+                        if state.get("candidate_id"):
+                            try:
+                                async with httpx.AsyncClient(timeout=10) as _c:
+                                    _r = await _c.get(
+                                        f"{_base_url}/api/resume/profile",
+                                        params={"candidate_id": state["candidate_id"]},
+                                    )
+                                    _r.raise_for_status()
+                                    _d = _r.json()
+                                _render_profile_tab(profile_col, _d.get("profile", {}), _d.get("questions", []))
+                                panels.set_value(tab_profile)
+                            except Exception:
+                                pass
+                    ui.upload(
+                        label="上传简历",
+                        on_upload=lambda e: asyncio.create_task(_do_upload_left(e)),
+                        auto_upload=True,
+                    ).props("accept=.pdf unelevated dense color=primary no-caps").tooltip("上传 PDF 简历").classes("shrink-0")
 
-            # Right panel — 40%
-            with ui.column().classes("h-full overflow-hidden").style("width:40%"):
+                candidate_list_scroll = ui.scroll_area().classes("flex-1 w-full")
+                with candidate_list_scroll:
+                    candidate_list_col = ui.column().classes("w-full gap-0 p-1")
+                state["candidate_list_col"] = candidate_list_col
+
+            # Chat area — ~45%
+            with ui.column().classes("h-full border-r overflow-hidden").style(
+                "flex:1; min-width:0; background:#F0F2F5;"
+            ):
+                chat_scroll = ui.scroll_area().classes("flex-1 w-full h-full")
+                with chat_scroll:
+                    chat_col = ui.column().classes("w-full gap-1 p-4")
+
+            # Right panel — 38%
+            with ui.column().classes("h-full overflow-hidden flex-shrink-0").style("width:38%"):
                 with ui.tabs().classes("w-full shrink-0") as tabs:
                     tab_tx = ui.tab("转写", icon="record_voice_over")
                     tab_q = ui.tab("题目", icon="list_alt")
                     tab_r = ui.tab("报告", icon="assessment")
+                    tab_profile = ui.tab("简历", icon="person")
 
                 with ui.tab_panels(tabs, value=tab_tx).classes(
                     "flex-1 w-full overflow-hidden"
@@ -150,31 +216,25 @@ async def index() -> None:
                         with r_scroll:
                             r_col = ui.column().classes("w-full gap-2 p-1")
 
+                    # Profile tab — candidate detail
+                    with ui.tab_panel(tab_profile).classes("h-full p-2"):
+                        profile_scroll = ui.scroll_area().classes("w-full h-full")
+                        with profile_scroll:
+                            profile_col = ui.column().classes("w-full gap-2 p-1")
+
         # Bottom input row
         with ui.row().classes(
-            "w-full items-end px-4 py-2 bg-white border-t gap-2 flex-shrink-0"
-        ):
+            "w-full items-center px-4 py-3 gap-2 flex-shrink-0"
+        ).style("background:white; border-top:1px solid #E5E7EB;"):
             user_in = ui.textarea(placeholder="输入指令或问题…").props(
                 "autogrow rows=1 outlined dense"
             ).classes("flex-1")
-            candidate_sel = ui.select(
-                options={},
-                label="选择候选人",
-                clearable=True,
-            ).props("dense outlined").classes("w-40").tooltip("从历史候选人中选择")
-            ui.upload(
-                label="",
-                on_upload=lambda e: asyncio.create_task(
-                    _handle_upload(e, chat_col, chat_scroll, q_col, state)
-                ),
-                auto_upload=True,
-            ).props("accept=.pdf flat dense").tooltip("上传简历 PDF")
             send_btn = ui.button(icon="send").props("flat dense color=primary")
 
-    # ── 候选人选择器 ──────────────────────────────────────────────────────────────
+    # ── 候选人列表面板 ────────────────────────────────────────────────────────────
 
     async def _load_candidates() -> None:
-        """页面加载时拉取历史候选人列表，填充下拉框。"""
+        """拉取历史候选人列表，刷新左侧面板。"""
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(f"{_base_url}/api/candidates", params={"limit": 50})
@@ -186,64 +246,11 @@ async def index() -> None:
 
         candidates = data.get("candidates", [])
         state["candidates"] = candidates
-        opts = {}
-        for c in candidates:
-            cid = c.get("id", "")
-            name = c.get("name") or "—"
-            skills = c.get("skills", [])
-            preview = "、".join(skills[:3]) if skills else ""
-            label = f"{name}  {preview}" if preview else name
-            opts[cid] = label
-        candidate_sel.set_options(opts)
+        _render_candidate_list(candidate_list_col, candidates, state,
+                               chat_col, chat_scroll, q_col, profile_col,
+                               panels, tab_profile,
+                               stage_badge, candidate_label, round_label)
 
-    async def _on_candidate_select(cid: str | None) -> None:
-        """候选人选中后：加载其 profile + 最新题目计划，跳过上传流程。"""
-        if not cid:
-            return
-
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(
-                    f"{_base_url}/api/resume/profile", params={"candidate_id": cid}
-                )
-                r.raise_for_status()
-                data = r.json()
-        except Exception as exc:
-            _error(chat_col, f"加载候选人信息失败：{exc}")
-            await _scroll(chat_scroll)
-            return
-
-        profile = data.get("profile", {})
-        questions = data.get("questions", [])
-
-        state["candidate_id"] = cid
-        state["candidate_name"] = profile.get("name") or "—"
-        _refresh_bar(stage_badge, candidate_label, round_label, state)
-
-        skills = ", ".join((profile.get("skills") or [])[:8])
-        q_lines = "\n".join(
-            f"  {i+1}. {q.get('question', '')}" for i, q in enumerate(questions[:10])
-        )
-        if len(questions) > 10:
-            q_lines += f"\n  …共 {len(questions)} 道"
-        reply = (
-            f"已选择历史候选人：{profile.get('name', '—')}\n"
-            f"技能：{skills or '—'}\n\n"
-            + (
-                f"面试题目（{len(questions)} 道）：\n{q_lines}"
-                if questions
-                else "暂无历史题目，可点击「开始面试」重新生成。"
-            )
-        )
-        _bubble(chat_col, reply, sent=False, name="Agent")
-        if questions:
-            _render_questions(q_col, questions, cid)
-        await _scroll(chat_scroll)
-
-    candidate_sel.on(
-        "update:model-value",
-        lambda e: asyncio.create_task(_on_candidate_select(e.args)),
-    )
     asyncio.create_task(_load_candidates())
 
     # ── Interaction handlers ───────────────────────────────────────────────────
@@ -282,9 +289,10 @@ async def index() -> None:
     async def _on_start() -> None:
         cid = state.get("candidate_id")
         if not cid:
-            _error(chat_col, "请先上传简历以获取候选人 ID")
+            _error(chat_col, "请先选择候选人或上传简历")
             await _scroll(chat_scroll)
             return
+        start_btn.disable()
         try:
             result = await _ict.start_interview(cid)
             stage = result.get("stage", "interviewing")
@@ -293,24 +301,33 @@ async def index() -> None:
             _bubble(chat_col, f"面试已开始！当前阶段：{stage}", sent=False, name="Agent")
         except Exception as exc:
             _error(chat_col, f"开始面试失败：{exc}")
+        finally:
+            start_btn.enable()
         await _scroll(chat_scroll)
 
     async def _on_stop() -> None:
+        stop_btn.disable()
         try:
             result = await _ict.stop_interview()
             total = result.get("total_rounds", 0)
-            _bubble(chat_col, f"面试已结束，共 {total} 轮对话。正在生成评价报告…", sent=False, name="Agent")
-            await _scroll(chat_scroll)
-            # Auto-fetch report
-            async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.get(f"{_base_url}/api/interview/eval")
-                r.raise_for_status()
-                report_data = r.json().get("report", {})
-            _render_report(r_col, report_data)
-            panels.set_value(tab_r)
-            _bubble(chat_col, "评价报告已生成，请查看「报告」Tab。", sent=False, name="Agent")
+            state["stage"] = "completed"
+            _refresh_bar(stage_badge, candidate_label, round_label, state)
+            if total == 0:
+                _bubble(chat_col, "面试已结束（无对话记录，跳过评价生成）。", sent=False, name="Agent")
+            else:
+                _bubble(chat_col, f"面试已结束，共 {total} 轮对话。正在生成评价报告…", sent=False, name="Agent")
+                await _scroll(chat_scroll)
+                async with httpx.AsyncClient(timeout=30) as client:
+                    r = await client.get(f"{_base_url}/api/interview/eval")
+                    r.raise_for_status()
+                    report_data = r.json().get("report", {})
+                _render_report(r_col, report_data)
+                panels.set_value(tab_r)
+                _bubble(chat_col, "评价报告已生成，请查看「报告」Tab。", sent=False, name="Agent")
         except Exception as exc:
             _error(chat_col, f"结束面试失败：{exc}")
+        finally:
+            stop_btn.enable()
         await _scroll(chat_scroll)
 
     start_btn.on("click", lambda: asyncio.create_task(_on_start()))
@@ -386,17 +403,27 @@ async def _dispatch(
         text = msg.get("text", "")
         is_final = msg.get("is_final", False)
         label = "候选人" if source == "candidate" else "面试官"
-        cls = "text-xs text-grey-8 border-b pb-1" if is_final else "text-xs text-grey-5 italic"
+        border_color = "#3B82F6" if source == "candidate" else "#F97316"
         with tx_col:
-            ui.label(f"[{label}] {text}").classes(cls)
+            if is_final:
+                with ui.column().classes("w-full gap-0 py-1").style(
+                    f"border-left:3px solid {border_color}; padding-left:8px;"
+                ):
+                    ui.label(label).classes("text-xs font-semibold").style(
+                        f"color:{border_color};"
+                    )
+                    ui.label(text).classes("text-sm text-grey-9")
+            else:
+                ui.label(f"{label}：{text}").classes("text-xs text-grey-4 italic pl-3")
         tx_scroll.scroll_to(percent=1.0)
-        # Lightweight inline entry in chat area (final segments only)
         if is_final:
             with chat_col:
-                with ui.card().classes(
-                    "w-full bg-grey-1 border-l-2 border-grey-4 px-3 py-1"
-                ):
-                    ui.label(f"[{label}] {text}").classes("text-xs text-grey-7")
+                with ui.row().classes("w-full justify-center py-1"):
+                    ui.label(f"{label}：{text}").style(
+                        "background:#F3F4F6; color:#6B7280; padding:3px 12px;"
+                        "border-radius:999px; font-size:11px; max-width:80%;"
+                        "white-space:pre-wrap; text-align:center;"
+                    )
             await _scroll(chat_scroll)
 
     elif t == "suggestion_delta":
@@ -498,7 +525,29 @@ async def _agent_loop(
         "request_suggestion", "regenerate_questions",
     ]
     tools = _tool_registry.get_schemas(tool_names) or None
-    messages = [Message(role="system", content=_UI_AGENT_SYSTEM)] + state["agent_history"]
+
+    system_content = _UI_AGENT_SYSTEM
+    profile = state.get("current_profile")
+    if profile:
+        parts = [f"\n\n当前已选候选人：{profile.get('name', '—')}（ID: {state.get('candidate_id', '')}）"]
+        if pos := profile.get("current_position"):
+            parts.append(f"职位：{pos}")
+        if (yoe := profile.get("years_of_experience")) is not None:
+            parts.append(f"工作年限：{yoe} 年")
+        if edu := profile.get("education"):
+            edu_strs = [
+                f"{e.get('school', '')} {e.get('degree', '')} {e.get('major', '')}".strip()
+                for e in edu if isinstance(e, dict)
+            ]
+            if edu_strs:
+                parts.append(f"教育背景：{'; '.join(edu_strs)}")
+        if skills := profile.get("skills"):
+            parts.append(f"技能：{', '.join(skills[:15])}")
+        if summary := profile.get("resume_summary"):
+            parts.append(f"简历摘要：{summary}")
+        system_content += "\n".join(parts)
+
+    messages = [Message(role="system", content=system_content)] + state["agent_history"]
 
     try:
         resp = await _llm_client.chat(messages=messages, tools=tools)
@@ -561,7 +610,25 @@ async def _agent_loop(
 
 def _bubble(col, text: str, *, sent: bool, name: str) -> None:
     with col:
-        ui.chat_message(text=text, name=name, sent=sent)
+        if sent:
+            with ui.row().classes("w-full justify-end py-1 px-2"):
+                with ui.column().classes("items-end gap-1").style("max-width:68%"):
+                    ui.label(name).classes("text-xs text-grey-5")
+                    ui.label(text).style(
+                        "background:#1D4ED8; color:white; padding:10px 14px;"
+                        "border-radius:16px 16px 3px 16px; font-size:13px;"
+                        "white-space:pre-wrap; line-height:1.6; word-break:break-word;"
+                    )
+        else:
+            with ui.row().classes("w-full justify-start py-1 px-2"):
+                with ui.column().classes("items-start gap-1").style("max-width:68%"):
+                    ui.label(name).classes("text-xs text-grey-5")
+                    ui.label(text).style(
+                        "background:white; color:#111827; padding:10px 14px;"
+                        "border-radius:16px 16px 16px 3px; font-size:13px;"
+                        "white-space:pre-wrap; line-height:1.6; word-break:break-word;"
+                        "border:1px solid #E5E7EB; box-shadow:0 1px 3px rgba(0,0,0,0.06);"
+                    )
 
 
 def _error(col, text: str) -> None:
@@ -577,9 +644,10 @@ async def _scroll(area) -> None:
 def _refresh_bar(badge, cand_label, rnd_label, state: dict) -> None:
     stage = state.get("stage", "idle")
     color = _STAGE_COLORS.get(stage, "grey")
-    badge.set_text(stage)
+    label = _STAGE_LABELS.get(stage, stage)
+    badge.set_text(label)
     badge.props(f"rounded color={color}")
-    cand_label.set_text(f"候选人：{state.get('candidate_name', '—')}")
+    cand_label.set_text(state.get("candidate_name", "—"))
     rnd_label.set_text(f"轮次：{state.get('round_count', 0)}")
 
 
@@ -635,26 +703,54 @@ def _render_report(col, report: dict) -> None:
 
 
 async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) -> None:
-    filename = event.name
-    content = event.content.read()
+    filename = event.file.name
+    content = await event.file.read()
     logger.info("PDF upload: %s (%d bytes)", filename, len(content))
 
     _bubble(chat_col, f"正在解析简历：{filename}…", sent=False, name="Agent")
     await _scroll(chat_scroll)
 
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                f"{_base_url}/api/resume/upload",
-                files={"file": (filename, content, "application/pdf")},
-            )
-            r.raise_for_status()
-            data = r.json()
-    except Exception as exc:
-        logger.exception("PDF upload failed")
-        _error(chat_col, f"简历上传失败：{exc}")
-        await _scroll(chat_scroll)
+    async def _do_upload_request(candidate_id: str | None = None, overwrite: bool = False) -> dict | None:
+        params: dict[str, Any] = {}
+        if candidate_id:
+            params["candidate_id"] = candidate_id
+        if overwrite:
+            params["overwrite"] = "true"
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                r = await client.post(
+                    f"{_base_url}/api/resume/upload",
+                    files={"file": (filename, content, "application/pdf")},
+                    params=params,
+                )
+                if r.status_code == 409:
+                    return {"_conflict": r.json()}
+                r.raise_for_status()
+                return r.json()
+        except Exception as exc:
+            logger.exception("PDF upload failed")
+            _error(chat_col, f"简历上传失败：{exc}")
+            await _scroll(chat_scroll)
+            return None
+
+    data = await _do_upload_request()
+    if data is None:
         return
+
+    # 去重冲突：弹窗询问是否覆盖
+    if "_conflict" in data:
+        conflict = data["_conflict"].get("detail", {})
+        existing_name = conflict.get("existing_candidate_name", filename)
+        existing_id = conflict.get("existing_candidate_id", "")
+        confirmed = await _confirm_overwrite_dialog(existing_name)
+        if not confirmed:
+            _bubble(chat_col, "已取消导入，保留原有候选人数据。", sent=False, name="Agent")
+            await _scroll(chat_scroll)
+            return
+        # 用户确认覆盖：带 candidate_id 和 overwrite=true 重传
+        data = await _do_upload_request(candidate_id=existing_id, overwrite=True)
+        if data is None:
+            return
 
     profile = data.get("profile", {})
     questions = data.get("questions", [])
@@ -662,8 +758,20 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
 
     state["candidate_id"] = cid
     state["candidate_name"] = profile.get("name", "—")
+    state["current_profile"] = profile
 
     skills = ", ".join(profile.get("skills", [])[:8])
+    yoe = profile.get("years_of_experience")
+    pos = profile.get("current_position", "")
+    meta_parts = []
+    if pos:
+        meta_parts.append(f"职位：{pos}")
+    if yoe is not None:
+        meta_parts.append(f"工作年限：{yoe} 年")
+    if skills:
+        meta_parts.append(f"技能：{skills}")
+    meta_str = "\n".join(meta_parts) if meta_parts else "—"
+
     q_lines = "\n".join(
         f"  {i+1}. {q.get('question', '')}" for i, q in enumerate(questions[:10])
     )
@@ -672,13 +780,41 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
     reply = (
         f"简历解析完成！\n"
         f"候选人：{profile.get('name', '—')}\n"
-        f"技能：{skills or '—'}\n\n"
+        f"{meta_str}\n\n"
         f"面试题目（{len(questions)} 道）：\n{q_lines}"
     )
     _bubble(chat_col, reply, sent=False, name="Agent")
     if questions:
         _render_questions(q_col, questions, cid)
     await _scroll(chat_scroll)
+
+
+async def _confirm_overwrite_dialog(candidate_name: str) -> bool:
+    """弹出确认覆盖弹窗，返回用户是否确认。"""
+    result: dict[str, bool] = {"confirmed": False}
+    dialog_done: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
+
+    with ui.dialog() as dialog, ui.card().classes("p-4 gap-3"):
+        ui.label(f"候选人「{candidate_name}」已存在").classes("text-base font-semibold")
+        ui.label("是否覆盖现有数据（简历、题目将重新解析）？").classes("text-sm text-grey-7")
+        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+            def _cancel():
+                result["confirmed"] = False
+                if not dialog_done.done():
+                    dialog_done.set_result(False)
+                dialog.close()
+
+            def _confirm():
+                result["confirmed"] = True
+                if not dialog_done.done():
+                    dialog_done.set_result(True)
+                dialog.close()
+
+            ui.button("取消", on_click=_cancel).props("flat dense")
+            ui.button("覆盖", on_click=_confirm).props("unelevated dense color=negative")
+
+    dialog.open()
+    return await dialog_done
 
 
 async def _send_manual(manual_in: Any, src_sel: Any, send_queue: Queue[str]) -> None:
@@ -688,6 +824,284 @@ async def _send_manual(manual_in: Any, src_sel: Any, send_queue: Queue[str]) -> 
     manual_in.value = ""
     payload = json.dumps({"type": "manual_input", "source": src_sel.value, "text": text})
     await send_queue.put(payload)
+
+
+def _render_candidate_list(
+    col,
+    candidates: list,
+    state: dict,
+    chat_col, chat_scroll, q_col, profile_col,
+    panels, tab_profile,
+    stage_badge, candidate_label, round_label,
+) -> None:
+    """渲染左侧候选人卡片列表。"""
+    col.clear()
+    if not candidates:
+        with col:
+            with ui.column().classes("w-full items-center gap-2 p-3").style(
+                "border:2px dashed #BFDBFE; border-radius:8px; margin:8px;"
+                "background:#EFF6FF;"
+            ):
+                ui.icon("upload_file").classes("text-4xl text-blue-3")
+                ui.label("暂无候选人").classes("text-sm font-semibold text-grey-7 text-center")
+                ui.label("点击上方「上传简历」\n添加候选人").classes(
+                    "text-xs text-grey-5 text-center whitespace-pre-line"
+                )
+        return
+
+    with col:
+        for c in candidates:
+            cid = c.get("id", "")
+            name = c.get("name") or "—"
+            pos = c.get("current_position") or ""
+            skills = c.get("skills", [])
+            yoe = c.get("years_of_experience")
+            sub_parts = []
+            if pos:
+                sub_parts.append(pos)
+            elif skills:
+                sub_parts.append("、".join(skills[:2]))
+            if yoe is not None:
+                sub_parts.append(f"{yoe}年")
+            subtitle = " · ".join(sub_parts) if sub_parts else "—"
+            is_active = state.get("candidate_id") == cid
+
+            item_style = (
+                "background:#EFF6FF; border-left:3px solid #3B82F6;"
+                if is_active
+                else "background:transparent; border-left:3px solid transparent;"
+            )
+
+            with ui.row().classes("w-full items-center gap-1 px-2 py-2 rounded cursor-pointer").style(item_style) as row_el:
+                with ui.column().classes("flex-1 gap-0 min-w-0"):
+                    ui.label(name).classes(
+                        "text-sm font-semibold text-grey-9 truncate"
+                        if not is_active
+                        else "text-sm font-semibold text-blue-8 truncate"
+                    )
+                    ui.label(subtitle).classes("text-xs text-grey-5 truncate")
+
+                delete_btn = ui.button(icon="delete_outline").props(
+                    "flat dense round color=grey-5 size=xs"
+                ).tooltip("删除候选人")
+
+                _cid = cid  # capture for closure
+
+                async def _on_select_candidate(_cid=_cid) -> None:
+                    await _on_candidate_select_inner(
+                        _cid, state, chat_col, chat_scroll, q_col, profile_col,
+                        panels, tab_profile, stage_badge, candidate_label, round_label,
+                        col, candidates,
+                    )
+
+                async def _on_delete_candidate(_cid=_cid, _name=name) -> None:
+                    confirmed = await _confirm_delete_dialog(_name)
+                    if not confirmed:
+                        return
+                    try:
+                        async with httpx.AsyncClient(timeout=10) as client:
+                            r = await client.delete(f"{_base_url}/api/candidates/{_cid}")
+                            if r.status_code == 409:
+                                detail = r.json().get("detail", {})
+                                ui.notify(detail.get("message", "无法删除"), type="warning")
+                                return
+                            r.raise_for_status()
+                    except Exception as exc:
+                        ui.notify(f"删除失败：{exc}", type="negative")
+                        return
+                    # 若删除的是当前选中候选人，清空状态
+                    if state.get("candidate_id") == _cid:
+                        state["candidate_id"] = None
+                        state["candidate_name"] = "—"
+                        _refresh_bar(stage_badge, candidate_label, round_label, state)
+                        profile_col.clear()
+                        q_col.clear()
+                    # 从缓存移除并刷新列表
+                    state["candidates"] = [x for x in state["candidates"] if x.get("id") != _cid]
+                    _render_candidate_list(
+                        col, state["candidates"], state,
+                        chat_col, chat_scroll, q_col, profile_col,
+                        panels, tab_profile,
+                        stage_badge, candidate_label, round_label,
+                    )
+                    ui.notify(f"已删除候选人「{_name}」", type="positive")
+
+                row_el.on("click", lambda _cid=_cid: asyncio.create_task(_on_select_candidate(_cid)))
+                delete_btn.on("click", lambda _cid=_cid, _name=name: asyncio.create_task(_on_delete_candidate(_cid, _name)))
+
+
+async def _on_candidate_select_inner(
+    cid: str,
+    state: dict,
+    chat_col, chat_scroll, q_col, profile_col,
+    panels, tab_profile,
+    stage_badge, candidate_label, round_label,
+    list_col, candidates: list,
+) -> None:
+    """点击左侧候选人后加载 profile 并刷新详情。"""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{_base_url}/api/resume/profile", params={"candidate_id": cid}
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        _error(chat_col, f"加载候选人信息失败：{exc}")
+        await _scroll(chat_scroll)
+        return
+
+    profile = data.get("profile", {})
+    questions = data.get("questions", [])
+
+    state["candidate_id"] = cid
+    state["candidate_name"] = profile.get("name") or "—"
+    state["current_profile"] = profile
+    _refresh_bar(stage_badge, candidate_label, round_label, state)
+
+    # 刷新左侧列表高亮
+    _render_candidate_list(
+        list_col, candidates, state,
+        chat_col, chat_scroll, q_col, profile_col,
+        panels, tab_profile,
+        stage_badge, candidate_label, round_label,
+    )
+
+    skills = ", ".join((profile.get("skills") or [])[:8])
+    pos = profile.get("current_position") or ""
+    yoe = profile.get("years_of_experience")
+    meta_parts = []
+    if pos:
+        meta_parts.append(f"职位：{pos}")
+    if yoe is not None:
+        meta_parts.append(f"工作年限：{yoe} 年")
+    if skills:
+        meta_parts.append(f"技能：{skills}")
+    meta_str = "\n".join(meta_parts) if meta_parts else "—"
+
+    q_count = len(questions)
+    reply = (
+        f"已选择候选人：{profile.get('name', '—')}\n"
+        f"{meta_str}\n\n"
+        + (
+            f"历史题目 {q_count} 道，可在「题目」Tab 查看。"
+            if questions
+            else "暂无历史题目，可点击「开始面试」重新生成。"
+        )
+    )
+    _bubble(chat_col, reply, sent=False, name="Agent")
+    if questions:
+        _render_questions(q_col, questions, cid)
+    _render_profile_tab(profile_col, profile, questions)
+    panels.set_value(tab_profile)
+    await _scroll(chat_scroll)
+
+
+async def _confirm_delete_dialog(candidate_name: str) -> bool:
+    """弹出确认删除弹窗，返回用户是否确认。"""
+    dialog_done: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
+
+    with ui.dialog() as dialog, ui.card().classes("p-4 gap-3"):
+        ui.label(f"确认删除「{candidate_name}」？").classes("text-base font-semibold")
+        ui.label("将同时删除简历文件、面试记录和评价报告，无法恢复。").classes("text-sm text-grey-7")
+        with ui.row().classes("w-full justify-end gap-2 mt-2"):
+            def _cancel():
+                if not dialog_done.done():
+                    dialog_done.set_result(False)
+                dialog.close()
+
+            def _confirm():
+                if not dialog_done.done():
+                    dialog_done.set_result(True)
+                dialog.close()
+
+            ui.button("取消", on_click=_cancel).props("flat dense")
+            ui.button("删除", on_click=_confirm).props("unelevated dense color=negative")
+
+    dialog.open()
+    return await dialog_done
+
+
+def _render_profile_tab(col, profile: dict, questions: list) -> None:
+    """渲染候选人详情 Tab 内容。"""
+    col.clear()
+    if not profile:
+        with col:
+            ui.label("请先选择候选人").classes("text-grey-5 text-sm")
+        return
+
+    with col:
+        # 基本信息卡片
+        with ui.card().classes("w-full p-3 gap-1"):
+            name = profile.get("name") or "—"
+            ui.label(name).classes("text-base font-bold text-grey-9")
+            pos = profile.get("current_position")
+            yoe = profile.get("years_of_experience")
+            if pos:
+                ui.label(f"职位：{pos}").classes("text-sm text-grey-7")
+            if yoe is not None:
+                ui.label(f"工作年限：{yoe} 年").classes("text-sm text-grey-7")
+            edu_list = profile.get("education") or []
+            if edu_list:
+                edu_strs = [
+                    f"{e.get('school', '')} {e.get('degree', '')} {e.get('major', '')}".strip()
+                    for e in edu_list if isinstance(e, dict)
+                ]
+                ui.label(f"教育：{'; '.join(edu_strs)}").classes("text-sm text-grey-7")
+            skills = profile.get("skills") or []
+            if skills:
+                with ui.row().classes("flex-wrap gap-1 mt-1"):
+                    for s in skills[:15]:
+                        ui.badge(s).props("color=blue-2 text-color=blue-9")
+
+        # 简介
+        summary = profile.get("resume_summary") or ""
+        if summary:
+            with ui.expansion("简历摘要", icon="summarize").classes("w-full"):
+                ui.label(summary).classes("text-sm text-grey-8 whitespace-pre-wrap")
+
+        # 工作经历
+        work_exp = profile.get("work_experience") or []
+        if work_exp:
+            with ui.expansion(f"工作经历（{len(work_exp)}）", icon="work").classes("w-full"):
+                for w in work_exp:
+                    if not isinstance(w, dict):
+                        continue
+                    with ui.column().classes("w-full gap-0 py-1"):
+                        ui.label(f"{w.get('company', '')} · {w.get('title', '')}").classes("text-sm font-semibold")
+                        ui.label(w.get("duration", "")).classes("text-xs text-grey-5")
+                        desc = w.get("description", "")
+                        if desc:
+                            ui.label(desc).classes("text-xs text-grey-7 mt-1 whitespace-pre-wrap")
+                    ui.separator()
+
+        # 项目经历
+        projects = profile.get("projects") or []
+        if projects:
+            with ui.expansion(f"项目经历（{len(projects)}）", icon="code").classes("w-full"):
+                for p in projects:
+                    if not isinstance(p, dict):
+                        continue
+                    with ui.column().classes("w-full gap-0 py-1"):
+                        ui.label(p.get("name", "")).classes("text-sm font-semibold")
+                        ui.label(f"角色：{p.get('role', '')}").classes("text-xs text-grey-6")
+                        ts = p.get("tech_stack") or []
+                        if ts:
+                            ui.label(f"技术：{', '.join(ts[:8])}").classes("text-xs text-grey-6")
+                        desc = p.get("description", "")
+                        if desc:
+                            ui.label(desc).classes("text-xs text-grey-7 mt-1 whitespace-pre-wrap")
+                    ui.separator()
+
+        # 面试题目摘要
+        if questions:
+            with ui.expansion(f"面试题目（{len(questions)}）", icon="list_alt").classes("w-full"):
+                for i, q in enumerate(questions):
+                    if not isinstance(q, dict):
+                        continue
+                    dim = q.get("dimension", "")
+                    text = q.get("question", "")
+                    ui.label(f"{i+1}. [{dim}] {text}").classes("text-xs text-grey-8 py-1")
 
 
 def _fmt_tool(tool_name: str, result: dict, state: dict) -> str:

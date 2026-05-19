@@ -74,6 +74,20 @@ class CandidateRepository:
             )
             await conn.commit()
 
+    async def delete(self, id: str) -> None:
+        async with self._db.connection() as conn:
+            await conn.execute("DELETE FROM Candidate WHERE id = ?", (id,))
+            await conn.commit()
+
+    async def get_by_name_exact(self, name: str) -> dict | None:
+        async with self._db.connection() as conn:
+            async with conn.execute(
+                "SELECT * FROM Candidate WHERE name = ? ORDER BY created_at DESC LIMIT 1",
+                (name,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return dict(row) if row is not None else None
+
 
 class InterviewRepository:
     def __init__(self, db: Database) -> None:
@@ -141,6 +155,37 @@ class InterviewRepository:
             ) as cursor:
                 rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def delete_by_candidate(self, candidate_id: str) -> list[str]:
+        """级联删除候选人所有面试记录及子记录（ConversationRound / EvalReport / TokenUsage），
+        返回被删除的 interview_id 列表。"""
+        async with self._db.connection() as conn:
+            async with conn.execute(
+                "SELECT id FROM Interview WHERE candidate_id = ?", (candidate_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+            interview_ids = [row[0] for row in rows]
+            if interview_ids:
+                placeholders = ",".join("?" * len(interview_ids))
+                ids_tuple = tuple(interview_ids)
+                # 先删除子表记录，再删除 Interview（遵从 FK 约束顺序）
+                await conn.execute(
+                    f"DELETE FROM ConversationRound WHERE interview_id IN ({placeholders})",
+                    ids_tuple,
+                )
+                await conn.execute(
+                    f"DELETE FROM EvalReport WHERE interview_id IN ({placeholders})",
+                    ids_tuple,
+                )
+                await conn.execute(
+                    f"DELETE FROM TokenUsage WHERE interview_id IN ({placeholders})",
+                    ids_tuple,
+                )
+                await conn.execute(
+                    "DELETE FROM Interview WHERE candidate_id = ?", (candidate_id,)
+                )
+            await conn.commit()
+        return interview_ids
 
     async def update_on_finish(
         self,
@@ -278,6 +323,17 @@ class EvalReportRepository:
             ) as cursor:
                 row = await cursor.fetchone()
         return dict(row) if row is not None else None
+
+    async def delete_by_interview_ids(self, interview_ids: list[str]) -> None:
+        if not interview_ids:
+            return
+        placeholders = ",".join("?" * len(interview_ids))
+        async with self._db.connection() as conn:
+            await conn.execute(
+                f"DELETE FROM EvalReport WHERE interview_id IN ({placeholders})",
+                interview_ids,
+            )
+            await conn.commit()
 
 
 class TokenUsageRepository:

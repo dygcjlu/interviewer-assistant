@@ -49,20 +49,45 @@ async def upload_resume(
     request: Request,
     file: UploadFile = File(...),
     candidate_id: str | None = None,
+    overwrite: bool = False,
 ):
     bind_op("upload_resume")
     start = time.perf_counter()
     filename = file.filename or "resume.pdf"
     orch = _orchestrator(request)
+    memory = _memory(request)
+
+    # 去重检查：从文件名提取候选人姓名，若不传 candidate_id 且不覆盖，则查重
+    if not candidate_id and not overwrite:
+        candidate_name_from_file = Path(filename).stem.strip()
+        if candidate_name_from_file:
+            existing = await memory.get_candidate_by_name(candidate_name_from_file)
+            if existing is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "duplicate_candidate",
+                        "message": f"候选人「{candidate_name_from_file}」已存在，请确认是否覆盖",
+                        "existing_candidate_id": existing.id,
+                        "existing_candidate_name": existing.name,
+                    },
+                )
+
     session = await orch.get_session()
     if session is None:
+        session = await orch.create_session(candidate_id)
+    elif not candidate_id:
+        # 全新上传（无指定候选人）→ 创建新会话，避免复用旧 session 导致上下文污染
+        session = await orch.create_session(None)
+    elif session.candidate.id != candidate_id:
         session = await orch.create_session(candidate_id)
     bind_session_id(session.id)
 
     logger.info(
-        "upload_resume start filename=%r candidate_id=%s",
+        "upload_resume start filename=%r candidate_id=%s overwrite=%s",
         filename,
         candidate_id or session.candidate.id,
+        overwrite,
     )
 
     try:
@@ -86,6 +111,7 @@ async def upload_resume(
     timestamp = int(time.time())
     pdf_path = resumes_dir / f"{session.id}_{timestamp}.pdf"
     pdf_path.write_bytes(file_bytes)
+    session.candidate.resume_pdf_path = str(pdf_path.resolve())
     logger.info("upload_resume saved_pdf path=%s", pdf_path)
 
     # Pre-extract raw text so resume_text is available before/after agent parsing
@@ -119,7 +145,6 @@ async def upload_resume(
         session.candidate.resume_markdown_path = str(md_path.resolve())
         logger.info("upload_resume saved_markdown path=%s", md_path)
 
-    memory = _memory(request)
     try:
         await memory.save_candidate(session.candidate)
     except Exception:
@@ -149,6 +174,14 @@ async def upload_resume(
         )
     elif not q_resp.success:
         logger.warning("upload_resume generate_questions_failed error=%s", q_resp.error)
+
+    # 持久化面试记录（含题目清单），确保服务器重启后题目不丢失
+    if session.question_plan:
+        try:
+            await memory.save_interview(session)
+            logger.info("upload_resume saved_interview session_id=%s", session.id)
+        except Exception:
+            logger.exception("upload_resume save_interview failed")
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info(
@@ -255,6 +288,15 @@ async def stop_interview(request: Request):
     try:
         await orch.switch_agent("eval")
     except SessionError as exc:
+        # If there are no rounds yet, skip eval and close cleanly
+        if session.rounds is not None and len(session.rounds) == 0:
+            logger.info("stop_interview: 0 rounds, closing session without eval")
+            sid = session.id
+            try:
+                await orch.close_session()
+            except Exception:
+                logger.exception("stop_interview: close_session failed")
+            return {"session_id": sid, "stage": "completed", "total_rounds": 0}
         raise _session_err(exc)
 
     bind_session_id(session.id)
@@ -363,6 +405,28 @@ async def get_candidate_history(request: Request, candidate_id: str):
         "candidate": _to_dict(candidate),
         "interviews": _to_dict(history.past_interviews) if history else [],
     }
+
+
+@router.delete("/candidates/{candidate_id}")
+async def delete_candidate(request: Request, candidate_id: str):
+    bind_op("delete_candidate")
+    memory = _memory(request)
+    candidate = await memory.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
+
+    # 若当前活跃会话正在使用该候选人，拒绝删除
+    orch = _orchestrator(request)
+    session = await orch.get_session()
+    if session is not None and session.candidate.id == candidate_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "candidate_in_use", "message": "候选人当前正在面试中，无法删除"},
+        )
+
+    await memory.delete_candidate(candidate_id)
+    logger.info("delete_candidate done candidate_id=%s", candidate_id)
+    return {"deleted": True, "candidate_id": candidate_id}
 
 
 # ── recordings ────────────────────────────────────────────────────────────────

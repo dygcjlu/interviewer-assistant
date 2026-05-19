@@ -44,3 +44,6 @@ class CandidateProfile:
     history_summary: str | None = None
     age: int | None = None
     resume_markdown_path: str | None = None
+    resume_pdf_path: str | None = None
+    years_of_experience: int | None = None
+    current_position: str | None = None

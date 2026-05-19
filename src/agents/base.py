@@ -92,7 +92,7 @@ class BaseAgent(ABC):
                 tools=tool_schemas if tool_schemas else None,
             )
             if not response.tool_calls:
-                return response.content
+                return response.content or ""
 
             messages.append(
                 Message(

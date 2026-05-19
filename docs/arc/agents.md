@@ -63,7 +63,7 @@ stateDiagram-v2
 
 解析候选人 PDF 简历，提取结构化信息（`CandidateProfile`），并基于该信息生成面试题目清单（写入 `session.question_plan`）。
 
-**工具**：`parse_resume`（读取 PDF）、`skills_list`（列出面试技巧）、`skill_view`（查看技巧详情）
+**工具**：`parse_resume`（读取 PDF）、`read_resume_markdown`（读取简历 Markdown 完整内容）、`skills_list`（列出面试技巧）、`skill_view`（查看技巧详情）
 
 ### 核心方法
 
@@ -95,6 +95,8 @@ stateDiagram-v2
 ### 职责
 
 面试过程中，实时监听转写内容，流式生成追问建议并通过 WebSocket 推送给前端。核心机制为 `SuggestionTrigger`：候选人 final segment 后静默约 2 秒自动触发，或由前端 `request_suggestion` 手动触发。
+
+**工具**：`read_resume_markdown`（可按需读取候选人完整简历）
 
 ### SuggestionTrigger
 
@@ -163,7 +165,40 @@ suggestion_final {"type": "suggestion_final", "request_id": N}
 
 ---
 
-## 5. InterviewSession（Agent 间共享数据）
+## 5. UI Agent（前端对话 Agent）
+
+**文件**：`src/web/ui.py`（`_agent_loop` 函数）
+
+### 职责
+
+处理用户在聊天框输入的自然语言指令。这是一个独立于后端 Orchestrator 的 mini-agent，直接运行在 NiceGUI 同进程中，通过调用 HTTP API 工具来驱动后端操作。
+
+> **注意**：用户的普通聊天消息（如"介绍一下这个候选人"）走的是这里，不是后端的 ResumeAgent/InterviewAgent。
+
+### 工具
+
+| 工具 | 触发后端接口 |
+|---|---|
+| `start_interview` | `POST /api/interview/start` |
+| `stop_interview` | `POST /api/interview/stop` |
+| `get_eval_report` | `GET /api/interview/eval` |
+| `request_suggestion` | `POST /api/interview/suggest` |
+| `regenerate_questions` | 重新上传并调用 ResumeAgent |
+
+### 候选人上下文注入
+
+每次构建 `messages` 时，若 `state["current_profile"]` 非空，则将候选人的姓名、ID、职位、工作年限、教育背景、技能、简历摘要动态追加到系统提示末尾。`current_profile` 在以下两处写入 state：
+
+- 上传简历成功后（`_handle_upload`）
+- 点击左侧候选人列表选中后（`_on_candidate_select_inner`）
+
+### 对话历史
+
+使用 `state["agent_history"]`（`list[Message]`）维护多轮上下文，上限 24 条，超出时截断保留最新 24 条。每次 LLM 调用前将历史拼接在 system message 之后。
+
+---
+
+## 6. InterviewSession（Agent 间共享数据）
 
 **文件**：`src/models/session.py`
 

@@ -118,6 +118,10 @@ class PromptBuilder:
 def _build_fixed_zone(session: InterviewSession) -> str:
     c = session.candidate
     lines = [f"候选人：{c.name}"]
+    if c.current_position:
+        lines.append(f"当前职位：{c.current_position}")
+    if c.years_of_experience is not None:
+        lines.append(f"工作年限：{c.years_of_experience} 年")
     if c.age is not None:
         lines.append(f"年龄：{c.age}")
     if c.education:
@@ -125,6 +129,8 @@ def _build_fixed_zone(session: InterviewSession) -> str:
         lines.append(f"教育背景：{'; '.join(edu_parts)}")
     if c.skills:
         lines.append(f"技能：{', '.join(c.skills)}")
+    if c.resume_markdown_path:
+        lines.append(f"简历文件路径：{c.resume_markdown_path}（可调用 read_resume_markdown 工具查看完整内容）")
     if c.resume_summary:
         lines.append(f"\n简历摘要：\n{c.resume_summary}")
     if session.question_plan:

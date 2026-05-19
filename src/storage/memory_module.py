@@ -120,6 +120,9 @@ def _profile_to_json(profile: CandidateProfile) -> dict[str, Any]:
             for p in profile.projects
         ],
         "resume_summary": profile.resume_summary,
+        "resume_pdf_path": profile.resume_pdf_path,
+        "years_of_experience": profile.years_of_experience,
+        "current_position": profile.current_position,
     }
 
 
@@ -171,6 +174,14 @@ def _profile_from_row(row: dict[str, Any]) -> CandidateProfile:
         except (TypeError, ValueError):
             pass
 
+    yoe_val = payload.get("years_of_experience")
+    years_of_experience: int | None = None
+    if yoe_val is not None:
+        try:
+            years_of_experience = int(yoe_val)
+        except (TypeError, ValueError):
+            pass
+
     return CandidateProfile(
         id=row["id"],
         name=row["name"],
@@ -184,7 +195,10 @@ def _profile_from_row(row: dict[str, Any]) -> CandidateProfile:
         resume_text=row.get("resume_text", "") or "",
         resume_summary=payload.get("resume_summary", "") or "",
         resume_markdown_path=payload.get("resume_markdown_path"),
+        resume_pdf_path=payload.get("resume_pdf_path"),
         history_summary=None,
+        years_of_experience=years_of_experience,
+        current_position=payload.get("current_position"),
     )
 
 
@@ -323,6 +337,41 @@ class MemoryModule:
         if not rows:
             return []
         return _question_plan_from_json(rows[0].get("question_plan_json") or "[]")
+
+    async def get_candidate_by_name(self, name: str) -> CandidateProfile | None:
+        """按精确姓名查找候选人（用于上传去重）。"""
+        row = await self._candidates.get_by_name_exact(name)
+        if row is None:
+            return None
+        return _profile_from_row(row)
+
+    async def delete_candidate(self, candidate_id: str) -> None:
+        """级联删除候选人：DB 记录 + 简历文件（PDF + MD）+ 关联面试和评价数据。"""
+        candidate_row = await self._candidates.get_by_id(candidate_id)
+        if candidate_row is None:
+            return
+
+        # 级联删除关联面试记录（含 ConversationRound / EvalReport / TokenUsage）
+        await self._interviews.delete_by_candidate(candidate_id)
+
+        # 删除候选人数据库记录
+        await self._candidates.delete(candidate_id)
+
+        # 清理本地简历文件（PDF + MD），路径均记录在 profile_json 中
+        try:
+            from pathlib import Path as _Path
+            payload = json.loads(candidate_row.get("profile_json") or "{}")
+            for key in ("resume_markdown_path", "resume_pdf_path"):
+                file_path = payload.get(key)
+                if file_path:
+                    f = _Path(file_path)
+                    if f.exists():
+                        f.unlink()
+                        logger.info("delete_candidate: removed %s %s", key, file_path)
+        except Exception:
+            logger.warning("delete_candidate: failed to remove resume files for %s", candidate_id)
+
+        logger.info("delete_candidate: done candidate_id=%s", candidate_id)
 
     async def search_candidates(
         self, keyword: str = "", limit: int = 20

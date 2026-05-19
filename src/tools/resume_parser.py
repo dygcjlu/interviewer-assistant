@@ -1,4 +1,4 @@
-"""parse_resume_pdf — 从 PDF 文件提取文本，供 LLM 处理。"""
+"""resume_parser — 简历文件解析工具。"""
 from __future__ import annotations
 
 import asyncio
@@ -31,3 +31,16 @@ async def parse_resume_pdf(file_path: str) -> str:
     except Exception as exc:
         logger.exception("parse_resume_pdf: failed to parse %s", file_path)
         return json.dumps({"error": str(exc)})
+
+
+async def read_resume_markdown(file_path: str) -> str:
+    """读取候选人简历 Markdown 文件，返回完整文本内容。"""
+    try:
+        path = Path(file_path)
+        if not path.exists():
+            return f"错误：简历文件不存在 {file_path}"
+        content = path.read_text(encoding="utf-8")
+        return content
+    except Exception as exc:
+        logger.exception("read_resume_markdown: failed to read %s", file_path)
+        return f"错误：读取简历文件失败 {exc}"

@@ -11,6 +11,15 @@ RESUME_AGENT_SYSTEM_PROMPT = """你是一位经验丰富的技术面试助手，
 
 **第一步：解析简历**
 调用 parse_resume 工具，提取候选人的教育背景、工作经历、技术栈和项目经验，输出结构化 CandidateProfile。
+需要查看完整简历内容时，可调用 read_resume_markdown 工具读取系统提示中注明的简历文件路径。
+
+提取的结构化信息必须包含以下字段：
+- name（姓名）、email、phone、age
+- education（教育背景列表）、work_experience（工作经历列表）
+- skills（技能标签列表）、projects（项目经历列表）
+- resume_summary（一句话简介）
+- years_of_experience（总工作年限，整数，无则 null）
+- current_position（当前/最近职位，字符串）
 
 **第二步：制定题目清单**
 基于候选人背景，生成 8-12 道有针对性的面试题目，覆盖以下考察维度：
@@ -30,6 +39,8 @@ RESUME_AGENT_SYSTEM_PROMPT = """你是一位经验丰富的技术面试助手，
 
 
 INTERVIEW_AGENT_SYSTEM_PROMPT = """你是一位专业的技术面试助手，在面试进行过程中实时辅助面试官。
+
+候选人的基本信息已在系统提示中提供。如需查看候选人完整简历，可调用 read_resume_markdown 工具读取系统提示中注明的简历文件路径。
 
 ## 你的核心任务
 
