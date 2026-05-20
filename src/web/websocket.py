@@ -16,7 +16,7 @@ from ..models.exceptions import SessionError
 logger = logging.getLogger(__name__)
 
 
-async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
+async def interview_ws_handler(websocket: WebSocket, controller) -> None:
     await websocket.accept()
     connection_id = uuid.uuid4().hex[:8]
     bind_connection_id(connection_id)
@@ -28,10 +28,10 @@ async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
         except Exception:
             logger.debug("WebSocket send failed connection_id=%s type=%s", connection_id, msg.get("type"))
 
-    orchestrator.attach_ws_sender(ws_sender)
+    controller.attach_ws_sender(ws_sender)
     conn_id = id(ws_sender)
 
-    session = await orchestrator.get_session()
+    session = await controller.get_session()
     if session:
         bind_session_id(session.id)
         await ws_sender({
@@ -52,26 +52,27 @@ async def interview_ws_handler(websocket: WebSocket, orchestrator) -> None:
                 logger.warning("WebSocket invalid_json connection_id=%s", connection_id)
                 await ws_sender({"type": "error", "code": "invalid_json", "message": "无效 JSON", "recoverable": True})
                 continue
-            await _dispatch(msg, orchestrator, ws_sender, connection_id)
+            await _dispatch(msg, controller, ws_sender, connection_id)
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected connection_id=%s", connection_id)
     except Exception:
         logger.exception("WebSocket error connection_id=%s", connection_id)
     finally:
-        orchestrator.detach_ws_sender(conn_id)
+        controller.detach_ws_sender(conn_id)
 
 
-async def _dispatch(msg: dict, orchestrator, ws_sender, connection_id: str) -> None:
+async def _dispatch(msg: dict, controller, ws_sender, connection_id: str) -> None:
     msg_type = msg.get("type")
     bind_op(msg_type or "unknown")
     logger.debug("WebSocket inbound connection_id=%s type=%s", connection_id, msg_type)
 
     if msg_type == "request_suggestion":
-        session = await orchestrator.get_session()
+        session = await controller.get_session()
         if session is None:
             await ws_sender({"type": "error", "code": "no_session", "message": "无活跃会话", "recoverable": False})
             return
-        resp = await orchestrator.handle_request(
+        interview_agent = controller.interview_agent
+        resp = await interview_agent.handle_request(
             AgentRequest(type="trigger_suggestion", payload={}, session=session)
         )
         if not resp.success:
@@ -80,7 +81,7 @@ async def _dispatch(msg: dict, orchestrator, ws_sender, connection_id: str) -> N
     elif msg_type == "manual_input":
         source = msg.get("source", "interviewer")
         text = msg.get("text", "")
-        session = await orchestrator.get_session()
+        session = await controller.get_session()
         if session is None or not text:
             logger.debug("WebSocket manual_input skipped no_session_or_empty")
             return
@@ -91,7 +92,7 @@ async def _dispatch(msg: dict, orchestrator, ws_sender, connection_id: str) -> N
             text_summary(text),
         )
         from ..audio.protocol import TranscriptSegment
-        tm = orchestrator.transcription_manager
+        tm = controller.transcription_manager
         if tm is not None:
             segment = TranscriptSegment(source=source, text=text, is_final=True, timestamp=datetime.now())
             await tm.on_segment(segment)
@@ -108,10 +109,10 @@ async def _dispatch(msg: dict, orchestrator, ws_sender, connection_id: str) -> N
 
     elif msg_type == "set_trigger_mode":
         mode = msg.get("mode", "auto")
-        session = await orchestrator.get_session()
+        session = await controller.get_session()
         if session is None:
             return
-        resp = await orchestrator.handle_request(
+        resp = await controller.interview_agent.handle_request(
             AgentRequest(type="set_trigger_mode", payload={"mode": mode}, session=session)
         )
         if resp.success:
@@ -119,15 +120,20 @@ async def _dispatch(msg: dict, orchestrator, ws_sender, connection_id: str) -> N
             await ws_sender({"type": "status", "stage": session.stage.value, "message": f"触发模式已切换为 {mode}"})
 
     elif msg_type == "switch_agent":
+        # Legacy WS message — map to controller operations
         target = msg.get("target_agent", "")
         try:
-            await orchestrator.switch_agent(target, ws_sender)
-        except SessionError as exc:
-            await ws_sender({"type": "error", "code": "session_error", "message": str(exc), "recoverable": False})
-        else:
-            session = await orchestrator.get_session()
+            if target == "interview":
+                await controller.start_interview()
+            elif target == "eval":
+                await controller.stop_interview()
+            else:
+                raise SessionError(f"不支持的目标 Agent: {target!r}")
+            session = await controller.get_session()
             if session:
                 await ws_sender({"type": "status", "stage": session.stage.value, "message": f"已切换到 {target} Agent"})
+        except SessionError as exc:
+            await ws_sender({"type": "error", "code": "session_error", "message": str(exc), "recoverable": False})
 
     elif msg_type == "heartbeat":
         await ws_sender({"type": "heartbeat"})

@@ -37,9 +37,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             raise
 
         elapsed_ms = (time.perf_counter() - start) * 1000
-        orch = getattr(request.app.state, "orchestrator", None)
-        if orch is not None:
-            session = await orch.get_session()
+        controller = getattr(request.app.state, "controller", None)
+        if controller is not None:
+            session = await controller.get_session()
             if session is not None:
                 bind_session_id(session.id)
 

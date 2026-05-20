@@ -301,5 +301,5 @@ class InterviewAgent(BaseAgent):
         self._current_stream_task = asyncio.create_task(_runner())
 
     def attach_ws_sender(self, ws_sender) -> None:
-        """由 Orchestrator 注入 WebSocket 推送回调（在 on_activate 之后）。"""
+        """由 InterviewController 注入 WebSocket 推送回调（在 on_activate 之后）。"""
         self._ws_sender = ws_sender

@@ -1,8 +1,9 @@
-"""agents 包入口 — 暴露三个 Agent、Orchestrator 与共享类型。"""
+"""agents 包入口 — 暴露 MainAgent、InterviewController、三个 Agent 与共享类型。"""
 from .base import AgentRequest, AgentResponse, BaseAgent
 from .eval_agent import EvalAgent
 from .interview_agent import InterviewAgent
-from .orchestrator import Orchestrator
+from .interview_controller import InterviewController
+from .main_agent import MainAgent
 from .prompts import (
     EVAL_AGENT_SYSTEM_PROMPT,
     INTERVIEW_AGENT_SYSTEM_PROMPT,
@@ -18,7 +19,8 @@ __all__ = [
     "EVAL_AGENT_SYSTEM_PROMPT",
     "INTERVIEW_AGENT_SYSTEM_PROMPT",
     "InterviewAgent",
-    "Orchestrator",
+    "InterviewController",
+    "MainAgent",
     "RESUME_AGENT_SYSTEM_PROMPT",
     "ResumeAgent",
 ]

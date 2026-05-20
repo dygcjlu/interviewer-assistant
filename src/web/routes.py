@@ -1,4 +1,4 @@
-"""REST API 路由 — 所有业务逻辑委托给 Orchestrator / MemoryModule。"""
+"""REST API 路由 — 业务逻辑委托给 MainAgent / InterviewController / MemoryModule。"""
 from __future__ import annotations
 
 import dataclasses
@@ -6,26 +6,37 @@ import json
 import logging
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from src.logging import bind_op, bind_session_id
 
 from ..agents.base import AgentRequest, AgentResponse
 from ..tools.resume_parser import parse_resume_pdf
 from ..models.exceptions import SessionError
-from .schemas import QuestionsUpdateRequest, StartInterviewRequest, SwitchAgentRequest
+from .schemas import (
+    ChatRequest,
+    CandidateSelectRequest,
+    QuestionsUpdateRequest,
+    StartInterviewRequest,
+    SwitchAgentRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
 
-def _orchestrator(request: Request):
-    return request.app.state.orchestrator
+def _controller(request: Request):
+    return request.app.state.controller
+
+
+def _main_agent(request: Request):
+    return request.app.state.main_agent
 
 
 def _memory(request: Request):
@@ -39,7 +50,76 @@ def _to_dict(obj: Any) -> Any:
 
 
 def _session_err(exc: SessionError) -> HTTPException:
+    logger.warning("session_error: %s", exc)
     return HTTPException(status_code=409, detail={"code": "session_error", "message": str(exc)})
+
+
+# ── chat (MainAgent) ──────────────────────────────────────────────────────────
+
+@router.post("/chat")
+async def chat(request: Request, body: ChatRequest):
+    """接收用户消息，流式转发到 MainAgent。"""
+    bind_op("chat")
+    main_agent = _main_agent(request)
+    if main_agent is None:
+        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "MainAgent 未初始化"})
+
+    async def _stream():
+        async for chunk in main_agent.handle_chat(body.message):
+            yield f"data: {json.dumps({'delta': chunk}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+# ── candidate select ──────────────────────────────────────────────────────────
+
+@router.post("/candidate/select")
+async def select_candidate(request: Request, body: CandidateSelectRequest):
+    """选中候选人，更新 MainAgent 上下文。"""
+    bind_op("candidate_select")
+    memory = _memory(request)
+    main_agent = _main_agent(request)
+    controller = _controller(request)
+
+    candidate = await memory.get_candidate(body.candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
+
+    # Ensure session exists with this candidate
+    if controller is not None:
+        session = await controller.get_session()
+        if session is None or session.candidate.id != body.candidate_id:
+            session = await controller.create_session(body.candidate_id)
+
+    # Load question plan
+    questions: list[dict] = []
+    if controller is not None:
+        session = await controller.get_session()
+        if session and session.question_plan:
+            questions = [
+                {
+                    "id": q.id,
+                    "dimension": q.dimension,
+                    "question": q.question,
+                    "follow_ups": list(q.follow_ups),
+                    "difficulty": q.difficulty,
+                }
+                for q in session.question_plan
+            ]
+    if not questions:
+        questions = await memory.get_latest_question_plan(body.candidate_id)
+
+    # Update MainAgent context
+    if main_agent is not None:
+        main_agent.set_candidate_context(candidate, questions)
+
+    logger.info("candidate_select done candidate_id=%s name=%s", body.candidate_id, candidate.name)
+    return {
+        "candidate_id": body.candidate_id,
+        "profile": _to_dict(candidate),
+        "questions": questions,
+    }
 
 
 # ── resume ────────────────────────────────────────────────────────────────────
@@ -51,13 +131,14 @@ async def upload_resume(
     candidate_id: str | None = None,
     overwrite: bool = False,
 ):
+    """上传 PDF 简历：保存文件，返回 file_path。解析由 MainAgent 对话触发。"""
     bind_op("upload_resume")
     start = time.perf_counter()
     filename = file.filename or "resume.pdf"
-    orch = _orchestrator(request)
+    controller = _controller(request)
     memory = _memory(request)
 
-    # 去重检查：从文件名提取候选人姓名，若不传 candidate_id 且不覆盖，则查重
+    # 去重检查
     if not candidate_id and not overwrite:
         candidate_name_from_file = Path(filename).stem.strip()
         if candidate_name_from_file:
@@ -73,127 +154,67 @@ async def upload_resume(
                     },
                 )
 
-    session = await orch.get_session()
-    if session is None:
-        session = await orch.create_session(candidate_id)
-    elif not candidate_id:
-        # 全新上传（无指定候选人）→ 创建新会话，避免复用旧 session 导致上下文污染
-        session = await orch.create_session(None)
-    elif session.candidate.id != candidate_id:
-        session = await orch.create_session(candidate_id)
-    bind_session_id(session.id)
+    # Ensure session exists
+    session = await controller.get_session() if controller else None
+    if session is None and controller is not None:
+        session = await controller.create_session(candidate_id)
+    elif session is not None and candidate_id and session.candidate.id != candidate_id:
+        session = await controller.create_session(candidate_id)
+    elif session is not None and not candidate_id:
+        session = await controller.create_session(None)
+
+    if session:
+        bind_session_id(session.id)
 
     logger.info(
         "upload_resume start filename=%r candidate_id=%s overwrite=%s",
         filename,
-        candidate_id or session.candidate.id,
+        candidate_id or (session.candidate.id if session else ""),
         overwrite,
     )
 
-    try:
-        await orch.switch_agent("resume")
-    except SessionError as exc:
-        raise _session_err(exc)
-
     suffix = os.path.splitext(filename)[1].lower() or ".pdf"
-    allowed_suffixes = {".pdf"}
-    if suffix not in allowed_suffixes:
-        logger.error("upload_resume invalid_file_type suffix=%r", suffix)
+    if suffix not in {".pdf"}:
         raise HTTPException(
             status_code=400,
             detail={"code": "invalid_file_type", "message": f"仅支持 PDF 格式简历，收到的文件类型为 {suffix!r}"},
         )
     file_bytes = await file.read()
-    logger.info("upload_resume file_read bytes=%d", len(file_bytes))
 
     resumes_dir = Path("resumes")
     resumes_dir.mkdir(exist_ok=True)
     timestamp = int(time.time())
-    pdf_path = resumes_dir / f"{session.id}_{timestamp}.pdf"
+    session_id = session.id if session else str(uuid.uuid4())
+    pdf_path = resumes_dir / f"{session_id}_{timestamp}.pdf"
     pdf_path.write_bytes(file_bytes)
-    session.candidate.resume_pdf_path = str(pdf_path.resolve())
-    logger.info("upload_resume saved_pdf path=%s", pdf_path)
 
-    # Pre-extract raw text so resume_text is available before/after agent parsing
+    if session:
+        session.candidate.resume_pdf_path = str(pdf_path.resolve())
+
+    # Pre-extract raw text
     try:
         raw_extract = json.loads(await parse_resume_pdf(str(pdf_path)))
         if extracted := raw_extract.get("text", ""):
-            session.candidate.resume_text = extracted
-            logger.info("upload_resume pdf_text_extracted chars=%d", len(extracted))
+            if session:
+                session.candidate.resume_text = extracted
     except Exception:
-        logger.warning("upload_resume: pre-extract PDF text failed, continuing without it")
+        logger.warning("upload_resume: pre-extract PDF text failed")
 
-    parse_resp: AgentResponse = await orch.handle_request(
-        AgentRequest(type="parse_resume", payload={"file_path": str(pdf_path)}, session=session)
-    )
-
-    if not parse_resp.success:
-        logger.error("upload_resume parse_failed error=%s", parse_resp.error)
-        raise HTTPException(status_code=500, detail={"code": "parse_error", "message": parse_resp.error})
-
-    logger.info(
-        "upload_resume parse_ok candidate_name=%r",
-        session.candidate.name or "",
-    )
-
-    # Persist resume text as Markdown
-    if session.candidate.resume_text:
-        md_path = resumes_dir / f"{session.id}.md"
+    # Save markdown
+    if session and session.candidate.resume_text:
+        md_path = resumes_dir / f"{session_id}.md"
         cand_name = session.candidate.name or "候选人"
         md_content = f"# 简历 — {cand_name}\n\n{session.candidate.resume_text}"
         md_path.write_text(md_content, encoding="utf-8")
         session.candidate.resume_markdown_path = str(md_path.resolve())
-        logger.info("upload_resume saved_markdown path=%s", md_path)
-
-    try:
-        await memory.save_candidate(session.candidate)
-    except Exception:
-        logger.exception("upload_resume persist_candidate failed")
-
-    q_resp: AgentResponse = await orch.handle_request(
-        AgentRequest(type="generate_questions", payload={}, session=session)
-    )
-
-    if q_resp.success:
-        from ..models.session import InterviewQuestion
-        questions_data = q_resp.data.get("questions", [])
-        session.question_plan = [
-            InterviewQuestion(
-                id=i + 1,
-                dimension=q.get("dimension", "通用"),
-                question=q.get("question", ""),
-                follow_ups=q.get("follow_ups", []),
-                difficulty=q.get("difficulty", "medium"),
-            )
-            for i, q in enumerate(questions_data)
-            if isinstance(q, dict)
-        ]
-        logger.info(
-            "upload_resume generate_questions_ok questions_count=%d",
-            len(session.question_plan),
-        )
-    elif not q_resp.success:
-        logger.warning("upload_resume generate_questions_failed error=%s", q_resp.error)
-
-    # 持久化面试记录（含题目清单），确保服务器重启后题目不丢失
-    if session.question_plan:
-        try:
-            await memory.save_interview(session)
-            logger.info("upload_resume saved_interview session_id=%s", session.id)
-        except Exception:
-            logger.exception("upload_resume save_interview failed")
 
     elapsed_ms = (time.perf_counter() - start) * 1000
-    logger.info(
-        "upload_resume done candidate_id=%s questions_count=%d elapsed_ms=%.1f",
-        session.candidate.id,
-        len(session.question_plan),
-        elapsed_ms,
-    )
+    logger.info("upload_resume saved file_path=%s elapsed_ms=%.1f", pdf_path, elapsed_ms)
+
     return {
-        "candidate_id": session.candidate.id,
-        "profile": _to_dict(session.candidate),
-        "questions": _to_dict(session.question_plan),
+        "file_path": str(pdf_path.resolve()),
+        "session_id": session_id,
+        "candidate_id": session.candidate.id if session else None,
     }
 
 
@@ -203,11 +224,14 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
     candidate = await memory.get_candidate(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
-    session = await _orchestrator(request).get_session()
+    controller = _controller(request)
+    session = None
+    if controller:
+        s = await controller.get_session()
+        if s and s.candidate.id == candidate_id:
+            session = s
     questions: list[Any] = (
-        _to_dict(session.question_plan)
-        if session and session.candidate.id == candidate_id and session.question_plan
-        else []
+        _to_dict(session.question_plan) if session and session.question_plan else []
     )
     if not questions:
         questions = await memory.get_latest_question_plan(candidate_id)
@@ -218,7 +242,8 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
 
 @router.get("/interview/questions")
 async def get_questions(request: Request, candidate_id: str = Query(...)):
-    session = await _orchestrator(request).get_session()
+    controller = _controller(request)
+    session = await controller.get_session()
     if session is None or session.candidate.id != candidate_id:
         raise HTTPException(status_code=404, detail={"code": "no_session", "message": "无对应会话"})
     return {"questions": _to_dict(session.question_plan)}
@@ -226,7 +251,8 @@ async def get_questions(request: Request, candidate_id: str = Query(...)):
 
 @router.put("/interview/questions")
 async def update_questions(request: Request, body: QuestionsUpdateRequest):
-    session = await _orchestrator(request).get_session()
+    controller = _controller(request)
+    session = await controller.get_session()
     if session is None or session.candidate.id != body.candidate_id:
         raise HTTPException(status_code=404, detail={"code": "no_session", "message": "无对应会话"})
     from ..models.session import InterviewQuestion
@@ -248,24 +274,18 @@ async def update_questions(request: Request, body: QuestionsUpdateRequest):
 @router.post("/interview/start")
 async def start_interview(request: Request, body: StartInterviewRequest):
     bind_op("start_interview")
-    orch = _orchestrator(request)
-    session = await orch.get_session()
-    if session is None:
-        session = await orch.create_session(body.candidate_id)
+    controller = _controller(request)
+    if controller is None:
+        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "服务未初始化"})
 
+    session = await controller.get_session()
+    if session is None:
+        session = await controller.create_session(body.candidate_id)
     try:
-        await orch.switch_agent("interview")
+        await controller.start_interview()
     except SessionError as exc:
         raise _session_err(exc)
 
-    if body.trigger_mode != "auto":
-        await orch.handle_request(
-            AgentRequest(
-                type="set_trigger_mode",
-                payload={"mode": body.trigger_mode},
-                session=session,
-            )
-        )
     session.metadata.trigger_mode = body.trigger_mode
     bind_session_id(session.id)
     logger.info(
@@ -280,60 +300,55 @@ async def start_interview(request: Request, body: StartInterviewRequest):
 @router.post("/interview/stop")
 async def stop_interview(request: Request):
     bind_op("stop_interview")
-    orch = _orchestrator(request)
-    session = await orch.get_session()
+    controller = _controller(request)
+    if controller is None:
+        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "服务未初始化"})
+
+    session = await controller.get_session()
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
-
     try:
-        await orch.switch_agent("eval")
+        await controller.stop_interview()
     except SessionError as exc:
-        # If there are no rounds yet, skip eval and close cleanly
-        if session.rounds is not None and len(session.rounds) == 0:
-            logger.info("stop_interview: 0 rounds, closing session without eval")
-            sid = session.id
-            try:
-                await orch.close_session()
-            except Exception:
-                logger.exception("stop_interview: close_session failed")
-            return {"session_id": sid, "stage": "completed", "total_rounds": 0}
         raise _session_err(exc)
-
     bind_session_id(session.id)
-    logger.info(
-        "stop_interview done session_id=%s total_rounds=%d stage=%s",
-        session.id,
-        len(session.rounds),
-        session.stage.value,
-    )
+    total_rounds = len(session.rounds)
+    logger.info("stop_interview done session_id=%s total_rounds=%d", session.id, total_rounds)
     return {
         "session_id": session.id,
         "stage": session.stage.value,
-        "total_rounds": len(session.rounds),
+        "total_rounds": total_rounds,
     }
 
 
-# ── session switch ────────────────────────────────────────────────────────────
+# ── session switch (legacy — maps to controller operations) ───────────────────
 
 @router.post("/session/switch")
 async def switch_agent(request: Request, body: SwitchAgentRequest):
-    orch = _orchestrator(request)
+    controller = _controller(request)
+    if controller is None:
+        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "服务未初始化"})
     try:
-        await orch.switch_agent(body.target_agent)
+        if body.target_agent == "interview":
+            await controller.start_interview()
+        elif body.target_agent == "eval":
+            await controller.stop_interview()
+        else:
+            raise SessionError(f"不支持的目标 Agent: {body.target_agent!r}")
     except SessionError as exc:
         raise _session_err(exc)
-    return {"stage": orch.stage.value, "active_agent": orch.active_agent_name}
+    return {"stage": controller.stage.value, "active_agent": "main"}
 
 
 # ── suggestion ────────────────────────────────────────────────────────────────
 
 @router.post("/interview/suggest")
 async def trigger_suggest(request: Request):
-    orch = _orchestrator(request)
-    session = await orch.get_session()
+    controller = _controller(request)
+    session = await controller.get_session() if controller else None
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
-    resp = await orch.handle_request(
+    resp = await controller.interview_agent.handle_request(
         AgentRequest(type="trigger_suggestion", payload={}, session=session)
     )
     if not resp.success:
@@ -345,7 +360,7 @@ async def trigger_suggest(request: Request):
 
 @router.get("/interview/eval")
 async def get_eval(request: Request, interview_id: str | None = None):
-    orch = _orchestrator(request)
+    controller = _controller(request)
     memory = _memory(request)
 
     if interview_id:
@@ -354,7 +369,7 @@ async def get_eval(request: Request, interview_id: str | None = None):
             raise HTTPException(status_code=404, detail={"code": "not_found", "message": "评价报告不存在"})
         return {"report": _to_dict(report)}
 
-    session = await orch.get_session()
+    session = await controller.get_session() if controller else None
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
 
@@ -364,13 +379,13 @@ async def get_eval(request: Request, interview_id: str | None = None):
     except Exception:
         logger.exception("get_eval: pre-save interview failed")
 
-    resp = await orch.handle_request(
+    resp = await controller.eval_agent.handle_request(
         AgentRequest(type="generate_eval", payload={}, session=session)
     )
     if not resp.success:
         raise HTTPException(status_code=500, detail={"code": "eval_error", "message": resp.error})
     try:
-        await orch.close_session()
+        await controller.close_session()
     except Exception:
         logger.exception("get_eval: close_session failed")
     return {"report": _to_dict(resp.data["report"])}
@@ -416,8 +431,8 @@ async def delete_candidate(request: Request, candidate_id: str):
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
 
     # 若当前活跃会话正在使用该候选人，拒绝删除
-    orch = _orchestrator(request)
-    session = await orch.get_session()
+    controller = _controller(request)
+    session = await controller.get_session() if controller else None
     if session is not None and session.candidate.id == candidate_id:
         raise HTTPException(
             status_code=409,
@@ -456,8 +471,8 @@ async def get_round_recording(
 
 @router.get("/session/current")
 async def get_current_session(request: Request):
-    orch = _orchestrator(request)
-    session = await orch.get_session()
+    controller = _controller(request)
+    session = await controller.get_session() if controller else None
     if session is None:
         return {"session": None}
     cm = getattr(request.app.state, "context_manager", None)
@@ -466,7 +481,8 @@ async def get_current_session(request: Request):
         "session": {
             "id": session.id,
             "stage": session.stage.value,
-            "active_agent": orch.active_agent_name,
+            "active_agent": "main",
+            "candidate_id": session.candidate.id,
             "candidate_name": session.candidate.name,
             "trigger_mode": session.metadata.trigger_mode,
             "rounds_count": len(session.rounds),

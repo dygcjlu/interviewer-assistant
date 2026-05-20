@@ -1,7 +1,7 @@
-"""NiceGUI 单页面 Agent 对话界面。
+"""NiceGUI 单页面界面 — 纯 UI 层，无 Agent 逻辑。
 
-通过 set_dependencies() 在 startup 时注入运行时依赖，
-使用 @ui.page("/") 在导入时注册页面路由。
+聊天框通过 POST /api/chat 与 MainAgent 通信（SSE 流式），
+候选人切换通过 POST /api/candidate/select 更新上下文。
 """
 from __future__ import annotations
 
@@ -15,25 +15,12 @@ import httpx
 from nicegui import ui
 from websockets.asyncio.client import connect as ws_connect
 
-from ..models.message import Message
-from ..tools import interview_control_tools as _ict
-
 logger = logging.getLogger(__name__)
 
 # ── Module-level dependencies (injected by main.py at startup) ────────────────
 
-_llm_client: Any = None
-_tool_registry: Any = None
 _base_url: str = "http://127.0.0.1:8000"
 _ws_url: str = "ws://127.0.0.1:8000/ws/interview"
-
-_UI_AGENT_SYSTEM = (
-    "你是面试助手 Agent。根据用户自然语言指令调用合适的工具："
-    "开始面试→start_interview；结束面试→stop_interview；"
-    "获取/查看报告→get_eval_report；追问/建议→request_suggestion；"
-    "重新提炼题目→regenerate_questions。"
-    "无法匹配工具时直接以文本回复，不要强行调用工具。"
-)
 
 _STAGE_COLORS = {
     "idle": "grey",
@@ -52,23 +39,18 @@ _STAGE_LABELS = {
 }
 
 
-def set_dependencies(orchestrator: Any, memory_module: Any, llm_client: Any,
+def set_dependencies(memory_module: Any, llm_client: Any,
                      tool_registry: Any, settings: Any) -> None:
-    global _llm_client, _tool_registry, _base_url, _ws_url
-    _llm_client = llm_client
-    _tool_registry = tool_registry
+    global _base_url, _ws_url
     _base_url = f"http://{settings.HOST}:{settings.PORT}"
     _ws_url = f"ws://{settings.HOST}:{settings.PORT}/ws/interview"
-
-    _ict._set_base_url(_base_url)
-    _ict.register_tools(tool_registry)
 
 
 # ── Page registration ─────────────────────────────────────────────────────────
 
 @ui.page("/")
 async def index() -> None:
-    """Main Agent dialog page — one instance per browser connection."""
+    """Main dialog page — one instance per browser connection."""
 
     ui.add_head_html("""
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -78,7 +60,6 @@ async def index() -> None:
     background: #F0F2F5 !important;
   }
   .q-page-container { background: #F0F2F5 !important; }
-  /* 保留图标字体，不让 body 继承覆盖 */
   .q-icon, .material-icons, .material-icons-outlined,
   .material-icons-round, .material-icons-sharp {
     font-family: 'Material Icons', 'Material Icons Outlined', 'Material Icons Round', 'Material Icons Sharp' !important;
@@ -93,12 +74,11 @@ async def index() -> None:
         "stage": "idle",
         "round_count": 0,
         "trigger_mode": "auto",
-        "suggestion_label": None,   # ui.label inside streaming card
+        "suggestion_label": None,
         "suggestion_text": "",
-        "suggestion_card": None,    # ui.card for streaming bubble
-        "agent_history": [],        # LLM conversation history
-        "candidates": [],           # 缓存候选人列表
-        "candidate_list_col": None, # 左侧候选人列表容器
+        "suggestion_card": None,
+        "candidates": [],
+        "candidate_list_col": None,
     }
     recv_queue: Queue[dict] = Queue()
     send_queue: Queue[str] = Queue()
@@ -140,7 +120,6 @@ async def index() -> None:
                     async def _do_upload_left(e: Any) -> None:
                         await _handle_upload(e, chat_col, chat_scroll, q_col, state)
                         await _load_candidates()
-                        # 上传成功后自动渲染简历 Tab
                         if state.get("candidate_id"):
                             try:
                                 async with httpx.AsyncClient(timeout=10) as _c:
@@ -184,7 +163,6 @@ async def index() -> None:
                 with ui.tab_panels(tabs, value=tab_tx).classes(
                     "flex-1 w-full overflow-hidden"
                 ) as panels:
-                    # Transcript tab
                     with ui.tab_panel(tab_tx).classes("h-full flex flex-col gap-2 p-2"):
                         tx_scroll = ui.scroll_area().classes("flex-1 w-full")
                         with tx_scroll:
@@ -201,19 +179,16 @@ async def index() -> None:
                             ).tooltip("手动触发 AI 追问建议")
                             trigger_btn.disable()
 
-                    # Questions tab
                     with ui.tab_panel(tab_q).classes("h-full p-2"):
                         q_scroll = ui.scroll_area().classes("w-full h-full")
                         with q_scroll:
                             q_col = ui.column().classes("w-full gap-1 p-1")
 
-                    # Report tab
                     with ui.tab_panel(tab_r).classes("h-full p-2"):
                         r_scroll = ui.scroll_area().classes("w-full h-full")
                         with r_scroll:
                             r_col = ui.column().classes("w-full gap-2 p-1")
 
-                    # Profile tab — candidate detail
                     with ui.tab_panel(tab_profile).classes("h-full p-2"):
                         profile_scroll = ui.scroll_area().classes("w-full h-full")
                         with profile_scroll:
@@ -228,10 +203,9 @@ async def index() -> None:
             ).classes("flex-1")
             send_btn = ui.button(icon="send").props("flat dense color=primary")
 
-    # ── 候选人列表面板 ────────────────────────────────────────────────────────────
+    # ── 候选人列表 ─────────────────────────────────────────────────────────────
 
     async def _load_candidates() -> None:
-        """拉取历史候选人列表，刷新左侧面板。"""
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(f"{_base_url}/api/candidates", params={"limit": 50})
@@ -250,7 +224,40 @@ async def index() -> None:
 
     asyncio.create_task(_load_candidates())
 
-    # ── Interaction handlers ───────────────────────────────────────────────────
+    async def _restore_session_state() -> None:
+        """页面加载时从服务端恢复会话状态，避免刷新后 UI 与后端不一致。"""
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(f"{_base_url}/api/session/current")
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:
+            logger.debug("restore_session_state failed: %s", exc)
+            return
+        session = data.get("session")
+        if not session:
+            return
+        stage = session.get("stage", "idle")
+        state["stage"] = stage
+        cid = session.get("candidate_id")
+        if cid:
+            state["candidate_id"] = cid
+        cname = session.get("candidate_name") or ""
+        if cname and cname != "—":
+            state["candidate_name"] = cname
+        state["round_count"] = session.get("rounds_count", 0)
+        trigger_mode = session.get("trigger_mode")
+        if trigger_mode:
+            state["trigger_mode"] = trigger_mode
+        _refresh_bar(stage_badge, candidate_label, round_label, state)
+        _refresh_trigger_controls()
+        logger.debug(
+            "restore_session_state done stage=%s candidate_id=%s", stage, cid
+        )
+
+    asyncio.create_task(_restore_session_state())
+
+    # ── Chat via /api/chat (SSE) ──────────────────────────────────────────────
 
     async def _do_send() -> None:
         text = user_in.value.strip()
@@ -258,7 +265,7 @@ async def index() -> None:
             return
         user_in.value = ""
 
-        # @candidate: / @interviewer: → send as manual_input WS message
+        # @candidate: / @interviewer: → WS manual_input
         lo = text.lower()
         for prefix, source in (("@candidate:", "candidate"), ("@interviewer:", "interviewer")):
             if lo.startswith(prefix):
@@ -273,7 +280,9 @@ async def index() -> None:
 
         _bubble(chat_col, text, sent=True, name="你")
         await _scroll(chat_scroll)
-        await _agent_loop(text, chat_col, chat_scroll, panels, tab_r, r_col, q_col, state)
+
+        # Call /api/chat with SSE streaming
+        await _chat_stream(text, chat_col, chat_scroll)
 
     send_btn.on("click", lambda: asyncio.create_task(_do_send()))
     user_in.on(
@@ -283,6 +292,8 @@ async def index() -> None:
         else None,
     )
 
+    # ── Button handlers ───────────────────────────────────────────────────────
+
     async def _on_start() -> None:
         cid = state.get("candidate_id")
         if not cid:
@@ -291,7 +302,13 @@ async def index() -> None:
             return
         start_btn.disable()
         try:
-            result = await _ict.start_interview(cid)
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    f"{_base_url}/api/interview/start",
+                    json={"candidate_id": cid, "trigger_mode": state.get("trigger_mode", "auto")},
+                )
+                r.raise_for_status()
+                result = r.json()
             stage = result.get("stage", "interviewing")
             state["stage"] = stage
             _refresh_bar(stage_badge, candidate_label, round_label, state)
@@ -306,7 +323,10 @@ async def index() -> None:
     async def _on_stop() -> None:
         stop_btn.disable()
         try:
-            result = await _ict.stop_interview()
+            async with httpx.AsyncClient(timeout=60) as client:
+                r = await client.post(f"{_base_url}/api/interview/stop")
+                r.raise_for_status()
+                result = r.json()
             total = result.get("total_rounds", 0)
             state["stage"] = "completed"
             _refresh_bar(stage_badge, candidate_label, round_label, state)
@@ -373,9 +393,7 @@ async def index() -> None:
                     ws_icon.classes(remove="text-grey-5").classes("text-green-5")
                     ws_icon.props("name=wifi")
                     state["ws_connected"] = True
-                    logger.info("WS connected %s", _ws_url)
 
-                    # Sender coroutine
                     async def _sender() -> None:
                         while True:
                             payload = await send_queue.get()
@@ -539,7 +557,6 @@ async def _dispatch(
         if stage and stage != state.get("stage"):
             state["stage"] = stage
             _refresh_bar(stage_badge, candidate_label, round_label, state)
-        logger.debug("WS status: %s", msg.get("message", ""))
 
     elif t == "error":
         _error(chat_col, msg.get("message", str(msg)))
@@ -547,108 +564,6 @@ async def _dispatch(
 
     elif t == "heartbeat":
         pass
-
-
-# ── UI Agent loop ─────────────────────────────────────────────────────────────
-
-async def _agent_loop(
-    user_text: str,
-    chat_col, chat_scroll,
-    panels, tab_r, r_col,
-    q_col,
-    state: dict,
-) -> None:
-    if _llm_client is None or _tool_registry is None:
-        _error(chat_col, "后端服务尚未初始化，请稍候重试")
-        await _scroll(chat_scroll)
-        return
-
-    state["agent_history"].append(Message(role="user", content=user_text))
-
-    tool_names = [
-        "start_interview", "stop_interview", "get_eval_report",
-        "request_suggestion", "regenerate_questions",
-    ]
-    tools = _tool_registry.get_schemas(tool_names) or None
-
-    system_content = _UI_AGENT_SYSTEM
-    profile = state.get("current_profile")
-    if profile:
-        parts = [f"\n\n当前已选候选人：{profile.get('name', '—')}（ID: {state.get('candidate_id', '')}）"]
-        if pos := profile.get("current_position"):
-            parts.append(f"职位：{pos}")
-        if (yoe := profile.get("years_of_experience")) is not None:
-            parts.append(f"工作年限：{yoe} 年")
-        if edu := profile.get("education"):
-            edu_strs = [
-                f"{e.get('school', '')} {e.get('degree', '')} {e.get('major', '')}".strip()
-                for e in edu if isinstance(e, dict)
-            ]
-            if edu_strs:
-                parts.append(f"教育背景：{'; '.join(edu_strs)}")
-        if skills := profile.get("skills"):
-            parts.append(f"技能：{', '.join(skills[:15])}")
-        if summary := profile.get("resume_summary"):
-            parts.append(f"简历摘要：{summary}")
-        system_content += "\n".join(parts)
-
-    messages = [Message(role="system", content=system_content)] + state["agent_history"]
-
-    try:
-        resp = await _llm_client.chat(messages=messages, tools=tools)
-    except Exception as exc:
-        logger.exception("UI Agent LLM call failed")
-        _error(chat_col, f"LLM 调用失败：{exc}")
-        await _scroll(chat_scroll)
-        return
-
-    assistant_msg = Message(role="assistant", content=resp.content or "")
-
-    if resp.tool_calls:
-        assistant_msg.tool_calls = resp.tool_calls
-        state["agent_history"].append(assistant_msg)
-
-        for tc in resp.tool_calls:
-            result_str = await _tool_registry.dispatch(tc.function.name, tc.function.arguments)
-            state["agent_history"].append(
-                Message(role="tool", content=result_str, tool_call_id=tc.id)
-            )
-
-            try:
-                result = json.loads(result_str)
-            except json.JSONDecodeError:
-                result = {"result": result_str}
-
-            reply = _fmt_tool(tc.function.name, result, state)
-
-            if tc.function.name == "stop_interview" and "error" not in result:
-                try:
-                    async with httpx.AsyncClient(timeout=30) as client:
-                        r = await client.get(f"{_base_url}/api/interview/eval")
-                        r.raise_for_status()
-                        report_data = r.json().get("report", {})
-                    _render_report(r_col, report_data)
-                    panels.set_value(tab_r)
-                    reply += "\n\n评价报告已生成，请查看「报告」Tab。"
-                except Exception as exc:
-                    logger.warning("Auto-fetch report failed: %s", exc)
-
-            if tc.function.name == "regenerate_questions" and "error" not in result:
-                questions = result.get("questions", [])
-                if questions:
-                    _render_questions(q_col, questions, state.get("candidate_id"))
-
-            _bubble(chat_col, reply, sent=False, name="Agent")
-    else:
-        if resp.content:
-            state["agent_history"].append(assistant_msg)
-            _bubble(chat_col, resp.content, sent=False, name="Agent")
-
-    # Keep history bounded
-    if len(state["agent_history"]) > 24:
-        state["agent_history"] = state["agent_history"][-24:]
-
-    await _scroll(chat_scroll)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -752,7 +667,7 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
     content = await event.file.read()
     logger.info("PDF upload: %s (%d bytes)", filename, len(content))
 
-    _bubble(chat_col, f"正在解析简历：{filename}…", sent=False, name="Agent")
+    _bubble(chat_col, f"正在上传简历：{filename}…", sent=False, name="Agent")
     await _scroll(chat_scroll)
 
     async def _do_upload_request(candidate_id: str | None = None, overwrite: bool = False) -> dict | None:
@@ -782,7 +697,6 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
     if data is None:
         return
 
-    # 去重冲突：弹窗询问是否覆盖
     if "_conflict" in data:
         conflict = data["_conflict"].get("detail", {})
         existing_name = conflict.get("existing_candidate_name", filename)
@@ -792,51 +706,70 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
             _bubble(chat_col, "已取消导入，保留原有候选人数据。", sent=False, name="Agent")
             await _scroll(chat_scroll)
             return
-        # 用户确认覆盖：带 candidate_id 和 overwrite=true 重传
         data = await _do_upload_request(candidate_id=existing_id, overwrite=True)
         if data is None:
             return
 
-    profile = data.get("profile", {})
-    questions = data.get("questions", [])
+    file_path = data.get("file_path", "")
     cid = data.get("candidate_id", "")
-
     state["candidate_id"] = cid
-    state["candidate_name"] = profile.get("name", "—")
-    state["current_profile"] = profile
 
-    skills = ", ".join(profile.get("skills", [])[:8])
-    yoe = profile.get("years_of_experience")
-    pos = profile.get("current_position", "")
-    meta_parts = []
-    if pos:
-        meta_parts.append(f"职位：{pos}")
-    if yoe is not None:
-        meta_parts.append(f"工作年限：{yoe} 年")
-    if skills:
-        meta_parts.append(f"技能：{skills}")
-    meta_str = "\n".join(meta_parts) if meta_parts else "—"
+    # Trigger MainAgent to parse via chat
+    _bubble(chat_col, f"简历已上传，正在请求 AI 解析…", sent=False, name="Agent")
+    await _scroll(chat_scroll)
 
-    q_lines = "\n".join(
-        f"  {i+1}. {q.get('question', '')}" for i, q in enumerate(questions[:10])
-    )
-    if len(questions) > 10:
-        q_lines += f"\n  …共 {len(questions)} 道"
-    reply = (
-        f"简历解析完成！\n"
-        f"候选人：{profile.get('name', '—')}\n"
-        f"{meta_str}\n\n"
-        f"面试题目（{len(questions)} 道）：\n{q_lines}"
-    )
-    _bubble(chat_col, reply, sent=False, name="Agent")
-    if questions:
-        _render_questions(q_col, questions, cid)
+    # Send a chat message to MainAgent to trigger resume parsing
+    parse_msg = f"请解析刚上传的简历文件：{file_path}"
+    await _chat_stream(parse_msg, chat_col, chat_scroll)
+
+
+async def _chat_stream(text: str, chat_col, chat_scroll) -> None:
+    """调用 /api/chat SSE 接口，流式展示回复。"""
+    reply_text = ""
+    reply_label = None
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            async with client.stream(
+                "POST",
+                f"{_base_url}/api/chat",
+                json={"message": text},
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:]
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("delta", "")
+                    if not delta:
+                        continue
+                    reply_text += delta
+                    if reply_label is None:
+                        with chat_col:
+                            with ui.row().classes("w-full justify-start py-1 px-2"):
+                                with ui.column().classes("items-start gap-1").style("max-width:68%"):
+                                    ui.label("Agent").classes("text-xs text-grey-5")
+                                    reply_label = ui.label(reply_text).style(
+                                        "background:white; color:#111827; padding:10px 14px;"
+                                        "border-radius:16px 16px 16px 3px; font-size:13px;"
+                                        "white-space:pre-wrap; line-height:1.6; word-break:break-word;"
+                                        "border:1px solid #E5E7EB; box-shadow:0 1px 3px rgba(0,0,0,0.06);"
+                                    )
+                    else:
+                        reply_label.set_text(reply_text)
+                    await _scroll(chat_scroll)
+    except Exception as exc:
+        logger.exception("chat_stream_inner failed")
+        _error(chat_col, f"AI 解析失败：{exc}")
     await _scroll(chat_scroll)
 
 
 async def _confirm_overwrite_dialog(candidate_name: str) -> bool:
-    """弹出确认覆盖弹窗，返回用户是否确认。"""
-    result: dict[str, bool] = {"confirmed": False}
     dialog_done: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
 
     with ui.dialog() as dialog, ui.card().classes("p-4 gap-3"):
@@ -844,13 +777,11 @@ async def _confirm_overwrite_dialog(candidate_name: str) -> bool:
         ui.label("是否覆盖现有数据（简历、题目将重新解析）？").classes("text-sm text-grey-7")
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
             def _cancel():
-                result["confirmed"] = False
                 if not dialog_done.done():
                     dialog_done.set_result(False)
                 dialog.close()
 
             def _confirm():
-                result["confirmed"] = True
                 if not dialog_done.done():
                     dialog_done.set_result(True)
                 dialog.close()
@@ -870,7 +801,6 @@ def _render_candidate_list(
     panels, tab_profile,
     stage_badge, candidate_label, round_label,
 ) -> None:
-    """渲染左侧候选人卡片列表。"""
     col.clear()
     if not candidates:
         with col:
@@ -921,7 +851,7 @@ def _render_candidate_list(
                     "flat dense round color=grey-5 size=xs"
                 ).tooltip("删除候选人")
 
-                _cid = cid  # capture for closure
+                _cid = cid
 
                 async def _on_select_candidate(_cid=_cid) -> None:
                     await _on_candidate_select_inner(
@@ -945,14 +875,12 @@ def _render_candidate_list(
                     except Exception as exc:
                         ui.notify(f"删除失败：{exc}", type="negative")
                         return
-                    # 若删除的是当前选中候选人，清空状态
                     if state.get("candidate_id") == _cid:
                         state["candidate_id"] = None
                         state["candidate_name"] = "—"
                         _refresh_bar(stage_badge, candidate_label, round_label, state)
                         profile_col.clear()
                         q_col.clear()
-                    # 从缓存移除并刷新列表
                     state["candidates"] = [x for x in state["candidates"] if x.get("id") != _cid]
                     _render_candidate_list(
                         col, state["candidates"], state,
@@ -974,16 +902,17 @@ async def _on_candidate_select_inner(
     stage_badge, candidate_label, round_label,
     list_col, candidates: list,
 ) -> None:
-    """点击左侧候选人后加载 profile 并刷新详情。"""
+    """点击候选人后调用 /api/candidate/select 更新上下文。"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(
-                f"{_base_url}/api/resume/profile", params={"candidate_id": cid}
+            r = await client.post(
+                f"{_base_url}/api/candidate/select",
+                json={"candidate_id": cid},
             )
             r.raise_for_status()
             data = r.json()
     except Exception as exc:
-        _error(chat_col, f"加载候选人信息失败：{exc}")
+        _error(chat_col, f"选择候选人失败：{exc}")
         await _scroll(chat_scroll)
         return
 
@@ -992,10 +921,8 @@ async def _on_candidate_select_inner(
 
     state["candidate_id"] = cid
     state["candidate_name"] = profile.get("name") or "—"
-    state["current_profile"] = profile
     _refresh_bar(stage_badge, candidate_label, round_label, state)
 
-    # 刷新左侧列表高亮
     _render_candidate_list(
         list_col, candidates, state,
         chat_col, chat_scroll, q_col, profile_col,
@@ -1022,7 +949,7 @@ async def _on_candidate_select_inner(
         + (
             f"历史题目 {q_count} 道，可在「题目」Tab 查看。"
             if questions
-            else "暂无历史题目，可点击「开始面试」重新生成。"
+            else "暂无历史题目。"
         )
     )
     _bubble(chat_col, reply, sent=False, name="Agent")
@@ -1034,7 +961,6 @@ async def _on_candidate_select_inner(
 
 
 async def _confirm_delete_dialog(candidate_name: str) -> bool:
-    """弹出确认删除弹窗，返回用户是否确认。"""
     dialog_done: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
 
     with ui.dialog() as dialog, ui.card().classes("p-4 gap-3"):
@@ -1059,7 +985,6 @@ async def _confirm_delete_dialog(candidate_name: str) -> bool:
 
 
 def _render_profile_tab(col, profile: dict, questions: list) -> None:
-    """渲染候选人详情 Tab 内容。"""
     col.clear()
     if not profile:
         with col:
@@ -1067,7 +992,6 @@ def _render_profile_tab(col, profile: dict, questions: list) -> None:
         return
 
     with col:
-        # 基本信息卡片
         with ui.card().classes("w-full p-3 gap-1"):
             name = profile.get("name") or "—"
             ui.label(name).classes("text-base font-bold text-grey-9")
@@ -1090,13 +1014,11 @@ def _render_profile_tab(col, profile: dict, questions: list) -> None:
                     for s in skills[:15]:
                         ui.badge(s).props("color=blue-2 text-color=blue-9")
 
-        # 简介
         summary = profile.get("resume_summary") or ""
         if summary:
             with ui.expansion("简历摘要", icon="summarize").classes("w-full"):
                 ui.label(summary).classes("text-sm text-grey-8 whitespace-pre-wrap")
 
-        # 工作经历
         work_exp = profile.get("work_experience") or []
         if work_exp:
             with ui.expansion(f"工作经历（{len(work_exp)}）", icon="work").classes("w-full"):
@@ -1111,7 +1033,6 @@ def _render_profile_tab(col, profile: dict, questions: list) -> None:
                             ui.label(desc).classes("text-xs text-grey-7 mt-1 whitespace-pre-wrap")
                     ui.separator()
 
-        # 项目经历
         projects = profile.get("projects") or []
         if projects:
             with ui.expansion(f"项目经历（{len(projects)}）", icon="code").classes("w-full"):
@@ -1129,7 +1050,6 @@ def _render_profile_tab(col, profile: dict, questions: list) -> None:
                             ui.label(desc).classes("text-xs text-grey-7 mt-1 whitespace-pre-wrap")
                     ui.separator()
 
-        # 面试题目摘要
         if questions:
             with ui.expansion(f"面试题目（{len(questions)}）", icon="list_alt").classes("w-full"):
                 for i, q in enumerate(questions):
@@ -1138,25 +1058,3 @@ def _render_profile_tab(col, profile: dict, questions: list) -> None:
                     dim = q.get("dimension", "")
                     text = q.get("question", "")
                     ui.label(f"{i+1}. [{dim}] {text}").classes("text-xs text-grey-8 py-1")
-
-
-def _fmt_tool(tool_name: str, result: dict, state: dict) -> str:
-    if "error" in result:
-        return f"操作失败：{result['error']}"
-    if tool_name == "start_interview":
-        stage = result.get("stage", "interviewing")
-        state["stage"] = stage
-        return f"面试已开始！当前阶段：{stage}"
-    if tool_name == "stop_interview":
-        return f"面试已结束，共 {result.get('total_rounds', 0)} 轮对话。"
-    if tool_name == "get_eval_report":
-        rpt = result.get("report", {})
-        score = rpt.get("overall_score", "—")
-        rec = rpt.get("recommendation", "")
-        return f"评价报告已生成。\n综合得分：{score}\n建议：{rec}"
-    if tool_name == "request_suggestion":
-        return "追问建议已触发，请稍等 AI 生成建议。"
-    if tool_name == "regenerate_questions":
-        count = len(result.get("questions", []))
-        return f"已重新生成 {count} 道面试题。"
-    return f"操作完成：{json.dumps(result, ensure_ascii=False)}"

@@ -16,3 +16,11 @@ class SwitchAgentRequest(BaseModel):
 class QuestionsUpdateRequest(BaseModel):
     candidate_id: str
     questions: list[dict]
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+class CandidateSelectRequest(BaseModel):
+    candidate_id: str

@@ -17,10 +17,11 @@
 ```mermaid
 graph TD
     User["用户 (面试官)"]
-    UI["前端 NiceGUI\n(src/web/ui.py)"]
+    UI["前端 NiceGUI\n(src/web/ui.py)\n纯 UI 层，无 Agent 逻辑"]
     REST["REST API\n(src/web/routes.py)"]
     WS["WebSocket\n(src/web/websocket.py)"]
-    Orch["Orchestrator\n(src/agents/orchestrator.py)"]
+    MA["MainAgent\n(src/agents/main_agent.py)\n常驻对话入口"]
+    IC["InterviewController\n(src/agents/interview_controller.py)\n面试状态机"]
     RA["ResumeAgent"]
     IA["InterviewAgent"]
     EA["EvalAgent"]
@@ -30,24 +31,26 @@ graph TD
     Mem["MemoryModule\n(src/storage/memory_module.py)"]
     DB["SQLite\n(aiosqlite)"]
     Files["文件系统\nrecordings/ resumes/"]
+    UserMD["USER.md\n面试官偏好记忆"]
 
     User --> UI
-    UI --> REST
+    UI -->|POST /api/chat| REST
     UI --> WS
-    REST --> Orch
-    WS --> Orch
-    Orch --> RA
-    Orch --> IA
-    Orch --> EA
-    Orch --> Audio
+    REST -->|对话| MA
+    REST -->|面试控制| IC
+    MA -->|delegate_to_resume_agent| RA
+    MA -->|update_user_memory| UserMD
+    IC --> IA
+    IC --> EA
+    IC --> Audio
     Audio --> TM
     TM --> IA
     RA --> LLM
     IA --> LLM
     EA --> LLM
-    RA --> Mem
+    MA --> LLM
     EA --> Mem
-    Orch --> Mem
+    IC --> Mem
     Mem --> DB
     Audio --> Files
 ```
@@ -70,11 +73,12 @@ src/
 │   └── schemas.py           # FastAPI 请求体 Pydantic 模型
 ├── agents/
 │   ├── base.py              # BaseAgent、AgentRequest、AgentResponse 基类
-│   ├── orchestrator.py      # Agent 调度器，管理会话生命周期与 Agent 切换
+│   ├── main_agent.py        # MainAgent：面试官唯一对话入口（常驻单例）
+│   ├── interview_controller.py  # InterviewController：面试状态机控制器
 │   ├── resume_agent.py      # 简历解析与题目生成
 │   ├── interview_agent.py   # 实时追问建议（流式），持有 SuggestionTrigger
 │   ├── eval_agent.py        # 评价报告生成
-│   └── prompts.py           # 三个 Agent 的 system prompt 常量
+│   └── prompts.py           # Agent system prompt 常量
 ├── framework/
 │   ├── context.py           # ContextManager：滑动窗口 + 摘要压缩
 │   ├── prompt_builder.py    # PromptBuilder：唯一组装 list[Message] 的模块
@@ -98,7 +102,7 @@ src/
 ├── tools/
 │   ├── resume_parser.py     # parse_resume_pdf：读取 PDF 文本
 │   ├── skill_tools.py       # 生成 skills_list / skill_view 工具函数
-│   └── interview_control_tools.py  # UI Agent 工具集（httpx 调本地 REST）
+│   └── main_agent_tools.py  # MainAgent 工具集（delegate/memory/session/candidate）
 ├── storage/
 │   ├── database.py          # Database：aiosqlite 连接封装和表结构创建
 │   ├── repositories.py      # 各表的 CRUD Repository 类
@@ -145,24 +149,22 @@ main.py 执行时：
 lifespan(app) 启动时（FastAPI 生命周期钩子）：
 3. mkdir recordings/ resumes/    → 确保目录存在
 4. Database(settings.DB_PATH)    → 创建 SQLite 连接
-5. db.initialize()               → 建表（Candidate / Interview / ConversationRound /
-                                    EvalReport / TokenUsage），启用外键
-6. MemoryModule(db)              → 短期/长期记忆接口，包装各 Repository
-7. OpenAICompatibleClient(...)   → LLM 客户端（base_url 指向通义等兼容端点）
-8. SkillLoader(SKILLS_DIR)       → 加载 skills/ 目录下所有 SKILL.md
-9. ToolRegistry()                → 注册 parse_resume / skills_list / skill_view 工具
+5. db.initialize()               → 建表，启用外键
+6. MemoryModule(db)              → 短期/长期记忆接口
+7. OpenAICompatibleClient(...)   → LLM 客户端
+8. SkillLoader(SKILLS_DIR)       → 加载 skills/ 下所有 SKILL.md
+9. ToolRegistry()                → 注册 parse_resume / skills / MainAgent 工具
 10. ContextManager(...)          → 滑动窗口上下文管理器
-11. PromptBuilder(...)           → 唯一组装 LLM Messages 的模块
-12. ResumeAgent(...)             → 简历分析 Agent（使用 resume / skills 工具）
-13. InterviewAgent(...)          → 面试 Agent（使用 context_manager，无工具）
-14. EvalAgent(...)               → 评价 Agent（使用 skill_view 工具）
-15. 根据平台选择音频实现：
-    - Windows → WasapiCapturer + BaiduRealtimeSTT
-    - 其他    → MockAudioCapturer + MockSTTEngine  [Mock]
-16. AudioManager(capturer, stt, recorder, ...) → 组装音频管道
-17. Orchestrator(agents, memory, audio)        → Agent 调度器
-18. _web_ui.set_dependencies(...)              → 注入依赖到 NiceGUI UI 模块
-19. app.state.* = ...                          → 注入依赖到 FastAPI app.state
+11. PromptBuilder(...)           → 组装 LLM Messages
+12. ResumeAgent(...)             → 简历分析 Agent
+13. InterviewAgent(...)          → 面试 Agent
+14. EvalAgent(...)               → 评价 Agent
+15. 根据平台选择音频实现
+16. AudioManager(...)            → 组装音频管道
+17. InterviewController(...)     → 面试状态机控制器
+18. MainAgent(...)               → 常驻对话入口，绑定 ResumeAgent 和 Controller
+19. main_agent_tools.setup_tools(...)  → 连接工具与运行时引用
+20. app.state.* = ...            → 注入依赖到 FastAPI app.state
 
 启动完成后：
 - ui.run_with(app)   → NiceGUI 挂载到 FastAPI，提供 http://HOST:PORT/

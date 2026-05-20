@@ -22,6 +22,56 @@ class ResumeAgent(BaseAgent):
     async def on_deactivate(self, session: InterviewSession) -> None:
         logger.info("ResumeAgent deactivated for session %s", session.id)
 
+    async def execute(self, pdf_path: str, instructions: str = "") -> dict:
+        """直接调用入口 — 由 MainAgent 工具同步调用。
+
+        Returns:
+            {"profile": dict, "questions": list[dict]}
+        """
+        from ..models.session import InterviewSession, InterviewStage, SessionMetadata, InterviewQuestion
+        import uuid
+        from datetime import datetime
+
+        # Create a lightweight session for this execution
+        session = InterviewSession(
+            id=str(uuid.uuid4()),
+            candidate=CandidateProfile(id=str(uuid.uuid4()), name=""),
+            question_plan=[],
+            rounds=[],
+            stage=InterviewStage.IDLE,
+            context_summary="",
+            covered_dimensions=set(),
+            working_notes="",
+            metadata=SessionMetadata(candidate_id="", start_time=datetime.now()),
+        )
+
+        # Parse resume
+        parse_request = AgentRequest(
+            type="parse_resume",
+            payload={"file_path": pdf_path},
+            session=session,
+        )
+        parse_resp = await self._parse_resume(parse_request)
+        if not parse_resp.success:
+            raise RuntimeError(f"简历解析失败：{parse_resp.error}")
+
+        profile_data = parse_resp.data.get("profile_data", {}) if parse_resp.data else {}
+
+        # Generate questions
+        q_request = AgentRequest(
+            type="generate_questions",
+            payload={},
+            session=session,
+        )
+        q_resp = await self._generate_questions(q_request)
+        questions = q_resp.data.get("questions", []) if q_resp.success and q_resp.data else []
+
+        return {
+            "profile": profile_data,
+            "questions": questions,
+            "candidate": dataclasses.asdict(session.candidate),
+        }
+
     async def handle_request(self, request: AgentRequest) -> AgentResponse:
         if request.type == "parse_resume":
             return await self._parse_resume(request)

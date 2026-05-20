@@ -14,7 +14,8 @@ from src.logging import setup_logging
 
 from src.agents.eval_agent import EvalAgent
 from src.agents.interview_agent import InterviewAgent
-from src.agents.orchestrator import Orchestrator
+from src.agents.interview_controller import InterviewController
+from src.agents.main_agent import MainAgent
 from src.agents.prompts import (
     EVAL_AGENT_SYSTEM_PROMPT,
     INTERVIEW_AGENT_SYSTEM_PROMPT,
@@ -34,6 +35,7 @@ from src.storage.database import Database
 from src.storage.memory_module import MemoryModule
 from src.tools.resume_parser import parse_resume_pdf, read_resume_markdown
 from src.tools.skill_tools import make_skill_tools
+from src.tools import main_agent_tools
 from src.web.app import create_app
 import src.web.ui as _web_ui  # noqa: F401 — registers @ui.page("/") at import time
 
@@ -42,17 +44,17 @@ setup_logging(log_dir=LOGS_DIR, level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
+USER_MEMORY_PATH = Path(__file__).parent.parent / "USER.md"
 
 settings = get_settings()
 
-# Populated during lifespan startup — used for clean shutdown
 _db: Database | None = None
-_orchestrator_ref: Orchestrator | None = None
+_controller_ref: InterviewController | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    global _db, _orchestrator_ref
+    global _db, _controller_ref
     logger.info("Interview Assistant starting up")
     os.makedirs(settings.RECORDINGS_DIR, exist_ok=True)
     os.makedirs("resumes", exist_ok=True)
@@ -85,6 +87,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     skills_list_fn, skill_view_fn = make_skill_tools(skill_loader)
     tool_registry.register(description="列出可用面试技巧索引")(skills_list_fn)
     tool_registry.register(description="查看指定面试技巧的完整内容")(skill_view_fn)
+
+    # Register MainAgent tools
+    main_agent_tools.register_tools(tool_registry)
 
     # ── Framework ─────────────────────────────────────────────────────────────
     ctx_config = ContextConfig(
@@ -140,15 +145,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         recordings_dir=str(settings.RECORDINGS_DIR),
     )
 
-    # ── Orchestrator ──────────────────────────────────────────────────────────
-    orchestrator = Orchestrator(
-        resume_agent, interview_agent, eval_agent, memory_module, audio_manager
+    # ── InterviewController (new) ─────────────────────────────────────────────
+    controller = InterviewController(
+        interview_agent, eval_agent, memory_module, audio_manager
     )
-    _orchestrator_ref = orchestrator
+    _controller_ref = controller
+
+    # ── MainAgent (single entry point for conversation) ──────────────────────
+    main_agent = MainAgent(
+        llm_client=llm_client,
+        tool_registry=tool_registry,
+        memory_module=memory_module,
+        user_memory_path=str(USER_MEMORY_PATH),
+    )
+    main_agent.bind_resume_agent(resume_agent)
+    main_agent.bind_controller(controller)
+
+    # Wire up MainAgent tools with runtime references
+    main_agent_tools.setup_tools(
+        main_agent=main_agent,
+        resume_agent=resume_agent,
+        controller=controller,
+        memory_module=memory_module,
+        user_memory_path=str(USER_MEMORY_PATH),
+    )
 
     # Inject dependencies into NiceGUI UI module and FastAPI app state
-    _web_ui.set_dependencies(orchestrator, memory_module, llm_client, tool_registry, settings)
-    app.state.orchestrator = orchestrator
+    _web_ui.set_dependencies(memory_module, llm_client, tool_registry, settings)
+    app.state.controller = controller
+    app.state.main_agent = main_agent
     app.state.memory_module = memory_module
     app.state.context_manager = context_manager
     app.state.settings = settings
@@ -161,7 +186,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("Interview Assistant shutting down")
     try:
-        await orchestrator.close_session()
+        await controller.close_session()
     except Exception:
         logger.exception("Lifespan: close_session failed")
     if _db is not None:
@@ -174,7 +199,6 @@ app = create_app(lifespan=lifespan)
 if __name__ == "__main__":
     import uvicorn
 
-    # Mount NiceGUI routes onto the FastAPI app (non-blocking, wraps our lifespan)
     ui.run_with(app, title="面试助手", language="zh-CN")
     logger.info("Starting on http://%s:%d", settings.HOST, settings.PORT)
     uvicorn.run(app, host=settings.HOST, port=settings.PORT)

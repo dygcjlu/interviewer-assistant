@@ -34,6 +34,6 @@ def create_app(lifespan: Any = None) -> FastAPI:
 
     @app.websocket("/ws/interview")
     async def ws_endpoint(websocket: WebSocket) -> None:
-        await interview_ws_handler(websocket, app.state.orchestrator)
+        await interview_ws_handler(websocket, app.state.controller)
 
     return app
