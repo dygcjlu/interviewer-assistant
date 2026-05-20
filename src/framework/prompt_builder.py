@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .context import ContextManager
@@ -34,54 +35,71 @@ class PromptBuilder:
         tool_registry: ToolRegistry,
         memory_module: MemoryModule,
         context_manager: ContextManager,
+        user_memory_path: Path | None = None,
     ) -> None:
         self._skill_loader = skill_loader
         self._tool_registry = tool_registry
         self._memory_module = memory_module
         self._context_manager = context_manager
+        self._user_memory_path = user_memory_path
+        self._user_memory: str = ""
+        if user_memory_path:
+            self._load_user_memory()
+
+    def _load_user_memory(self) -> None:
+        if self._user_memory_path and self._user_memory_path.exists():
+            self._user_memory = self._user_memory_path.read_text(encoding="utf-8")
+        else:
+            self._user_memory = ""
+
+    def reload_user_memory(self) -> None:
+        self._load_user_memory()
+        logger.info("PromptBuilder: reloaded user memory (%d chars)", len(self._user_memory))
 
     def build(self, session: InterviewSession, agent_config: AgentConfig) -> list[Message]:
-        """按七层顺序构建完整 messages 列表。"""
-        messages: list[Message] = []
+        """按七层顺序构建完整 messages 列表。所有 system 层合并为单条消息。"""
+        system_parts: list[str] = []
 
         # Layer 1: Agent identity
-        messages.append(Message(role="system", content=agent_config.system_prompt))
+        system_parts.append(agent_config.system_prompt)
 
         # Layer 2: Skill index
         if agent_config.skill_names:
             skill_index_text = self._build_skill_index(agent_config.skill_names)
             if skill_index_text:
-                messages.append(Message(role="system", content=skill_index_text))
+                system_parts.append(skill_index_text)
 
         # Layer 3: Tool guidance
         if agent_config.tool_names:
             tool_text = self._build_tool_guidance(agent_config.tool_names)
             if tool_text:
-                messages.append(Message(role="system", content=tool_text))
+                system_parts.append(tool_text)
 
         # Layer 4: Candidate long-term memory
         if session.candidate.history_summary:
-            messages.append(Message(role="system", content=session.candidate.history_summary))
+            system_parts.append(session.candidate.history_summary)
 
-        # Layer 5: Interview fixed zone
-        fixed_zone = _build_fixed_zone(session)
+        # Layer 5: Interview fixed zone (候选人信息 + 题目清单 + 岗位要求)
+        fixed_zone = _build_fixed_zone(session, self._user_memory)
         if fixed_zone:
-            messages.append(Message(role="system", content=fixed_zone))
+            system_parts.append(fixed_zone)
 
         # Layers 6 & 7: Dynamic context
         context_data = self._context_manager.get_context()
 
         # Layer 6: Summary zone
         if context_data.summary:
-            messages.append(Message(role="system", content=context_data.summary))
+            system_parts.append(context_data.summary)
 
-        # Layer 7: Sliding window rounds
+        messages: list[Message] = [Message(role="system", content="\n\n".join(system_parts))]
+
+        # Layer 7: Sliding window rounds（面试官+候选人合并为一条 user 消息）
         for round_ in context_data.window_rounds:
             messages.append(
-                Message(role="user", content=f"[面试官] {round_.interviewer_text}")
-            )
-            messages.append(
-                Message(role="user", content=f"[候选人] {round_.candidate_text}")
+                Message(
+                    role="user",
+                    content=f"面试官：{round_.interviewer_text}\n候选人：{round_.candidate_text}",
+                )
             )
             if round_.llm_suggestion:
                 messages.append(
@@ -115,7 +133,7 @@ class PromptBuilder:
         return "\n".join(lines) if len(lines) > 1 else ""
 
 
-def _build_fixed_zone(session: InterviewSession) -> str:
+def _build_fixed_zone(session: InterviewSession, user_memory: str = "") -> str:
     c = session.candidate
     lines = [f"候选人：{c.name}"]
     if c.current_position:
@@ -140,4 +158,6 @@ def _build_fixed_zone(session: InterviewSession) -> str:
             lines.append(f"{status} [{q.dimension}] {q.question}")
     if session.covered_dimensions:
         lines.append(f"\n已覆盖维度：{', '.join(sorted(session.covered_dimensions))}")
+    if user_memory:
+        lines.append(f"\n## 面试官岗位要求与偏好\n{user_memory.strip()}")
     return "\n".join(lines)
