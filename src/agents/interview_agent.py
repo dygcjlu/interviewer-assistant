@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import AsyncIterator, TYPE_CHECKING
 
 from src.logging import bind_op, text_summary
@@ -14,6 +15,7 @@ from ..framework.prompt_builder import AgentConfig, PromptBuilder
 from ..framework.tool_registry import ToolRegistry
 from ..models.message import Message
 from ..models.session import InterviewSession
+from ..storage.conversation_logger import ConversationLogger
 
 if TYPE_CHECKING:
     from ..framework.context import ContextManager
@@ -49,10 +51,19 @@ class InterviewAgent(BaseAgent):
         self._request_counter: int = 0
         self._ws_sender = None
 
+        self._history: list[Message] = []
+        self._logger: ConversationLogger | None = None
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     async def on_activate(self, session: InterviewSession) -> None:
         self._session = session
+        self._history = []
+        self._logger = ConversationLogger(
+            Path("conversations") / f"interview_agent_{session.id}.jsonl"
+        )
+        # 写入初始 system 行，标记会话开始
+        await self._logger.append_with_system(self.config.system_prompt, [])
         self._suggestion_trigger = SuggestionTrigger(
             on_trigger=self._on_trigger_fired,
             silence_threshold_sec=self._silence_threshold,
@@ -75,6 +86,8 @@ class InterviewAgent(BaseAgent):
                 logger.exception("InterviewAgent: stream task ended with error")
         self._current_stream_task = None
         self._session = None
+        self._history = []
+        self._logger = None
         logger.info("InterviewAgent deactivated")
 
     # ── public interface ──────────────────────────────────────────────────────
@@ -192,6 +205,9 @@ class InterviewAgent(BaseAgent):
         self._request_counter = request_id + 1
 
         messages = self.prompt_builder.build(self._session, self.config)
+        # 在 PromptBuilder 输出之后拼入本次面试的历史追问轮次（上下文记忆）
+        messages.extend(self._history)
+
         if self._session.rounds:
             last_round = self._session.rounds[-1]
             current_text = (
@@ -199,25 +215,41 @@ class InterviewAgent(BaseAgent):
                 f"候选人最新回答：{last_round.candidate_text}\n\n"
                 "请给出一条追问建议。"
             )
-            messages.append(Message(role="user", content=current_text))
         else:
-            messages.append(
-                Message(role="user", content="面试刚开始，请给出一个开场问题建议。")
-            )
+            current_text = "面试刚开始，请给出一个开场问题建议。"
+
+        user_msg = Message(role="user", content=current_text)
+        self._history.append(user_msg)
+        if self._logger is not None:
+            await self._logger.append([user_msg])
+        messages.append(user_msg)
 
         token_count = 0
         prompt_tokens = 0
         completion_tokens = 0
+        reply_text = ""
         try:
             stream_iter = self.llm_client.chat_stream(messages)
             async for chunk in stream_iter:
                 if chunk.delta:
+                    reply_text += chunk.delta
                     token_count += len(chunk.delta)
                     yield chunk.delta
                 if chunk.is_final:
                     prompt_tokens = chunk.prompt_tokens
                     completion_tokens = chunk.completion_tokens
                     break
+
+            # 正常完成：持久化 assistant 消息，追加到 _history
+            assistant_msg = Message(role="assistant", content=reply_text)
+            self._history.append(assistant_msg)
+            if self._logger is not None:
+                await self._logger.append([assistant_msg])
+
+            # trim：保留最近 10 轮（20 条消息）
+            if len(self._history) > 20:
+                self._history = self._history[-20:]
+
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
                 "InterviewAgent generate_suggestion done request_id=%d "
@@ -229,6 +261,9 @@ class InterviewAgent(BaseAgent):
                 elapsed_ms,
             )
         except asyncio.CancelledError:
+            # 流被取消：该轮交互已作废，撤销已追加的 user_msg，不写 logger
+            if self._history and self._history[-1] is user_msg:
+                self._history.pop()
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
                 "InterviewAgent generate_suggestion cancelled request_id=%d elapsed_ms=%.1f",
@@ -237,6 +272,9 @@ class InterviewAgent(BaseAgent):
             )
             raise
         except Exception:
+            # 异常：同样撤销 user_msg，避免污染历史
+            if self._history and self._history[-1] is user_msg:
+                self._history.pop()
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.exception(
                 "InterviewAgent generate_suggestion failed request_id=%d elapsed_ms=%.1f",

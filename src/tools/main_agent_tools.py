@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ..agents.main_agent import MainAgent
     from ..agents.interview_controller import InterviewController
     from ..agents.resume_agent import ResumeAgent
+    from ..framework.prompt_builder import PromptBuilder
     from ..storage.memory_module import MemoryModule
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ _resume_agent: ResumeAgent | None = None
 _controller: InterviewController | None = None
 _memory_module: MemoryModule | None = None
 _user_memory_path: Path = Path("USER.md")
+_prompt_builder: PromptBuilder | None = None
 
 
 def setup_tools(
@@ -31,13 +33,15 @@ def setup_tools(
     controller: "InterviewController",
     memory_module: "MemoryModule",
     user_memory_path: str = "USER.md",
+    prompt_builder: "PromptBuilder | None" = None,
 ) -> None:
-    global _main_agent, _resume_agent, _controller, _memory_module, _user_memory_path
+    global _main_agent, _resume_agent, _controller, _memory_module, _user_memory_path, _prompt_builder
     _main_agent = main_agent
     _resume_agent = resume_agent
     _controller = controller
     _memory_module = memory_module
     _user_memory_path = Path(user_memory_path)
+    _prompt_builder = prompt_builder
 
 
 async def delegate_to_resume_agent(pdf_path: str, instructions: str = "") -> str:
@@ -112,6 +116,8 @@ async def update_user_memory(content: str) -> str:
 
         if _main_agent is not None:
             _main_agent.reload_user_memory()
+        if _prompt_builder is not None:
+            _prompt_builder.reload_user_memory()
 
         logger.info("update_user_memory: appended %d chars", len(content))
         return json.dumps({"success": True, "message": "已保存到面试官偏好记录"}, ensure_ascii=False)

@@ -98,7 +98,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         compression_round_threshold=settings.CONTEXT_COMPRESSION_THRESHOLD,
     )
     context_manager = ContextManager(ctx_config, llm_client)
-    prompt_builder = PromptBuilder(skill_loader, tool_registry, memory_module, context_manager)
+    prompt_builder = PromptBuilder(
+        skill_loader, tool_registry, memory_module, context_manager,
+        user_memory_path=USER_MEMORY_PATH,
+    )
 
     # ── Agents ────────────────────────────────────────────────────────────────
     resume_config = AgentConfig(
@@ -168,6 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         controller=controller,
         memory_module=memory_module,
         user_memory_path=str(USER_MEMORY_PATH),
+        prompt_builder=prompt_builder,
     )
 
     # Inject dependencies into NiceGUI UI module and FastAPI app state

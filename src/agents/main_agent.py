@@ -12,6 +12,7 @@ from typing import AsyncIterator, Any, TYPE_CHECKING
 
 from ..models.message import Message
 from ..models.candidate import CandidateProfile
+from ..storage.conversation_logger import ConversationLogger
 
 if TYPE_CHECKING:
     from ..llm.client import OpenAICompatibleClient
@@ -62,6 +63,8 @@ class MainAgent:
         # System prompt layers
         self._layer2_user_memory: str = ""
         self._layer3_candidate: str = ""
+
+        self._logger = ConversationLogger(Path("conversations/main_agent.jsonl"))
 
         self._load_user_memory()
 
@@ -129,9 +132,12 @@ class MainAgent:
 
     async def handle_chat(self, user_message: str) -> AsyncIterator[str]:
         """处理用户消息，流式返回 LLM 回复。"""
-        self._history.append(Message(role="user", content=user_message))
+        user_msg = Message(role="user", content=user_message)
+        self._history.append(user_msg)
+        new_messages: list[Message] = [user_msg]
 
-        messages = [Message(role="system", content=self._build_system_prompt())]
+        system_prompt = self._build_system_prompt()
+        messages = [Message(role="system", content=system_prompt)]
         messages.extend(self._history)
 
         tool_schemas = self._tools.get_schemas(self.get_tool_names()) or None
@@ -141,8 +147,11 @@ class MainAgent:
         except Exception as exc:
             logger.exception("MainAgent: LLM call failed")
             error_msg = f"抱歉，AI 服务暂时不可用：{exc}"
-            self._history.append(Message(role="assistant", content=error_msg))
+            error_assistant = Message(role="assistant", content=error_msg)
+            self._history.append(error_assistant)
+            new_messages.append(error_assistant)
             yield error_msg
+            await self._logger.append_with_system(system_prompt, new_messages)
             self._trim_history()
             return
 
@@ -152,12 +161,13 @@ class MainAgent:
                 role="assistant", content=response.content, tool_calls=response.tool_calls
             )
             self._history.append(assistant_msg)
+            new_messages.append(assistant_msg)
 
             for tc in response.tool_calls:
                 result_str = await self._tools.dispatch(tc.function.name, tc.function.arguments)
-                self._history.append(
-                    Message(role="tool", content=result_str, tool_call_id=tc.id)
-                )
+                tool_msg = Message(role="tool", content=result_str, tool_call_id=tc.id)
+                self._history.append(tool_msg)
+                new_messages.append(tool_msg)
 
             # Second LLM call: stream final response after tool results
             messages2 = [Message(role="system", content=self._build_system_prompt())]
@@ -176,12 +186,17 @@ class MainAgent:
                 yield err
                 reply_text = err
 
-            self._history.append(Message(role="assistant", content=reply_text))
+            final_msg = Message(role="assistant", content=reply_text)
+            self._history.append(final_msg)
+            new_messages.append(final_msg)
         else:
             reply = response.content or ""
-            self._history.append(Message(role="assistant", content=reply))
+            reply_msg = Message(role="assistant", content=reply)
+            self._history.append(reply_msg)
+            new_messages.append(reply_msg)
             yield reply
 
+        await self._logger.append_with_system(system_prompt, new_messages)
         self._trim_history()
 
     def _trim_history(self) -> None:

@@ -87,5 +87,7 @@ logs/                # 运行日志 (logs\app.log)
 | `api.md` | 所有 REST 接口、WebSocket 消息类型、接口与 Agent 操作对应关系 |
 | `flows.md` | 简历上传、面试开始/结束、实时转写与追问、评价生成等主要流程时序图 |
 | `storage.md` | SQLite 表结构、MemoryModule 职责、录音目录规则、DB fallback 逻辑 |
+| `prompt-assembly.md` | 各 Agent 动态组装提示词的机制：MainAgent 三层系统提示、PromptBuilder 七层结构、各层内容与更新时机 |
+| `context-memory.md` | 上下文与记忆管理：ContextManager 滑动窗口与异步压缩、USER.md 面试官记忆、候选人长期记忆与历史整合 |
 
 **功能变更后需同步更新对应的 `docs/arc/` 文档。**
