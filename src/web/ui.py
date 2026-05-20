@@ -517,19 +517,6 @@ async def _dispatch(
                     ui.label("AI 追问建议").classes("text-xs font-bold text-amber-700")
                     ui.label(final_text).classes("text-sm mt-1 whitespace-pre-wrap")
 
-        captured = final_text
-
-        def _accept() -> None:
-            _bubble(chat_col, captured, sent=True, name="面试官")
-            asyncio.create_task(_scroll(chat_scroll))
-
-        with card:
-            with ui.row().classes("mt-2 gap-2"):
-                ui.button("采用", icon="check", on_click=_accept).props(
-                    "flat dense color=positive"
-                )
-                ui.button("忽略", icon="close").props("flat dense color=grey")
-
         state["suggestion_card"] = None
         state["suggestion_label"] = None
         state["suggestion_text"] = ""

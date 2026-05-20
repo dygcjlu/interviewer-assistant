@@ -11,7 +11,8 @@
 | Agent | 提示词体系 | 文件 |
 |---|---|---|
 | **MainAgent** | 自管理三层系统提示 | `src/agents/main_agent.py` |
-| **InterviewAgent / ResumeAgent / EvalAgent** | `PromptBuilder` 七层统一构建 | `src/framework/prompt_builder.py` |
+| **InterviewAgent / ResumeAgent** | `PromptBuilder` 七层统一构建 | `src/framework/prompt_builder.py` |
+| **EvalAgent** | 自建 messages（不使用 PromptBuilder） | `src/agents/eval_agent.py` |
 
 ---
 
@@ -94,7 +95,7 @@ _build_system_prompt()
 
 ## 二、子 Agent 的七层统一提示词（PromptBuilder）
 
-`InterviewAgent`、`ResumeAgent`、`EvalAgent` 均通过 `PromptBuilder.build(session, config)` 构建完整的 `messages` 列表。PromptBuilder 是系统唯一对外输出 messages 列表的模块。
+`InterviewAgent`、`ResumeAgent` 通过 `PromptBuilder.build(session, config)` 构建完整的 `messages` 列表。`EvalAgent` 因评价场景的特殊性（需要全量对话 + 岗位要求注入 + 分块 map-reduce）自行组装 messages，不使用 PromptBuilder。
 
 ```python
 messages = self.prompt_builder.build(self._session, self.config)
@@ -160,7 +161,7 @@ messages = [
 
 **设计说明**：此层只注入技巧的"索引"（名称+简介+触发提示），不注入全文。Agent 需要详情时通过 `skill_view` 工具按需加载，避免 prompt 过大。
 
-**哪些 Agent 使用**：ResumeAgent（`skill_view` 工具）、EvalAgent（`skill_view` 工具）
+**哪些 Agent 使用**：ResumeAgent（`skill_view` 工具）
 
 ---
 
@@ -314,9 +315,24 @@ user: 面试官：{interviewer_text}
 
 ### EvalAgent
 
-`_generate_eval()` 追加：
+EvalAgent **不使用** `PromptBuilder.build()`，而是在 `_generate_eval()` 中自行组装 messages，避免 Layer 6/7（实时面试滑动窗口）对评价造成干扰。
+
+#### 基础消息结构（两条路径共用）
+
 ```
-user: 请根据以下完整面试对话记录生成评价报告：
+[0] system — EVAL_AGENT_SYSTEM_PROMPT（角色定义 + 评分标准）
+[1] system — "## 岗位要求与面试官偏好\n{USER.md 全文}"（若文件存在）
+[2] system — "## 候选人信息\n姓名/职位/技能/简历摘要/题目清单"
+[3] system — "## 候选人历史面试记录\n..."（若有历史记录）
+```
+
+USER.md 由 `_read_user_memory()` 在每次 eval 时直接读取，文件不存在时跳过。
+
+#### 路径一：单次调用（估算 token ≤ 30000）
+
+```
+... 基础消息 ...
+user: 以下是完整的面试对话记录（共 N 轮）：
 
       第 1 轮
       面试官: ...
@@ -326,10 +342,46 @@ user: 请根据以下完整面试对话记录生成评价报告：
       ...
 
       输出 JSON 对象，包含以下字段：
-      - dimensions: ...
-      - overall_score: ...
-      - recommendation: ...
+      - dimensions / overall_score / strengths / weaknesses / recommendation / summary
 ```
+
+#### 路径二：分块 map-reduce（估算 token > 30000）
+
+**Map 阶段**（每 10 轮一块，每块单独调用）：
+
+```
+... 基础消息 ...
+user: 以下是面试对话的第 {start}–{end} 轮（共 N 轮中的第 k/m 段）：
+
+      第 N 轮
+      面试官: ...
+      候选人: ...
+      ...
+
+      请分析候选人在这部分对话中的表现，输出结构化文字，包含：
+      - 每道题候选人的回答质量与深度
+      - 体现出的能力亮点（引用候选人原话）
+      - 明显的不足或知识盲点
+      - 涉及的考察维度判断
+```
+
+**Reduce 阶段**（汇总所有局部分析，一次调用）：
+
+```
+... 基础消息 ...
+user: 以下是对候选人面试各阶段的逐段分析结果（共 N 轮，分 m 段）：
+
+      【第 1–10 轮分析】
+      ...
+
+      【第 11–20 轮分析】
+      ...
+
+      请综合以上所有分析，生成完整面试评价报告，输出 JSON 对象：
+      - dimensions / overall_score / strengths / weaknesses / recommendation / summary
+```
+
+**数据来源**：`session.rounds`（所有原始轮次，仅使用 `interviewer_text` 和 `candidate_text`，不包含 `llm_suggestion`）。
 
 ---
 
