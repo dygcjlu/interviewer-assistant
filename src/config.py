@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     BAIDU_API_KEY: str = ""
     BAIDU_SECRET_KEY: str = ""
 
+    # 讯飞实时语音转写大模型
+    XUNFEI_APP_ID: str = ""
+    XUNFEI_ACCESS_KEY_ID: str = ""
+    XUNFEI_ACCESS_KEY_SECRET: str = ""
+
+    # STT 引擎选择：baidu（默认）| xunfei
+    STT_ENGINE: str = "baidu"
+
+    # 调试：用脚本模拟音频，跳过真实采集和 STT
+    MOCK_AUDIO: bool = False
+    MOCK_AUDIO_SCRIPT: str = "data/mock_script.json"
+
 
 _settings: Settings | None = None
 

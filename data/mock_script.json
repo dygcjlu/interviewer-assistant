@@ -1,0 +1,62 @@
+[
+  {
+    "source": "interviewer",
+    "text": "你好，请先简单介绍一下自己和你的技术背景。",
+    "delay_ms": 500
+  },
+  {
+    "source": "candidate",
+    "text": "你好，我叫张伟，有五年后端开发经验，主要用 Python 和 Java。最近三年在一家中型电商公司负责订单系统的架构和开发，熟悉分布式系统、消息队列和微服务架构。",
+    "delay_ms": 2000
+  },
+  {
+    "source": "interviewer",
+    "text": "你提到了订单系统，能详细讲一下你们订单系统的技术架构吗？",
+    "delay_ms": 3000
+  },
+  {
+    "source": "candidate",
+    "text": "我们采用微服务架构，核心服务包括订单服务、库存服务、支付服务和通知服务。订单创建走同步 HTTP，然后通过 RocketMQ 异步触发库存扣减和支付初始化，降低主链路延迟。高峰期日均处理订单约 50 万笔，Redis 做热点数据缓存和分布式锁来防止超卖。",
+    "delay_ms": 2500
+  },
+  {
+    "source": "interviewer",
+    "text": "你说到用分布式锁防止超卖，这个方案怎么实现的？遇到过哪些问题？",
+    "delay_ms": 3500
+  },
+  {
+    "source": "candidate",
+    "text": "用 Redis 的 SET NX EX 实现分布式锁，key 是商品 ID，value 是随机 UUID 防止误删，释放时用 Lua 脚本保证原子性。",
+    "delay_ms": 2000
+  },
+  {
+    "source": "candidate",
+    "text": "主要遇到两个问题：一是锁超时时间设置不合理，业务还没跑完锁就释放了，后来改成用看门狗机制自动续期；二是 Redis 主从切换时锁丢失，引入 Redlock 算法多节点加锁来解决。",
+    "delay_ms": 1500
+  },
+  {
+    "source": "interviewer",
+    "text": "很好。你在团队里担任什么角色？有没有带过人或推动过技术改进？",
+    "delay_ms": 4000
+  },
+  {
+    "source": "candidate",
+    "text": "我担任技术 lead，带了三名初级工程师。推动了代码审查流程规范化，引入 SonarQube 做静态分析；还主导了一次从单体到微服务的拆分，把发布窗口从 60 分钟缩短到 10 分钟以内。",
+    "delay_ms": 2500
+  },
+  {
+    "source": "interviewer",
+    "text": "如果让你设计一个短链服务，支持每天一亿次访问，你会怎么设计？",
+    "delay_ms": 4000
+  },
+  {
+    "source": "candidate",
+    "text": "存储层用 MySQL 存 URL 和短码映射，短码基于自增 ID 转 62 进制，保证唯一且短小。读多写少的特点决定了缓存是核心，Redis 缓存热点短链，命中率能到 95% 以上。",
+    "delay_ms": 2000
+  },
+  {
+    "source": "candidate",
+    "text": "写入量每天大概几十万条，MySQL 单机完全够。CDN 对高频短链做边缘缓存进一步降源站压力。统计点击数的话用消息队列异步落库，不影响主链路延迟。",
+    "delay_ms": 1800
+  }
+]

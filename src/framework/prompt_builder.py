@@ -156,6 +156,8 @@ def _build_fixed_zone(session: InterviewSession, user_memory: str = "") -> str:
         for q in session.question_plan:
             status = "✓" if q.is_covered else "○"
             lines.append(f"{status} [{q.dimension}] {q.question}")
+            for fu in q.follow_ups:
+                lines.append(f"追问: {fu}")
     if session.covered_dimensions:
         lines.append(f"\n已覆盖维度：{', '.join(sorted(session.covered_dimensions))}")
     if user_memory:

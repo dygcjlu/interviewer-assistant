@@ -26,6 +26,10 @@ Agent 层负责所有 AI 推理与对话逻辑。采用 **MainAgent 单入口** 
 - 切换候选人时**只替换系统提示第 3 层**，对话历史不清空（保留上下文连续性）
 - 服务重启时历史清空（不持久化对话历史，只持久化 USER.md 和面试数据）
 
+### 对话持久化
+
+使用 `ConversationLogger` 将每轮 `handle_chat()` 的完整消息列表（含 system prompt 快照）以 JSONL 格式异步写入 `conversations/main_agent.jsonl`。system prompt 变更时才写入 system 行（去重），避免冗余。
+
 ### 工具列表
 
 | 工具 | 签名 | 说明 |
@@ -136,11 +140,15 @@ MainAgent 更新 candidate context，流式回复用户
 | `auto` | 候选人 final segment 后静默 `silence_threshold_sec`（默认 2s），且距上次触发超过 `min_interval_sec`（默认 5s） |
 | `manual` | 仅响应前端 `request_suggestion` 消息 |
 
+### 对话持久化
+
+使用 `ConversationLogger` 将每次追问建议的完整消息列表以 JSONL 格式异步写入会话级文件 `conversations/interview_agent_{session_id}.jsonl`。Logger 在 `on_activate()` 时创建，`on_deactivate()` 后不再写入。
+
 ### 核心方法
 
 | 方法 | 触发方式 | 说明 |
 |---|---|---|
-| `on_activate(session)` | InterviewController.start_interview() | 初始化 SuggestionTrigger |
+| `on_activate(session)` | InterviewController.start_interview() | 初始化 SuggestionTrigger 和 ConversationLogger |
 | `on_deactivate(session)` | InterviewController.stop_interview() | 停止 Trigger，取消进行中的流式 Task |
 | `generate_suggestion(request_id)` | SuggestionTrigger 回调 / 手动触发 | 取消上一次未完成的流 |
 

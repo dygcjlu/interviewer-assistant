@@ -91,9 +91,11 @@ src/
 │   └── errors.py            # LLM 相关异常
 ├── audio/
 │   ├── manager.py           # AudioManager：协调采集/转写/录音全流程
+│   ├── mock_manager.py      # MockAudioManager：脚本回放替代真实采集（调试模式）
 │   ├── transcription.py     # TranscriptionManager：STT 分发与轮次管理
 │   ├── trigger.py           # SuggestionTrigger：自动/手动追问触发逻辑
 │   ├── recorder.py          # AudioRecorder：录音文件写入
+│   ├── script_player.py     # ScriptPlayer：按 JSON 脚本注入转写片段（调试模式）
 │   ├── wasapi.py            # WasapiCapturer：Windows 双声道采集（生产）
 │   ├── baidu_stt.py         # BaiduRealtimeSTT：百度实时语音识别（生产）
 │   ├── mock.py              # MockAudioCapturer + MockSTTEngine（非 Windows）[Mock]
@@ -106,7 +108,8 @@ src/
 ├── storage/
 │   ├── database.py          # Database：aiosqlite 连接封装和表结构创建
 │   ├── repositories.py      # 各表的 CRUD Repository 类
-│   └── memory_module.py     # MemoryModule：短期/长期记忆统一接口
+│   ├── memory_module.py     # MemoryModule：短期/长期记忆统一接口
+│   └── conversation_logger.py  # ConversationLogger：JSONL 格式 Agent 对话持久化
 └── models/
     ├── session.py           # InterviewSession、ConversationRound、InterviewStage 等
     ├── candidate.py         # CandidateProfile、Education、WorkExperience 等
@@ -117,6 +120,8 @@ src/
 skills/                      # SKILL.md 面试技巧文件，由 SkillLoader 读取
 recordings/                  # 录音文件（按 session_id 分目录）
 resumes/                     # 上传的简历 PDF 和转换后的 Markdown
+data/                        # 调试数据（如 mock_script.json 脚本回放文件）
+conversations/               # Agent 对话日志 JSONL（调试用，已加入 .gitignore）
 ```
 
 ---
@@ -159,8 +164,11 @@ lifespan(app) 启动时（FastAPI 生命周期钩子）：
 12. ResumeAgent(...)             → 简历分析 Agent
 13. InterviewAgent(...)          → 面试 Agent
 14. EvalAgent(...)               → 评价 Agent
-15. 根据平台选择音频实现
-16. AudioManager(...)            → 组装音频管道
+15. 根据配置选择音频实现
+    - MOCK_AUDIO=true  → MockAudioManager（按 mock_script.json 脚本回放，跳过采集和 STT）
+    - Windows          → WasapiCapturer + BaiduRealtimeSTT + AudioManager（生产）
+    - 其他平台         → MockAudioCapturer + MockSTTEngine + AudioManager（开发）
+16. AudioManager 或 MockAudioManager(...)  → 组装音频管道
 17. InterviewController(...)     → 面试状态机控制器
 18. MainAgent(...)               → 常驻对话入口，绑定 ResumeAgent 和 Controller
 19. main_agent_tools.setup_tools(...)  → 连接工具与运行时引用

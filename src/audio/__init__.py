@@ -5,6 +5,8 @@ from .recorder import AudioRecorder, RecordingResult, RoundSlice
 from .stream import AudioStreamBridge
 from .transcription import TranscriptionManager
 from .manager import AudioManager
+from .script_player import ScriptPlayer
+from .mock_manager import MockAudioManager
 
 __all__ = [
     "AudioFrame",
@@ -20,4 +22,6 @@ __all__ = [
     "AudioStreamBridge",
     "TranscriptionManager",
     "AudioManager",
+    "ScriptPlayer",
+    "MockAudioManager",
 ]

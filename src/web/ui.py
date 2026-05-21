@@ -336,7 +336,7 @@ async def index() -> None:
             else:
                 _bubble(chat_col, f"面试已结束，共 {total} 轮对话。正在生成评价报告…", sent=False, name="Agent")
                 await _scroll(chat_scroll)
-                async with httpx.AsyncClient(timeout=30) as client:
+                async with httpx.AsyncClient(timeout=240) as client:
                     r = await client.get(f"{_base_url}/api/interview/eval")
                     r.raise_for_status()
                     report_data = r.json().get("report", {})
@@ -344,6 +344,7 @@ async def index() -> None:
                 panels.set_value(tab_r)
                 _bubble(chat_col, "评价报告已生成，请查看「报告」Tab。", sent=False, name="Agent")
         except Exception as exc:
+            logger.error("_on_stop failed: %s", exc, exc_info=True)
             _error(chat_col, f"结束面试失败：{exc}")
         finally:
             stop_btn.enable()
@@ -504,6 +505,11 @@ async def _dispatch(
         state["suggestion_label"].set_text(state["suggestion_text"])
 
     elif t == "suggestion_final":
+        if msg.get("skipped"):
+            state["suggestion_card"] = None
+            state["suggestion_label"] = None
+            state["suggestion_text"] = ""
+            return
         final_text = msg.get("text", state.get("suggestion_text", ""))
         state["suggestion_text"] = final_text
         card = state["suggestion_card"]
@@ -715,7 +721,9 @@ async def _chat_stream(text: str, chat_col, chat_scroll) -> None:
     reply_text = ""
     reply_label = None
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10, read=300, write=30, pool=10)
+        ) as client:
             async with client.stream(
                 "POST",
                 f"{_base_url}/api/chat",

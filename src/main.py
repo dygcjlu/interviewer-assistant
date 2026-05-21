@@ -130,23 +130,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     eval_agent = EvalAgent(eval_config, prompt_builder, llm_client, tool_registry, memory_module)
 
     # ── Audio ─────────────────────────────────────────────────────────────────
-    import sys
-    if sys.platform == "win32":
-        from src.audio.wasapi import WasapiCapturer
-        from src.audio.baidu_stt import BaiduRealtimeSTT
-        capturer = WasapiCapturer()
-        candidate_stt = BaiduRealtimeSTT(channel="candidate")
-        interviewer_stt = BaiduRealtimeSTT(channel="interviewer")
+    if settings.MOCK_AUDIO:
+        from src.audio.mock_manager import MockAudioManager
+        audio_manager = MockAudioManager(
+            script_path=settings.MOCK_AUDIO_SCRIPT,
+            recordings_dir=str(settings.RECORDINGS_DIR),
+        )
+        logger.info("Audio: using MockAudioManager with script=%s", settings.MOCK_AUDIO_SCRIPT)
     else:
-        from src.audio.mock import MockAudioCapturer, MockSTTEngine
-        capturer = MockAudioCapturer()
-        candidate_stt = MockSTTEngine()
-        interviewer_stt = MockSTTEngine()
-    recorder = AudioRecorder()
-    audio_manager = AudioManager(
-        capturer, candidate_stt, interviewer_stt, recorder,
-        recordings_dir=str(settings.RECORDINGS_DIR),
-    )
+        import sys
+        if sys.platform == "win32":
+            from src.audio.wasapi import WasapiCapturer
+            capturer = WasapiCapturer()
+            if settings.STT_ENGINE == "xunfei":
+                from src.audio.xunfei_stt import XunfeiRealtimeSTT
+                candidate_stt = XunfeiRealtimeSTT(channel="candidate")
+                interviewer_stt = XunfeiRealtimeSTT(channel="interviewer")
+                logger.info("Audio: using XunfeiRealtimeSTT")
+            else:
+                from src.audio.baidu_stt import BaiduRealtimeSTT
+                candidate_stt = BaiduRealtimeSTT(channel="candidate")
+                interviewer_stt = BaiduRealtimeSTT(channel="interviewer")
+                logger.info("Audio: using BaiduRealtimeSTT")
+        else:
+            from src.audio.mock import MockAudioCapturer, MockSTTEngine
+            capturer = MockAudioCapturer()
+            candidate_stt = MockSTTEngine()
+            interviewer_stt = MockSTTEngine()
+        recorder = AudioRecorder()
+        audio_manager = AudioManager(
+            capturer, candidate_stt, interviewer_stt, recorder,
+            recordings_dir=str(settings.RECORDINGS_DIR),
+        )
 
     # ── InterviewController (new) ─────────────────────────────────────────────
     controller = InterviewController(

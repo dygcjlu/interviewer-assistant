@@ -303,7 +303,46 @@ messages.extend(self._history)  # 完整对话历史
 
 ---
 
-## 六、三层记忆体系全景
+## 六、ConversationLogger（对话持久化）
+
+**文件**：`src/storage/conversation_logger.py`
+
+ConversationLogger 将 Agent 与 LLM 之间的完整消息列表以 JSONL 格式持久化到本地文件，用于调试和事后审查。它**不影响运行时逻辑**，写入通过 `asyncio.to_thread` 在后台完成，不阻塞事件循环。
+
+### 6.1 文件路径
+
+| Agent | 文件路径 |
+|---|---|
+| MainAgent | `conversations/main_agent.jsonl` |
+| InterviewAgent | `conversations/interview_agent_{session_id}.jsonl` |
+
+`conversations/` 目录已加入 `.gitignore`，不提交到版本库。
+
+### 6.2 JSONL 格式
+
+每行一个 JSON 对象：
+```json
+{"role": "system", "content": "你是一位专业的技术面试助手...", "timestamp": "2026-05-20T12:00:00"}
+{"role": "user",   "content": "请解析简历 resumes/xxx.pdf", "timestamp": "2026-05-20T12:00:01"}
+{"role": "assistant", "tool_calls": [...], "timestamp": "2026-05-20T12:00:02"}
+{"role": "tool", "tool_call_id": "call_xxx", "content": "...", "timestamp": "2026-05-20T12:00:03"}
+```
+
+### 6.3 两种写入模式
+
+| 方法 | 用途 |
+|---|---|
+| `append(messages)` | 追加一组消息（InterviewAgent 每轮追问后调用） |
+| `append_with_system(system_content, messages)` | 若 system prompt 与上次不同，先写入 system 行，再写其余消息（MainAgent 每轮对话后调用，自动去重 system 行） |
+
+### 6.4 生命周期
+
+- **MainAgent**：`ConversationLogger` 在 `__init__` 时创建（单例），随服务存活；`append_with_system` 在每次 `handle_chat()` 完成后调用
+- **InterviewAgent**：`ConversationLogger` 在 `on_activate(session)` 时创建（会话级），写入 `conversations/interview_agent_{session_id}.jsonl`；每次 `generate_suggestion()` 完成后调用 `append`
+
+---
+
+## 七、三层记忆体系全景
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -327,5 +366,9 @@ messages.extend(self._history)  # 完整对话历史
 ├─────────────┼───────────────────────────────────────────────────────┤
 │ 追问上下文  │ InterviewAgent._history：最近 10 轮追问建议记录        │
 │             │ → 追加在 PromptBuilder 七层之后                       │
+├─────────────┼───────────────────────────────────────────────────────┤
+│ 调试持久化  │ ConversationLogger：Agent ↔ LLM 完整消息 JSONL         │
+│             │ conversations/main_agent.jsonl                        │
+│             │ conversations/interview_agent_{session_id}.jsonl      │
 └─────────────┴───────────────────────────────────────────────────────┘
 ```
