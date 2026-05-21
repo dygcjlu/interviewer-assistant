@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
+
+from ..logging import truncate
 
 if TYPE_CHECKING:
     from ..agents.main_agent import MainAgent
@@ -57,6 +60,12 @@ async def delegate_to_resume_agent(pdf_path: str, instructions: str = "") -> str
     if _resume_agent is None or _controller is None:
         return json.dumps({"error": "服务未初始化"}, ensure_ascii=False)
 
+    logger.info(
+        "delegating to resume_agent pdf_path=%s instructions=%s",
+        pdf_path,
+        truncate(instructions),
+    )
+    start = time.perf_counter()
     try:
         result = await _resume_agent.execute(pdf_path, instructions)
         # Update controller session candidate with all parsed fields
@@ -92,7 +101,18 @@ async def delegate_to_resume_agent(pdf_path: str, instructions: str = "") -> str
                 except Exception:
                     logger.exception("delegate_to_resume_agent: persist failed")
 
-        return json.dumps(result, ensure_ascii=False, default=str)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        profile = result.get("profile") or {}
+        questions_count = len(result.get("questions") or [])
+        summary = {"name": profile.get("name"), "questions_count": questions_count}
+        result_json = json.dumps(result, ensure_ascii=False, default=str)
+        logger.info(
+            "resume_agent result summary=%s elapsed_ms=%.1f result=%s",
+            summary,
+            elapsed_ms,
+            truncate(result_json),
+        )
+        return result_json
     except Exception as exc:
         logger.exception("delegate_to_resume_agent failed")
         return json.dumps({"error": str(exc)}, ensure_ascii=False)

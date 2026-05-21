@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.logging import bind_op, text_summary
+from src.logging import bind_op, text_summary, truncate
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from ..framework.prompt_builder import AgentConfig, PromptBuilder
@@ -93,7 +93,7 @@ class EvalAgent(BaseAgent):
             return AgentResponse(success=False, error="尚无对话记录，无法生成评价")
 
         logger.info(
-            "EvalAgent generate_eval start session_id=%s rounds_count=%d",
+            "eval_start session_id=%s rounds_count=%d",
             session.id,
             len(session.rounds),
         )
@@ -194,14 +194,15 @@ class EvalAgent(BaseAgent):
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
-            "EvalAgent generate_eval done session_id=%s report_id=%s "
-            "overall_score=%.1f recommendation=%s dimensions_count=%d elapsed_ms=%.1f",
+            "eval_done session_id=%s report_id=%s overall_score=%.1f "
+            "recommendation=%s dimensions_count=%d elapsed_ms=%.1f summary=%s",
             session.id,
             report.id,
             report.overall_score,
             report.recommendation,
             len(report.dimensions),
             elapsed_ms,
+            truncate(report.summary),
         )
         return AgentResponse(success=True, data={"report": report})
 

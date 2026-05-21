@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-import fitz  # PyMuPDF
+import pymupdf4llm
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +15,12 @@ def _extract_pdf_text(file_path: str) -> dict:
     path = Path(file_path)
     if not path.exists():
         return {"error": f"File not found: {file_path}"}
-    doc = fitz.open(str(path))
-    page_count = len(doc)
-    text = "\n".join(page.get_text() for page in doc)
-    doc.close()
-    return {"text": text, "pages": page_count}
+    md_text = pymupdf4llm.to_markdown(str(path))
+    return {"text": md_text, "pages": None}
 
 
 async def parse_resume_pdf(file_path: str) -> str:
-    """从 PDF 文件提取文本，返回 JSON 字符串供 LLM 处理。"""
+    """从 PDF 文件提取结构化 Markdown，返回 JSON 字符串供 LLM 处理。"""
     try:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _extract_pdf_text, file_path)

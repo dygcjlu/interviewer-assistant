@@ -12,6 +12,7 @@ from src.logging.context import (
     request_id_var,
     session_id_var,
     text_summary,
+    truncate,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "session_id_var",
     "setup_logging",
     "text_summary",
+    "truncate",
 ]

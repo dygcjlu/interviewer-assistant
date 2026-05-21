@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import AsyncIterator, TYPE_CHECKING
 
-from src.logging import bind_op, text_summary
+from src.logging import bind_op, text_summary, truncate
 
 from .base import AgentRequest, AgentResponse, BaseAgent
 from ..audio.trigger import SuggestionTrigger
@@ -287,14 +287,15 @@ class InterviewAgent(BaseAgent):
 
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
-                "InterviewAgent generate_suggestion done request_id=%d "
-                "action=%s output_chars=%d prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f",
+                "suggestion_generated request_id=%d action=%s output_chars=%d "
+                "prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f text=%s",
                 request_id,
                 action,
                 len(suggestion_text),
                 prompt_tokens,
                 completion_tokens,
                 elapsed_ms,
+                truncate(suggestion_text),
             )
 
             # skip 不产生任何输出

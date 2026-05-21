@@ -98,10 +98,10 @@ class TranscriptionManager:
         self._session.rounds.append(round_)
         self._recorder.mark_round_boundary(self._round_number)
         logger.info(
-            "TranscriptionManager: finalized round %d (ivr=%d chars, cand=%d chars)",
+            "round_finalized round=%d ivr=%s cand=%s",
             self._round_number,
-            len(self._interviewer_text),
-            len(self._candidate_text),
+            self._interviewer_text[:100],
+            self._candidate_text[:100],
         )
         self._round_number += 1
         self._interviewer_text = ""

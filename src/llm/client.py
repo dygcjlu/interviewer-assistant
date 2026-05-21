@@ -4,11 +4,12 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, AsyncIterator
 
-from src.logging import bind_op
+from src.logging import bind_op, truncate
 
 import openai
 import tiktoken
@@ -64,23 +65,27 @@ class OpenAICompatibleClient:
                 }
                 if payload_tools:
                     kwargs["tools"] = payload_tools
+                messages_json = json.dumps(payload_messages, ensure_ascii=False, default=str)
                 logger.info(
-                    "LLM chat start model=%s messages=%d tools=%s attempt=%d/%d",
+                    "llm_request model=%s messages=%d tools=%s attempt=%d/%d messages_body=%s",
                     self._config.model,
                     len(payload_messages),
                     bool(payload_tools),
                     attempt + 1,
                     attempts,
+                    truncate(messages_json),
                 )
                 response = await self._client.chat.completions.create(**kwargs)
                 result = self._build_chat_response(response)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 logger.info(
-                    "LLM chat done model=%s prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f",
+                    "llm_response model=%s prompt_tokens=%d completion_tokens=%d "
+                    "elapsed_ms=%.1f content=%s",
                     self._config.model,
                     result.prompt_tokens,
                     result.completion_tokens,
                     elapsed_ms,
+                    truncate(result.content),
                 )
                 return result
             except openai.RateLimitError as exc:

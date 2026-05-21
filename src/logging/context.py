@@ -38,3 +38,10 @@ def text_summary(text: str, preview_len: int = 80) -> str:
     if length <= preview_len:
         return f"len={length}"
     return f"len={length} preview={text[:preview_len]!r}"
+
+
+def truncate(text: str, max_len: int = 1000) -> str:
+    """截断长文本至 max_len 字，超出部分标注 ...(truncated)。"""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "...(truncated)"

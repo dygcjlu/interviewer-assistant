@@ -4,10 +4,12 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from ..llm.protocol import ToolFunction, ToolSchema
+from ..logging import truncate
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,8 @@ class ToolRegistry:
         except json.JSONDecodeError as exc:
             return json.dumps({"error": f"Invalid JSON arguments: {exc}"})
 
+        logger.info("tool_call: %s args=%s", name, truncate(arguments or "{}"))
+        start = time.perf_counter()
         try:
             if entry.pre_hook:
                 entry.pre_hook(**parsed_args)
@@ -89,9 +93,18 @@ class ToolRegistry:
             logger.exception("ToolRegistry: error dispatching tool %r", name)
             return json.dumps({"error": f"Tool {name!r} raised an exception"})
 
+        elapsed_ms = (time.perf_counter() - start) * 1000
         if isinstance(result, str):
-            return result
-        return json.dumps(result, ensure_ascii=False, default=str)
+            serialized = result
+        else:
+            serialized = json.dumps(result, ensure_ascii=False, default=str)
+        logger.info(
+            "tool_result: %s result=%s elapsed_ms=%.1f",
+            name,
+            truncate(serialized),
+            elapsed_ms,
+        )
+        return serialized
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
