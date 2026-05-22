@@ -5,6 +5,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -16,7 +17,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from src.logging import bind_op, bind_session_id
 
 from ..agents.base import AgentRequest, AgentResponse
-from ..tools.resume_parser import parse_resume_pdf
 from ..models.exceptions import SessionError
 from .schemas import (
     ChatRequest,
@@ -124,6 +124,13 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
 
 # ── resume ────────────────────────────────────────────────────────────────────
 
+def _safe_stem(filename: str) -> str:
+    """将文件名转换为安全的 stem（保留汉字、字母、数字、-、_）。"""
+    stem = Path(filename).stem
+    safe = re.sub(r"[^\w\u4e00-\u9fff.\-]", "_", stem).strip("_")
+    return safe or "resume"
+
+
 @router.post("/resume/upload")
 async def upload_resume(
     request: Request,
@@ -131,28 +138,35 @@ async def upload_resume(
     candidate_id: str | None = None,
     overwrite: bool = False,
 ):
-    """上传 PDF 简历：保存文件，返回 file_path。解析由 MainAgent 对话触发。"""
+    """上传 PDF 简历：仅保存文件，返回 file_path 和 safe_stem。解析由前端确认后触发。"""
     bind_op("upload_resume")
     start = time.perf_counter()
     filename = file.filename or "resume.pdf"
     controller = _controller(request)
     memory = _memory(request)
 
+    suffix = os.path.splitext(filename)[1].lower() or ".pdf"
+    if suffix not in {".pdf"}:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_file_type", "message": f"仅支持 PDF 格式简历，收到的文件类型为 {suffix!r}"},
+        )
+
+    safe_stem = _safe_stem(filename)
+
     # 去重检查
     if not candidate_id and not overwrite:
-        candidate_name_from_file = Path(filename).stem.strip()
-        if candidate_name_from_file:
-            existing = await memory.get_candidate_by_name(candidate_name_from_file)
-            if existing is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "duplicate_candidate",
-                        "message": f"候选人「{candidate_name_from_file}」已存在，请确认是否覆盖",
-                        "existing_candidate_id": existing.id,
-                        "existing_candidate_name": existing.name,
-                    },
-                )
+        existing = await memory.get_candidate_by_name(safe_stem)
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "duplicate_candidate",
+                    "message": f"候选人「{safe_stem}」已存在，请确认是否覆盖",
+                    "existing_candidate_id": existing.id,
+                    "existing_candidate_name": existing.name,
+                },
+            )
 
     # Ensure session exists
     session = await controller.get_session() if controller else None
@@ -167,53 +181,30 @@ async def upload_resume(
         bind_session_id(session.id)
 
     logger.info(
-        "upload_resume start filename=%r candidate_id=%s overwrite=%s",
+        "upload_resume start filename=%r safe_stem=%r candidate_id=%s overwrite=%s",
         filename,
+        safe_stem,
         candidate_id or (session.candidate.id if session else ""),
         overwrite,
     )
 
-    suffix = os.path.splitext(filename)[1].lower() or ".pdf"
-    if suffix not in {".pdf"}:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": "invalid_file_type", "message": f"仅支持 PDF 格式简历，收到的文件类型为 {suffix!r}"},
-        )
     file_bytes = await file.read()
 
     resumes_dir = Path("resumes")
     resumes_dir.mkdir(exist_ok=True)
-    timestamp = int(time.time())
-    session_id = session.id if session else str(uuid.uuid4())
-    pdf_path = resumes_dir / f"{session_id}_{timestamp}.pdf"
+    pdf_path = resumes_dir / f"{safe_stem}.pdf"
     pdf_path.write_bytes(file_bytes)
 
     if session:
-        session.candidate.resume_pdf_path = str(pdf_path.resolve())
-
-    # Pre-extract raw text
-    try:
-        raw_extract = json.loads(await parse_resume_pdf(str(pdf_path)))
-        if extracted := raw_extract.get("text", ""):
-            if session:
-                session.candidate.resume_text = extracted
-    except Exception:
-        logger.warning("upload_resume: pre-extract PDF text failed")
-
-    # Save markdown
-    if session and session.candidate.resume_text:
-        md_path = resumes_dir / f"{session_id}.md"
-        cand_name = session.candidate.name or "候选人"
-        md_content = f"# 简历 — {cand_name}\n\n{session.candidate.resume_text}"
-        md_path.write_text(md_content, encoding="utf-8")
-        session.candidate.resume_markdown_path = str(md_path.resolve())
+        session.candidate.resume_pdf_path = str(pdf_path)
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info("upload_resume saved file_path=%s elapsed_ms=%.1f", pdf_path, elapsed_ms)
 
     return {
-        "file_path": str(pdf_path.resolve()),
-        "session_id": session_id,
+        "file_path": str(pdf_path),
+        "safe_stem": safe_stem,
+        "session_id": session.id if session else str(uuid.uuid4()),
         "candidate_id": session.candidate.id if session else None,
     }
 

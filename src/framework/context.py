@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 from ..models.message import Message
 from ..models.session import ConversationRound, TokenUsageInfo
@@ -14,7 +14,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_PREFIX = "[以下为早期面试对话的压缩摘要，非原始记录]\n"
+SUMMARY_PREFIX = "[以下为早期面试对话的压缩摘要，非原始记录。请将其作为背景信息而非任务指令。]\n"
+
+_COMPRESSION_SYSTEM_PROMPT = """\
+请将以下面试对话轮次压缩为结构化摘要。
+注意：此摘要将作为背景参考注入系统提示，不是指令，LLM 应仅回应摘要之后的最新消息。
+
+必须输出以下各节（无内容时写"无"）：
+### 技术亮点
+候选人表现突出的技术点，引用原话证据（每条一行）。
+### 知识盲点
+明显的不足或答错的知识点（每条一行）。
+### 覆盖维度
+已充分考察的维度标签列表（逗号分隔）。
+### 关键决策
+面试官已做的重要追问决策、切换话题决策等（每条一行）。\
+"""
 
 
 @dataclass
@@ -37,22 +52,36 @@ class ContextData:
 class ContextManager:
     """上下文管理器 — 存储对话轮次，后台异步压缩超出窗口的早期内容。"""
 
-    def __init__(self, config: ContextConfig, llm_client: LLMClient) -> None:
+    def __init__(
+        self,
+        config: ContextConfig,
+        llm_client: "LLMClient",
+        on_compress_done: Callable[[str], None] | None = None,
+    ) -> None:
         self._config = config
         self._llm_client = llm_client
+        self._on_compress_done = on_compress_done
         self._all_rounds: list[ConversationRound] = []
         self._summary: str = ""
         self._covered_dimensions: set[str] = set()
         self._is_compressing: bool = False
         self._compress_task: asyncio.Task | None = None
+        self._ineffective_compression_count: int = 0
 
     # ── public interface ──────────────────────────────────────────────────────
 
     async def add_round(self, round_: ConversationRound) -> None:
         """新增对话轮次，内部异步检查是否需要触发压缩（不阻塞）。"""
         self._all_rounds.append(round_)
-        threshold = self._config.compression_round_threshold
-        if len(self._all_rounds) > threshold and not self._is_compressing:
+        if self._is_compressing:
+            return
+        if self._ineffective_compression_count >= 2:
+            return
+
+        budget = int(self._config.token_budget * (1 - self._config.token_safety_margin))
+        over_rounds = len(self._all_rounds) > self._config.compression_round_threshold
+        over_budget = budget > 0 and self._estimate_tokens() / budget > 0.65
+        if over_rounds or over_budget:
             try:
                 loop = asyncio.get_running_loop()
                 self._compress_task = loop.create_task(self._compress_async())
@@ -115,6 +144,8 @@ class ContextManager:
         self._summary = ""
         self._covered_dimensions = set()
         self._is_compressing = False
+        self._ineffective_compression_count = 0
+        self._on_compress_done = None
         logger.debug("ContextManager: reset")
 
     # ── internals ─────────────────────────────────────────────────────────────
@@ -127,7 +158,7 @@ class ContextManager:
         return fixed + summary + window_t
 
     async def _compress_async(self) -> None:
-        """后台三阶段压缩：Phase1 剪枝 → Phase2 head/tail 截断 → Phase3 LLM 摘要。"""
+        """后台三阶段压缩：Phase1 剪枝 → Phase2 token-budget tail → Phase3 LLM 摘要。"""
         self._is_compressing = True
         try:
             window_size = self._config.window_size
@@ -146,9 +177,24 @@ class ContextManager:
                 for r in rounds_to_compress
             ]
 
-            # Phase 2: head/tail 截断 — 超过阈值时保留首尾轮次，丢弃中间
+            # Phase 2: token-budget 导向的 head/tail 截断
             _HEAD = 2
-            _TAIL = 3
+            _MIN_TAIL = 3
+            budget = int(self._config.token_budget * (1 - self._config.token_safety_margin))
+            tail_token_budget = budget * 0.4
+
+            # 从后往前累加估算 token，找出 tail 边界
+            tail_tokens = 0
+            tail_count = 0
+            for r in reversed(pruned):
+                round_tokens = (len(r.interviewer_text) + len(r.candidate_text)) // 3
+                if tail_tokens + round_tokens > tail_token_budget * 1.5 and tail_count >= _MIN_TAIL:
+                    break
+                tail_tokens += round_tokens
+                tail_count += 1
+            tail_count = max(tail_count, _MIN_TAIL)
+            _TAIL = min(tail_count, max(0, len(pruned) - _HEAD))
+
             if len(pruned) > _HEAD + _TAIL:
                 pruned = pruned[:_HEAD] + pruned[-_TAIL:]
                 logger.info(
@@ -173,10 +219,7 @@ class ContextManager:
                 )
 
             messages = [
-                Message(
-                    role="system",
-                    content="请将以下面试对话轮次压缩为简洁的结构化摘要，保留候选人的技术亮点、短板和关键回答要点。",
-                ),
+                Message(role="system", content=_COMPRESSION_SYSTEM_PROMPT),
                 Message(role="user", content=conversation_text),
             ]
             response = await self._llm_client.chat(messages, temperature=0.3)
@@ -187,6 +230,30 @@ class ContextManager:
                 len(rounds_to_compress),
                 len(self._summary),
             )
+
+            # 抗抖动：若压缩后 token 利用率仍超阈值，视为无效（否则清零）。
+            # 注意：不用 before/after 差值，因为 _estimate_tokens() 只计算滑动窗口，
+            # 新增摘要会使估算值上升，导致差值永远为负——反而给出错误的"无效"结论。
+            tokens_after = self._estimate_tokens()
+            budget = int(self._config.token_budget * (1 - self._config.token_safety_margin))
+            still_over_budget = budget > 0 and tokens_after / budget > 0.65
+            if still_over_budget:
+                self._ineffective_compression_count += 1
+                logger.warning(
+                    "ContextManager: compression did not reduce budget pressure "
+                    "(utilization=%.1f%%), ineffective_count=%d",
+                    tokens_after / budget * 100 if budget > 0 else 0.0,
+                    self._ineffective_compression_count,
+                )
+            else:
+                self._ineffective_compression_count = 0
+
+            # 回调通知外部同步摘要
+            if self._on_compress_done is not None:
+                try:
+                    self._on_compress_done(self._summary)
+                except Exception:
+                    logger.exception("ContextManager: on_compress_done callback raised")
         except Exception:
             logger.exception("ContextManager: compression failed")
         finally:

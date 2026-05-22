@@ -265,19 +265,6 @@ async def index() -> None:
             return
         user_in.value = ""
 
-        # @candidate: / @interviewer: → WS manual_input
-        lo = text.lower()
-        for prefix, source in (("@candidate:", "candidate"), ("@interviewer:", "interviewer")):
-            if lo.startswith(prefix):
-                clean = text[len(prefix):].strip()
-                if clean:
-                    label = "候选人" if source == "candidate" else "面试官"
-                    _bubble(chat_col, f"[{label}] {clean}", sent=True, name="你")
-                    await _scroll(chat_scroll)
-                    payload = json.dumps({"type": "manual_input", "source": source, "text": clean})
-                    await send_queue.put(payload)
-                return
-
         _bubble(chat_col, text, sent=True, name="你")
         await _scroll(chat_scroll)
 
@@ -704,15 +691,28 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
             return
 
     file_path = data.get("file_path", "")
+    safe_stem = data.get("safe_stem", "")
     cid = data.get("candidate_id", "")
     state["candidate_id"] = cid
 
-    # Trigger MainAgent to parse via chat
-    _bubble(chat_col, f"简历已上传，正在请求 AI 解析…", sent=False, name="Agent")
+    # 展示系统通知气泡，附带「解析简历」确认按钮
+    with chat_col:
+        with ui.card().classes("w-full bg-blue-50 q-pa-sm"):
+            ui.label(f"简历「{filename}」已保存。").classes("text-sm")
+            parse_btn = ui.button(
+                "解析简历",
+                on_click=lambda: asyncio.ensure_future(
+                    _trigger_parse(file_path, safe_stem, parse_btn, chat_col, chat_scroll)
+                ),
+            ).classes("q-mt-xs")
     await _scroll(chat_scroll)
 
-    # Send a chat message to MainAgent to trigger resume parsing
-    parse_msg = f"请解析刚上传的简历文件：{file_path}"
+
+async def _trigger_parse(file_path: str, safe_stem: str, btn, chat_col, chat_scroll) -> None:
+    """用户点击「解析简历」按钮后触发的解析请求。"""
+    btn.disable()
+    md_path = f"resumes/{safe_stem}.md"
+    parse_msg = f"简历 {file_path} 已就绪，请解析为 Markdown 并保存为 {md_path}"
     await _chat_stream(parse_msg, chat_col, chat_scroll)
 
 

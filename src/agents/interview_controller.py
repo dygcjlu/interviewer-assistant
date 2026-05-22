@@ -167,6 +167,13 @@ class InterviewController:
 
         await self._interview_agent.on_activate(self._session)
 
+        # Register compression callback so context_summary stays current mid-session
+        session_ref = self._session
+        if self._interview_agent.context_manager is not None:
+            self._interview_agent.context_manager._on_compress_done = (
+                lambda summary: setattr(session_ref, "context_summary", summary)
+            )
+
         broadcast = self._ws_sender
         self._interview_agent.attach_ws_sender(broadcast)
         trigger = self._interview_agent.suggestion_trigger
@@ -232,20 +239,6 @@ class InterviewController:
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info("stop_interview done elapsed_ms=%.1f", elapsed_ms)
-
-    # ── query methods for MainAgent tools ─────────────────────────────────────
-
-    def get_session_info(self) -> dict:
-        if self._session is None:
-            return {"stage": "idle", "session_id": None}
-        return {
-            "session_id": self._session.id,
-            "stage": self._session.stage.value,
-            "candidate_id": self._session.candidate.id,
-            "candidate_name": self._session.candidate.name,
-            "rounds_count": len(self._session.rounds),
-            "trigger_mode": self._session.metadata.trigger_mode,
-        }
 
     # ── WebSocket management ──────────────────────────────────────────────────
 

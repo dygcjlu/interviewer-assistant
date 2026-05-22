@@ -33,9 +33,8 @@ from src.llm.client import OpenAICompatibleClient
 from src.llm.config import LLMConfig
 from src.storage.database import Database
 from src.storage.memory_module import MemoryModule
-from src.tools.resume_parser import parse_resume_pdf, read_resume_markdown
-from src.tools.skill_tools import make_skill_tools
-from src.tools import main_agent_tools
+from src.tools import register_all
+from src.tools._context import ctx as tool_ctx
 from src.web.app import create_app
 import src.web.ui as _web_ui  # noqa: F401 — registers @ui.page("/") at import time
 
@@ -77,19 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Skills & Tools ─────────────────────────────────────────────────────────
     skill_loader = SkillLoader(SKILLS_DIR)
     tool_registry = ToolRegistry()
-
-    @tool_registry.register(description="解析候选人简历 PDF 文件，提取文本内容")
-    async def parse_resume(file_path: str) -> str:
-        return await parse_resume_pdf(file_path)
-
-    tool_registry.register(description="读取候选人简历 Markdown 文件的完整内容")(read_resume_markdown)
-
-    skills_list_fn, skill_view_fn = make_skill_tools(skill_loader)
-    tool_registry.register(description="列出可用面试技巧索引")(skills_list_fn)
-    tool_registry.register(description="查看指定面试技巧的完整内容")(skill_view_fn)
-
-    # Register MainAgent tools
-    main_agent_tools.register_tools(tool_registry)
+    register_all(tool_registry)
 
     # ── Framework ─────────────────────────────────────────────────────────────
     ctx_config = ContextConfig(
@@ -108,13 +95,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         name="resume",
         system_prompt=RESUME_AGENT_SYSTEM_PROMPT,
         skill_names=["resume_anchor"],
-        tool_names=["parse_resume", "read_resume_markdown", "skills_list", "skill_view"],
+        tool_names=["parse_resume_pdf", "file_read", "file_write", "skill_view"],
     )
     interview_config = AgentConfig(
         name="interview",
         system_prompt=INTERVIEW_AGENT_SYSTEM_PROMPT,
         skill_names=["deep_dive", "dimension_switch", "behavioral_probe"],
-        tool_names=["read_resume_markdown"],
+        tool_names=["file_read"],
     )
     eval_config = AgentConfig(
         name="eval",
@@ -179,15 +166,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     main_agent.bind_resume_agent(resume_agent)
     main_agent.bind_controller(controller)
 
-    # Wire up MainAgent tools with runtime references
-    main_agent_tools.setup_tools(
-        main_agent=main_agent,
-        resume_agent=resume_agent,
-        controller=controller,
-        memory_module=memory_module,
-        user_memory_path=str(USER_MEMORY_PATH),
-        prompt_builder=prompt_builder,
-    )
+    # 注入工具依赖（在所有组件创建完毕后）
+    tool_ctx.main_agent = main_agent
+    tool_ctx.resume_agent = resume_agent
+    tool_ctx.controller = controller
+    tool_ctx.memory_module = memory_module
+    tool_ctx.prompt_builder = prompt_builder
+    tool_ctx.skill_loader = skill_loader
+    tool_ctx.user_memory_path = USER_MEMORY_PATH
 
     # Inject dependencies into NiceGUI UI module and FastAPI app state
     _web_ui.set_dependencies(memory_module, llm_client, tool_registry, settings)

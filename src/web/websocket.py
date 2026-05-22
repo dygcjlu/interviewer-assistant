@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
-
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.logging import bind_connection_id, bind_op, bind_session_id, text_summary
@@ -77,35 +75,6 @@ async def _dispatch(msg: dict, controller, ws_sender, connection_id: str) -> Non
         )
         if not resp.success:
             await ws_sender({"type": "error", "code": "trigger_error", "message": resp.error or "", "recoverable": True})
-
-    elif msg_type == "manual_input":
-        source = msg.get("source", "interviewer")
-        text = msg.get("text", "")
-        session = await controller.get_session()
-        if session is None or not text:
-            logger.debug("WebSocket manual_input skipped no_session_or_empty")
-            return
-        bind_session_id(session.id)
-        logger.info(
-            "WebSocket manual_input source=%s %s",
-            source,
-            text_summary(text),
-        )
-        from ..audio.protocol import TranscriptSegment
-        tm = controller.transcription_manager
-        if tm is not None:
-            segment = TranscriptSegment(source=source, text=text, is_final=True, timestamp=datetime.now())
-            await tm.on_segment(segment)
-            if source == "candidate":
-                round_ = await tm.flush_pending_round()
-                rounds_count = len(session.rounds)
-                logger.info(
-                    "WebSocket manual_input flushed round=%s rounds_count=%d",
-                    round_.round_number if round_ else None,
-                    rounds_count,
-                )
-        else:
-            logger.warning("WebSocket manual_input no transcription_manager")
 
     elif msg_type == "set_trigger_mode":
         mode = msg.get("mode", "auto")

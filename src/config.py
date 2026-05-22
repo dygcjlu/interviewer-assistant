@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     CONTEXT_TOKEN_BUDGET: int = 80000
     CONTEXT_COMPRESSION_THRESHOLD: int = 8
 
+    # ResumeAgent ReAct 模式最大工具调用轮次
+    RESUME_AGENT_MAX_TOOL_ROUNDS: int = 15
+
     # 百度 ASR（实时语音识别）
     BAIDU_APP_ID: str = ""
     BAIDU_API_KEY: str = ""

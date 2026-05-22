@@ -400,9 +400,21 @@ class MemoryModule:
                     scores_payload = json.loads(report_row.get("scores_json") or "{}")
                     overall_score = float(scores_payload.get("overall_score")) if scores_payload.get("overall_score") is not None else None
                 except (json.JSONDecodeError, TypeError, ValueError):
+                    scores_payload = {}
                     overall_score = None
                 recommendation = report_row.get("recommendation")
-                key_findings = report_row.get("full_report") or ""
+                # Build concise key_findings from structured fields; fall back to
+                # truncated full_report only when structured data is unavailable.
+                parts: list[str] = []
+                if scores_payload.get("strengths"):
+                    parts.append("优势: " + "; ".join(scores_payload["strengths"][:3]))
+                if scores_payload.get("weaknesses"):
+                    parts.append("不足: " + "; ".join(scores_payload["weaknesses"][:3]))
+                if parts:
+                    key_findings = "，".join(parts)
+                else:
+                    full_report = report_row.get("full_report") or ""
+                    key_findings = full_report[:200]
 
             start_dt = _parse_dt(iv.get("start_time")) or datetime.now()
             summaries.append(
@@ -550,7 +562,7 @@ class MemoryModule:
         except json.JSONDecodeError:
             existing = {}
 
-        insights: dict[str, Any] = {
+        new_insight: dict[str, Any] = {
             "interview_id": session.id,
             "generated_at": report.generated_at.isoformat(),
             "overall_score": report.overall_score,
@@ -561,14 +573,19 @@ class MemoryModule:
                 d.dimension: d.score for d in report.dimensions
             },
         }
-        existing["last_interview_insights"] = insights
+
+        # Prepend new insight and keep only the most recent 3 entries
+        insights_list: list[dict[str, Any]] = existing.get("interview_insights_list", [])
+        insights_list.insert(0, new_insight)
+        existing["interview_insights_list"] = insights_list[:3]
 
         await self._candidates.update_profile(
             id=candidate_id,
             profile_json=json.dumps(existing, ensure_ascii=False),
         )
         logger.info(
-            "consolidate_memory: updated candidate %s with insights from %s",
+            "consolidate_memory: updated candidate %s with insights from %s (%d total)",
             candidate_id,
             session.id,
+            len(existing["interview_insights_list"]),
         )

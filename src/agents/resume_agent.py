@@ -1,12 +1,10 @@
-"""ResumeAgent — 简历解析与面试题目生成。"""
+"""ResumeAgent — 任务驱动的 ReAct 循环，负责简历解析与面试题目生成。"""
 from __future__ import annotations
 
-import dataclasses
 import json
 import logging
 
 from .base import AgentRequest, AgentResponse, BaseAgent
-from ..models.candidate import CandidateProfile, Education, ProjectExperience, WorkExperience
 from ..models.message import Message
 from ..models.session import InterviewSession
 
@@ -14,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class ResumeAgent(BaseAgent):
-    """简历分析 Agent — 解析 PDF、生成题目清单。"""
+    """简历分析 Agent — ReAct 模式，通过工具自主完成任务。"""
 
     async def on_activate(self, session: InterviewSession) -> None:
         logger.info("ResumeAgent activated for session %s", session.id)
@@ -22,18 +20,40 @@ class ResumeAgent(BaseAgent):
     async def on_deactivate(self, session: InterviewSession) -> None:
         logger.info("ResumeAgent deactivated for session %s", session.id)
 
-    async def execute(self, pdf_path: str, instructions: str = "") -> dict:
-        """直接调用入口 — 由 MainAgent 工具同步调用。
+    async def execute(self, task: str) -> dict:
+        """ReAct 入口 — 由 dispatch_to_agent 工具调用。
+
+        Args:
+            task: 自然语言任务描述，例如：
+                  "将 resumes/张三.pdf 解析为 Markdown 并保存为 resumes/张三.md"
 
         Returns:
-            {"profile": dict, "questions": list[dict]}
+            {"type": "parse_done", ...} | {"type": "questions_done", ...} | {"type": "error", ...}
         """
-        from ..models.session import InterviewSession, InterviewStage, SessionMetadata, InterviewQuestion
+        from ..config import get_settings
+        settings = get_settings()
+        max_rounds = settings.RESUME_AGENT_MAX_TOOL_ROUNDS
+
+        messages = self._build_messages(task)
+        try:
+            result_text = await self._run_with_tools(messages, max_tool_rounds=max_rounds)
+            return _extract_json(result_text)
+        except Exception as exc:
+            logger.exception("ResumeAgent.execute failed task=%r", task)
+            return {"type": "error", "message": str(exc)}
+
+    async def handle_request(self, request: AgentRequest) -> AgentResponse:
+        """兼容 BaseAgent 接口（不对外使用）。"""
+        return AgentResponse(success=False, error="ResumeAgent 只通过 dispatch_to_agent 调用")
+
+    def _build_messages(self, task: str) -> list[Message]:
+        from ..framework.prompt_builder import AgentConfig
+        from ..models.session import InterviewSession, InterviewStage, SessionMetadata
+        from ..models.candidate import CandidateProfile
         import uuid
         from datetime import datetime
 
-        # Create a lightweight session for this execution
-        session = InterviewSession(
+        dummy_session = InterviewSession(
             id=str(uuid.uuid4()),
             candidate=CandidateProfile(id=str(uuid.uuid4()), name=""),
             question_plan=[],
@@ -44,187 +64,9 @@ class ResumeAgent(BaseAgent):
             working_notes="",
             metadata=SessionMetadata(candidate_id="", start_time=datetime.now()),
         )
-
-        # Parse resume
-        parse_request = AgentRequest(
-            type="parse_resume",
-            payload={"file_path": pdf_path},
-            session=session,
-        )
-        parse_resp = await self._parse_resume(parse_request)
-        if not parse_resp.success:
-            raise RuntimeError(f"简历解析失败：{parse_resp.error}")
-
-        profile_data = parse_resp.data.get("profile_data", {}) if parse_resp.data else {}
-
-        # Generate questions
-        q_request = AgentRequest(
-            type="generate_questions",
-            payload={},
-            session=session,
-        )
-        q_resp = await self._generate_questions(q_request)
-        questions = q_resp.data.get("questions", []) if q_resp.success and q_resp.data else []
-
-        return {
-            "profile": profile_data,
-            "questions": questions,
-            "candidate": dataclasses.asdict(session.candidate),
-        }
-
-    async def handle_request(self, request: AgentRequest) -> AgentResponse:
-        if request.type == "parse_resume":
-            return await self._parse_resume(request)
-        if request.type == "generate_questions":
-            return await self._generate_questions(request)
-        return AgentResponse(
-            success=False, error=f"Unknown request type: {request.type!r}"
-        )
-
-    # ── internals ─────────────────────────────────────────────────────────────
-
-    async def _parse_resume(self, request: AgentRequest) -> AgentResponse:
-        file_path = request.payload.get("file_path", "")
-        if not file_path:
-            return AgentResponse(success=False, error="缺少必填参数 file_path")
-        logger.info("ResumeAgent parse_resume start file_path=%r", file_path)
-
-        messages = self.prompt_builder.build(request.session, self.config)
-        messages.append(
-            Message(
-                role="user",
-                content=(
-                    f"请解析候选人简历文件：{file_path}\n"
-                    "请调用 parse_resume 工具读取 PDF 内容，"
-                    "然后以 JSON 格式输出包含以下字段的候选人结构化信息：\n"
-                    "name, email, phone, age（整数，无则 null）, "
-                    "education, work_experience, skills, projects, resume_summary, "
-                    "years_of_experience（总工作年限整数，无则 null）, "
-                    "current_position（当前/最近职位字符串，无则 null）"
-                ),
-            )
-        )
-
-        try:
-            result_text = await self._run_with_tools(messages)
-            if not result_text or not result_text.strip():
-                raise ValueError("LLM 未返回任何内容，请检查工具调用是否正常")
-            data = _extract_json(result_text)
-            _update_candidate_from_data(request.session.candidate, data)
-            logger.info(
-                "ResumeAgent parse_resume done candidate_name=%r",
-                request.session.candidate.name or "",
-            )
-            return AgentResponse(
-                success=True,
-                data={"profile_data": data, "file_path": file_path},
-            )
-        except Exception as exc:
-            logger.exception("ResumeAgent: parse_resume failed")
-            return AgentResponse(success=False, error=str(exc))
-
-    async def _generate_questions(self, request: AgentRequest) -> AgentResponse:
-        logger.info("ResumeAgent generate_questions start")
-        candidate = request.session.candidate
-        profile_json = json.dumps(
-            dataclasses.asdict(candidate), ensure_ascii=False, default=str
-        )
-        messages = self.prompt_builder.build(request.session, self.config)
-        messages.append(
-            Message(
-                role="user",
-                content=(
-                    "请根据以下候选人结构化信息生成 8-12 道面试题目清单。\n"
-                    "仅输出 JSON 数组，不要调用任何工具。每道题目必须包含字段：\n"
-                    '- dimension（如"项目经验"、"系统设计"）\n'
-                    '- question（题目正文）\n'
-                    '- follow_ups（2-3 个追问，字符串数组）\n'
-                    '- difficulty（easy / medium / hard）\n\n'
-                    f"候选人信息：\n{profile_json}"
-                ),
-            )
-        )
-
-        try:
-            response = await self.llm_client.chat(messages, tools=None)
-            result_text = response.content or ""
-            questions_data = _normalize_questions(_extract_json(result_text))
-            if not questions_data:
-                return AgentResponse(
-                    success=False,
-                    error="题目生成结果为空，请检查 LLM 返回格式",
-                )
-            logger.info(
-                "ResumeAgent generate_questions done questions_count=%d",
-                len(questions_data),
-            )
-            return AgentResponse(success=True, data={"questions": questions_data})
-        except Exception as exc:
-            logger.exception("ResumeAgent: generate_questions failed")
-            return AgentResponse(success=False, error=str(exc))
-
-
-def _update_candidate_from_data(candidate: CandidateProfile, data: dict | list) -> None:
-    """将 LLM 解析出的候选人信息写回 CandidateProfile（in-place）。"""
-    if not isinstance(data, dict):
-        return
-    if data.get("name"):
-        candidate.name = str(data["name"])
-    if data.get("email"):
-        candidate.email = str(data["email"])
-    if data.get("phone"):
-        candidate.phone = str(data["phone"])
-    if data.get("age") is not None:
-        try:
-            candidate.age = int(data["age"])
-        except (TypeError, ValueError):
-            pass
-    if data.get("resume_summary"):
-        candidate.resume_summary = str(data["resume_summary"])
-    if data.get("current_position") is not None:
-        candidate.current_position = str(data["current_position"])
-    if data.get("years_of_experience") is not None:
-        try:
-            candidate.years_of_experience = int(data["years_of_experience"])
-        except (TypeError, ValueError):
-            pass
-    if isinstance(data.get("skills"), list):
-        candidate.skills = [str(s) for s in data["skills"]]
-    if isinstance(data.get("education"), list):
-        candidate.education = [
-            Education(
-                school=e.get("school", ""),
-                degree=e.get("degree", ""),
-                major=e.get("major", ""),
-                start_year=e.get("start_year"),
-                end_year=e.get("end_year"),
-            )
-            for e in data["education"]
-            if isinstance(e, dict)
-        ]
-    if isinstance(data.get("work_experience"), list):
-        candidate.work_experience = [
-            WorkExperience(
-                company=w.get("company", ""),
-                title=w.get("title", ""),
-                duration=w.get("duration", ""),
-                description=w.get("description", ""),
-            )
-            for w in data["work_experience"]
-            if isinstance(w, dict)
-        ]
-    if isinstance(data.get("projects"), list):
-        candidate.projects = [
-            ProjectExperience(
-                name=p.get("name", ""),
-                role=p.get("role", ""),
-                tech_stack=list(p.get("tech_stack", [])),
-                description=p.get("description", ""),
-                highlights=list(p.get("highlights", [])),
-            )
-            for p in data["projects"]
-            if isinstance(p, dict)
-        ]
+        messages = self.prompt_builder.build(dummy_session, self.config)
+        messages.append(Message(role="user", content=task))
+        return messages
 
 
 def _normalize_questions(data: dict | list) -> list[dict]:
@@ -275,13 +117,11 @@ def _extract_json(text: str) -> dict | list:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
 
-    # 先整体尝试
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 找到第一个 { 或 [ 的位置，用 raw_decode 精确提取第一个完整 JSON 对象
     decoder = json.JSONDecoder()
     start_obj = text.find("{")
     start_arr = text.find("[")
@@ -293,7 +133,6 @@ def _extract_json(text: str) -> dict | list:
         obj, _ = decoder.raw_decode(text, start)
         return obj
     except json.JSONDecodeError:
-        # 最后尝试 rfind 截断
         end_obj = text.rfind("}")
         end_arr = text.rfind("]")
         end = max(end_obj, end_arr)
