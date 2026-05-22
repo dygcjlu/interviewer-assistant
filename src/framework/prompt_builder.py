@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .context import ContextManager
@@ -11,6 +10,7 @@ from .skill import SkillLoader
 from .tool_registry import ToolRegistry
 from ..models.message import Message
 from ..models.session import InterviewSession
+from ..storage.user_memory import UserMemoryStore
 
 if TYPE_CHECKING:
     from ..storage.memory_module import MemoryModule
@@ -33,27 +33,20 @@ class PromptBuilder:
         self,
         skill_loader: SkillLoader,
         tool_registry: ToolRegistry,
-        memory_module: MemoryModule,
+        memory_module: "MemoryModule",
         context_manager: ContextManager,
-        user_memory_path: Path | None = None,
+        user_memory_store: UserMemoryStore | None = None,
     ) -> None:
         self._skill_loader = skill_loader
         self._tool_registry = tool_registry
         self._memory_module = memory_module
         self._context_manager = context_manager
-        self._user_memory_path = user_memory_path
-        self._user_memory: str = ""
-        if user_memory_path:
-            self._load_user_memory()
-
-    def _load_user_memory(self) -> None:
-        if self._user_memory_path and self._user_memory_path.exists():
-            self._user_memory = self._user_memory_path.read_text(encoding="utf-8")
-        else:
-            self._user_memory = ""
+        self._user_memory_store = user_memory_store
+        self._user_memory: str = user_memory_store.render() if user_memory_store else ""
 
     def reload_user_memory(self) -> None:
-        self._load_user_memory()
+        """记忆更新后刷新（store 已是最新，无需重读磁盘）。"""
+        self._user_memory = self._user_memory_store.render() if self._user_memory_store else ""
         logger.info("PromptBuilder: reloaded user memory (%d chars)", len(self._user_memory))
 
     def build(self, session: InterviewSession, agent_config: AgentConfig) -> list[Message]:

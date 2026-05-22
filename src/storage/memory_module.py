@@ -465,8 +465,8 @@ class MemoryModule:
                 id=session.id,
                 end_time=end_time,
                 context_summary=session.context_summary,
-                recording_candidate_path="",
-                recording_interviewer_path="",
+                recording_candidate_path=session.metadata.recording_candidate_path,
+                recording_interviewer_path=session.metadata.recording_interviewer_path,
             )
 
         await self._rounds.delete_by_interview(session.id)
@@ -532,60 +532,3 @@ class MemoryModule:
         if row is None:
             return None
         return _eval_report_from_row(row)
-
-    # ─── 面试后记忆整合 ──────────────────────────────────────────────
-
-    async def consolidate_memory(self, session: InterviewSession) -> None:
-        candidate_id = session.metadata.candidate_id
-        if not candidate_id:
-            logger.debug("consolidate_memory skipped: no candidate_id on session")
-            return
-
-        report = await self.get_eval_report(session.id)
-        if report is None:
-            logger.debug(
-                "consolidate_memory skipped: no eval report for interview %s",
-                session.id,
-            )
-            return
-
-        candidate_row = await self._candidates.get_by_id(candidate_id)
-        if candidate_row is None:
-            logger.warning(
-                "consolidate_memory: candidate %s not found; skipping",
-                candidate_id,
-            )
-            return
-
-        try:
-            existing = json.loads(candidate_row.get("profile_json") or "{}")
-        except json.JSONDecodeError:
-            existing = {}
-
-        new_insight: dict[str, Any] = {
-            "interview_id": session.id,
-            "generated_at": report.generated_at.isoformat(),
-            "overall_score": report.overall_score,
-            "recommendation": report.recommendation,
-            "strengths": list(report.strengths),
-            "weaknesses": list(report.weaknesses),
-            "dimension_scores": {
-                d.dimension: d.score for d in report.dimensions
-            },
-        }
-
-        # Prepend new insight and keep only the most recent 3 entries
-        insights_list: list[dict[str, Any]] = existing.get("interview_insights_list", [])
-        insights_list.insert(0, new_insight)
-        existing["interview_insights_list"] = insights_list[:3]
-
-        await self._candidates.update_profile(
-            id=candidate_id,
-            profile_json=json.dumps(existing, ensure_ascii=False),
-        )
-        logger.info(
-            "consolidate_memory: updated candidate %s with insights from %s (%d total)",
-            candidate_id,
-            session.id,
-            len(existing["interview_insights_list"]),
-        )

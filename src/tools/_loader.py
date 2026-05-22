@@ -13,7 +13,7 @@ _LLM_TOOLS = [
     "file_read",
     "file_write",
     "dispatch_to_agent",
-    "update_user_memory",
+    "manage_user_memory",
     "skill_view",
 ]
 

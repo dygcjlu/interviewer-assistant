@@ -47,6 +47,8 @@ class SessionMetadata:
     total_rounds: int = 0
     total_prompt_tokens: int = 0
     total_completion_tokens: int = 0
+    recording_candidate_path: str = ""
+    recording_interviewer_path: str = ""
 
 
 @dataclass

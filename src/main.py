@@ -33,6 +33,7 @@ from src.llm.client import OpenAICompatibleClient
 from src.llm.config import LLMConfig
 from src.storage.database import Database
 from src.storage.memory_module import MemoryModule
+from src.storage.user_memory import UserMemoryStore
 from src.tools import register_all
 from src.tools._context import ctx as tool_ctx
 from src.web.app import create_app
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 USER_MEMORY_PATH = Path(__file__).parent.parent / "USER.md"
+USER_MEMORY_CHAR_LIMIT = 3000
 
 settings = get_settings()
 
@@ -63,6 +65,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await db.initialize()
     _db = db
     memory_module = MemoryModule(db)
+
+    user_memory_store = UserMemoryStore(USER_MEMORY_PATH, char_limit=USER_MEMORY_CHAR_LIMIT)
+    user_memory_store.load()
 
     llm_config = LLMConfig(
         api_key=settings.QWEN_API_KEY,
@@ -87,7 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     context_manager = ContextManager(ctx_config, llm_client)
     prompt_builder = PromptBuilder(
         skill_loader, tool_registry, memory_module, context_manager,
-        user_memory_path=USER_MEMORY_PATH,
+        user_memory_store=user_memory_store,
     )
 
     # ── Agents ────────────────────────────────────────────────────────────────
@@ -114,7 +119,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     interview_agent = InterviewAgent(
         interview_config, prompt_builder, llm_client, tool_registry, context_manager
     )
-    eval_agent = EvalAgent(eval_config, prompt_builder, llm_client, tool_registry, memory_module)
+    eval_agent = EvalAgent(
+        eval_config, prompt_builder, llm_client, tool_registry, memory_module,
+        user_memory_store=user_memory_store,
+    )
 
     # ── Audio ─────────────────────────────────────────────────────────────────
     if settings.MOCK_AUDIO:
@@ -161,7 +169,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         llm_client=llm_client,
         tool_registry=tool_registry,
         memory_module=memory_module,
-        user_memory_path=str(USER_MEMORY_PATH),
+        user_memory_store=user_memory_store,
     )
     main_agent.bind_resume_agent(resume_agent)
     main_agent.bind_controller(controller)
@@ -171,9 +179,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tool_ctx.resume_agent = resume_agent
     tool_ctx.controller = controller
     tool_ctx.memory_module = memory_module
+    tool_ctx.user_memory_store = user_memory_store
     tool_ctx.prompt_builder = prompt_builder
     tool_ctx.skill_loader = skill_loader
-    tool_ctx.user_memory_path = USER_MEMORY_PATH
 
     # Inject dependencies into NiceGUI UI module and FastAPI app state
     _web_ui.set_dependencies(memory_module, llm_client, tool_registry, settings)
@@ -205,5 +213,4 @@ if __name__ == "__main__":
     import uvicorn
 
     ui.run_with(app, title="面试助手", language="zh-CN")
-    logger.info("Starting on http://%s:%d", settings.HOST, settings.PORT)
     uvicorn.run(app, host=settings.HOST, port=settings.PORT)

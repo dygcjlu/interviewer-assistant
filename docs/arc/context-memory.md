@@ -120,55 +120,96 @@ utilization = total / (token_budget × 0.8)
 
 ---
 
-## 二、面试官全局记忆（USER.md）
+## 二、面试官全局记忆（UserMemoryStore + USER.md）
 
-**文件**：`USER.md`（项目根目录），`src/agents/main_agent.py`
+**文件**：`src/storage/user_memory.py`，`USER.md`（项目根目录）
 
-USER.md 是面试官的**持久化偏好文件**，是跨服务重启的唯一记忆载体。
+USER.md 是面试官的**持久化偏好文件**，是跨服务重启的唯一记忆载体。由 `UserMemoryStore` 管理，支持条目级精确操作。
 
-### 2.1 内容
+### 2.1 条目化存储格式
 
-面试官在与 MainAgent 对话时提供的任何岗位要求、技术偏好、面试风格等信息都会被追加写入，例如：
+USER.md 内容以 `ENTRY_DELIMITER`（`\n\n---\n\n`）分隔多个独立条目，每个条目是一段自由格式文本：
 
 ```markdown
-# 岗位要求
+招聘后端工程师，要求 3 年以上 Go 或 Python 经验，熟悉分布式系统设计
 
-招聘后端工程师，要求 3 年以上 Go 或 Python 经验，熟悉分布式系统设计...
+---
 
-## 面试风格偏好
-
-- 重点考察候选人的系统思维而非算法题
-- 对项目经历要多追问细节和量化指标
+面试风格偏好：重点考察候选人的系统思维，对项目经历要多追问细节和量化指标
 ```
 
-### 2.2 读写机制
+**向后兼容**：若 USER.md 不含 `---` 分隔符（旧格式），整个文件作为 `entries[0]` 加载。
 
-**读取（两个时机）**：
-1. 服务启动时 `MainAgent.__init__()` → `_load_user_memory()` 读入 `_layer2_user_memory`
-2. 工具调用更新后 → `reload_user_memory()` 重新读取，即时生效
+### 2.2 UserMemoryStore API
 
-**写入（工具调用）**：
+| 方法 | 说明 |
+|---|---|
+| `load()` | 从磁盘读取并解析条目列表 |
+| `render()` | 拼接所有条目为完整文本，供注入 system prompt |
+| `list_entries()` | 返回 `[{"index": 0, "content": "..."}]`，供 LLM 选择操作对象 |
+| `add(content)` | 追加新条目，返回索引；超出字符上限（默认 3000）时拒绝 |
+| `replace(index, content)` | 替换指定索引的条目 |
+| `remove(index)` | 删除指定索引的条目 |
+
+**原子写入**：所有写操作通过 `mkstemp + os.replace` 写入临时文件后原子替换，避免写入中途崩溃导致文件损坏。
+
+### 2.3 manage_user_memory 工具
+
+LLM 通过 `manage_user_memory` 工具（`src/tools/manage_user_memory.py`）操作 `UserMemoryStore`：
+
+```json
+{
+  "action": "list|add|replace|remove",
+  "index": "(replace/remove 时必填)",
+  "content": "(add/replace 时必填)"
+}
 ```
-面试官: "我们这次招的是 Go 方向，要求有 Kubernetes 运维经验"
+
+典型工作流：
+```
+面试官: "这次招的是 Go 方向，要求有 Kubernetes 运维经验"
     ↓
-MainAgent LLM 决定调用 update_user_memory(content="Go 方向，要求 K8s 运维经验")
+MainAgent LLM 调用 manage_user_memory(action="list")
+    → 返回现有条目列表
     ↓
-工具执行：追加写入 USER.md
+若已有相似条目：manage_user_memory(action="replace", index=0, content="Go 方向…")
+若无相似条目：  manage_user_memory(action="add", content="Go 方向…")
     ↓
-reload_user_memory()：刷新 _layer2_user_memory
+工具执行：调用 store.replace()/store.add()，原子写入 USER.md
+    ↓
+reload_user_memory()：MainAgent + PromptBuilder 刷新内存中的 _user_memory
     ↓
 下一次 _build_system_prompt() 时生效
 ```
 
-### 2.3 在 MainAgent 提示词中的位置
+### 2.4 在各 Agent 提示词中的位置
 
-USER.md 内容作为 MainAgent 系统提示的第 2 层：
+| Agent | 注入位置 |
+|---|---|
+| MainAgent | Layer 2（系统提示 `## 面试官偏好与岗位要求`） |
+| InterviewAgent/ResumeAgent | PromptBuilder Layer 5（固定区末尾 `## 面试官岗位要求与偏好`） |
+| EvalAgent | 独立 system 消息（`## 岗位要求与面试官偏好`） |
+
+### 2.5 Memory Nudge（后台记忆审查）
+
+MainAgent 内置 nudge 机制，每隔 `_NUDGE_INTERVAL`（默认 10 轮）自动触发一次后台记忆审查：
 
 ```
-## 面试官偏好与岗位要求
+每轮对话结束后：
+  _turns_since_nudge += 1
+  若 >= 10 → 设 _should_nudge = True
 
-{USER.md 全文}
+若当前轮 LLM 主动调用了 manage_user_memory → 重置计数器
+
+轮次正常完成且 _should_nudge：
+  asyncio.create_task(_background_memory_review())
 ```
+
+`_background_memory_review()` 流程：
+1. 取最近 12 条消息（约 6 轮对话）
+2. 发给 LLM，仅暴露 `manage_user_memory` 工具
+3. LLM 判断是否有值得保存的信息；若有则调用工具，若无则直接结束
+4. 最多迭代 3 次；捕获所有异常，不影响主流程
 
 ---
 
@@ -218,49 +259,13 @@ PromptBuilder.build() 时注入到 Layer 4
    关键发现: ...
 ```
 
-### 3.3 面试后记忆整合（consolidate_memory）
-
-面试结束 → EvalAgent 生成评价报告 → **异步**触发 `consolidate_memory(session)`：
-
-```python
-# EvalAgent._generate_eval() 末尾
-self._consolidate_task = asyncio.get_running_loop().create_task(
-    self._memory_module.consolidate_memory(session)
-)
-```
-
-`consolidate_memory()` 的工作：
-1. 查询本次面试的 `EvalReport`
-2. 将评价洞察写入候选人 `profile_json` 的 `last_interview_insights` 字段：
-
-```json
-{
-  "last_interview_insights": {
-    "interview_id": "...",
-    "generated_at": "2026-05-20T10:30:00",
-    "overall_score": 7.5,
-    "recommendation": "hire",
-    "strengths": ["系统设计思维清晰", "Redis 使用经验丰富"],
-    "weaknesses": ["算法基础偏弱"],
-    "dimension_scores": {
-      "技术深度": 8.0,
-      "系统设计": 7.5,
-      "项目经验": 7.0
-    }
-  }
-}
-```
-
-此整合不阻塞评价报告的返回，在后台异步完成。下次该候选人面试时，上述数据会作为 `history_summary` 的信息来源之一被加载。
-
-### 3.4 SQLite 数据持久化
+### 3.3 SQLite 数据持久化
 
 | 操作 | 时机 | 方法 |
 |---|---|---|
 | 保存候选人档案 | 简历解析完成后 | `save_candidate(profile)` |
 | 保存面试记录 | `close_session()` 时 | `save_interview(session)` |
 | 保存评价报告 | EvalAgent 生成后 | `save_eval_report(report)` |
-| 整合历史洞察 | 评价保存后异步 | `consolidate_memory(session)` |
 
 ---
 
@@ -350,25 +355,27 @@ ConversationLogger 将 Agent 与 LLM 之间的完整消息列表以 JSONL 格式
 ├─────────────┬───────────────────────────────────────────────────────┤
 │ 层级        │ 内容                                                   │
 ├─────────────┼───────────────────────────────────────────────────────┤
-│ 面试官记忆  │ USER.md：岗位要求、面试风格（文件持久化，跨重启）      │
+│ 面试官记忆  │ UserMemoryStore / USER.md：条目化存储岗位要求、面试风格 │
+│             │ 工具：manage_user_memory (add/replace/remove/list)      │
+│             │ 后台审查：MainAgent memory nudge（每 10 轮）            │
 ├─────────────┼───────────────────────────────────────────────────────┤
-│ 候选人长期  │ SQLite：历史面试记录、评价报告、洞察摘要                │
-│ 记忆        │ → 注入到 PromptBuilder Layer 4（history_summary）      │
+│ 候选人长期  │ SQLite：历史面试记录、评价报告                          │
+│ 记忆        │ → 注入到 PromptBuilder Layer 4（history_summary）       │
 ├─────────────┼───────────────────────────────────────────────────────┤
-│ 本次面试    │ InterviewSession（内存）：题目计划、维度覆盖状态        │
-│ 固定信息    │ → 注入到 PromptBuilder Layer 5（fixed zone）           │
+│ 本次面试    │ InterviewSession（内存）：题目计划、维度覆盖状态         │
+│ 固定信息    │ → 注入到 PromptBuilder Layer 5（fixed zone）            │
 ├─────────────┼───────────────────────────────────────────────────────┤
-│ 本次面试    │ ContextManager：_summary（LLM 压缩摘要）               │
-│ 历史上下文  │ → 注入到 PromptBuilder Layer 6                        │
+│ 本次面试    │ ContextManager：_summary（LLM 压缩摘要）                │
+│ 历史上下文  │ → 注入到 PromptBuilder Layer 6                         │
 │             ├───────────────────────────────────────────────────────┤
-│             │ ContextManager：_all_rounds 滑动窗口（最新 6 轮原文）  │
-│             │ → 注入到 PromptBuilder Layer 7                        │
+│             │ ContextManager：_all_rounds 滑动窗口（最新 6 轮原文）   │
+│             │ → 注入到 PromptBuilder Layer 7                         │
 ├─────────────┼───────────────────────────────────────────────────────┤
-│ 追问上下文  │ InterviewAgent._history：最近 10 轮追问建议记录        │
-│             │ → 追加在 PromptBuilder 七层之后                       │
+│ 追问上下文  │ InterviewAgent._history：最近 10 轮追问建议记录         │
+│             │ → 追加在 PromptBuilder 七层之后                        │
 ├─────────────┼───────────────────────────────────────────────────────┤
-│ 调试持久化  │ ConversationLogger：Agent ↔ LLM 完整消息 JSONL         │
-│             │ conversations/main_agent.jsonl                        │
-│             │ conversations/interview_agent_{session_id}.jsonl      │
+│ 调试持久化  │ ConversationLogger：Agent ↔ LLM 完整消息 JSONL          │
+│             │ conversations/main_agent.jsonl                         │
+│             │ conversations/interview_agent_{session_id}.jsonl       │
 └─────────────┴───────────────────────────────────────────────────────┘
 ```

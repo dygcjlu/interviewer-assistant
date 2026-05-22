@@ -1,13 +1,11 @@
 """EvalAgent — 评价报告生成。"""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.logging import bind_op, text_summary, truncate
@@ -19,6 +17,7 @@ from ..models.evaluation import DimensionScore, EvalReport
 from ..models.message import Message
 from ..models.session import ConversationRound, InterviewSession
 from ..storage.memory_module import MemoryModule
+from ..storage.user_memory import UserMemoryStore
 
 if TYPE_CHECKING:
     from ..llm.protocol import LLMClient
@@ -49,12 +48,11 @@ class EvalAgent(BaseAgent):
         llm_client: "LLMClient",
         tool_registry: ToolRegistry,
         memory_module: MemoryModule,
-        user_memory_path: str = "USER.md",
+        user_memory_store: UserMemoryStore | None = None,
     ) -> None:
         super().__init__(config, prompt_builder, llm_client, tool_registry)
         self._memory_module = memory_module
-        self._user_memory_path = Path(user_memory_path)
-        self._consolidate_task: asyncio.Task | None = None
+        self._user_memory_store = user_memory_store
 
     async def on_activate(self, session: InterviewSession) -> None:
         logger.info(
@@ -107,7 +105,8 @@ class EvalAgent(BaseAgent):
             text_summary(full_text, preview_len=80),
         )
 
-        estimated_tokens = int(len(full_text) / 1.5)
+        # 中文每字约 1 token，比英文更密集；保守估算避免漏判超窗口情况
+        estimated_tokens = len(full_text)
         if estimated_tokens <= _TOKEN_THRESHOLD:
             logger.info(
                 "EvalAgent generate_eval using single-call path estimated_tokens=%d",
@@ -177,21 +176,6 @@ class EvalAgent(BaseAgent):
                 report.id,
             )
 
-        # 异步整合长期记忆，不阻塞返回；持有 task 引用避免 GC 提前回收
-        try:
-            self._consolidate_task = asyncio.get_running_loop().create_task(
-                self._memory_module.consolidate_memory(session)
-            )
-            logger.info(
-                "EvalAgent generate_eval consolidate_memory scheduled session_id=%s",
-                session.id,
-            )
-        except RuntimeError:
-            logger.warning(
-                "EvalAgent generate_eval consolidate_memory skipped session_id=%s",
-                session.id,
-            )
-
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
             "eval_done session_id=%s report_id=%s overall_score=%.1f "
@@ -207,14 +191,9 @@ class EvalAgent(BaseAgent):
         return AgentResponse(success=True, data={"report": report})
 
     def _read_user_memory(self) -> str:
-        """读取 USER.md 岗位要求文件，失败时返回空字符串。"""
-        try:
-            if self._user_memory_path.exists():
-                return self._user_memory_path.read_text(encoding="utf-8")
-        except Exception:
-            logger.warning(
-                "EvalAgent: failed to read user memory file %s", self._user_memory_path
-            )
+        """从 UserMemoryStore 读取面试官岗位要求，失败时返回空字符串。"""
+        if self._user_memory_store is not None:
+            return self._user_memory_store.render()
         return ""
 
     def _build_base_messages(self, session: InterviewSession, user_memory: str) -> list[Message]:

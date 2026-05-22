@@ -6,6 +6,7 @@ from .memory_module import (
     MemoryModule,
     RecordingPaths,
 )
+from .user_memory import UserMemoryStore
 
 __all__ = [
     "Database",
@@ -14,4 +15,5 @@ __all__ = [
     "InterviewSummary",
     "InterviewDetail",
     "RecordingPaths",
+    "UserMemoryStore",
 ]

@@ -223,7 +223,9 @@ class InterviewController:
             logger.exception("InterviewController: on_deactivate failed")
 
         try:
-            await self._audio.stop()
+            rec = await self._audio.stop()
+            self._session.metadata.recording_candidate_path = rec.full_candidate_path
+            self._session.metadata.recording_interviewer_path = rec.full_interviewer_path
         except Exception:
             logger.warning("InterviewController: audio stop failed", exc_info=True)
 
