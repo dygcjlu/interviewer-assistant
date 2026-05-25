@@ -36,7 +36,7 @@ function Resolve-Python {
 }
 
 $hostAddr   = Get-EnvValue "HOST" "127.0.0.1"
-$port       = Get-EnvValue "PORT" "8001"
+$port       = Get-EnvValue "PORT" "8000"
 $backendUrl = "http://${hostAddr}:${port}"
 $python     = Resolve-Python
 

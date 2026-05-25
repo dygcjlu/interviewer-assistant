@@ -75,7 +75,7 @@ def _make_memory_mock() -> MagicMock:
     memory = MagicMock()
     memory.get_candidate = AsyncMock(return_value=None)
     memory.get_candidate_history = AsyncMock(return_value=None)
-    memory.save_interview = AsyncMock()
+    memory.finish_interview = AsyncMock()
     return memory
 
 
@@ -187,7 +187,7 @@ async def test_close_session_saves_to_memory() -> None:
 
     await controller.close_session()
 
-    memory.save_interview.assert_awaited_once()
+    memory.finish_interview.assert_awaited_once()
     assert await controller.get_session() is None
 
 
@@ -209,10 +209,9 @@ async def test_eval_agent_property() -> None:
 async def test_get_session_info_idle() -> None:
     controller, *_ = _make_controller()
 
-    info = controller.get_session_info()
+    info = await controller.get_session()
 
-    assert info["stage"] == "idle"
-    assert info["session_id"] is None
+    assert info is None
 
 
 @pytest.mark.asyncio
@@ -220,11 +219,12 @@ async def test_get_session_info_with_session() -> None:
     controller, *_ = _make_controller()
     session = await controller.create_session("cand-1")
 
-    info = controller.get_session_info()
+    info = await controller.get_session()
 
-    assert info["session_id"] == session.id
-    assert info["candidate_id"] == "cand-1"
-    assert info["rounds_count"] == 0
+    assert info is session
+    assert info.id == session.id
+    assert info.candidate.id == "cand-1"
+    assert len(info.rounds) == 0
 
 
 def test_attach_detach_ws_sender() -> None:

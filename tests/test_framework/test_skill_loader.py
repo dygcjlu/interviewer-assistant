@@ -17,7 +17,7 @@ def test_load_index_returns_skill_meta_list() -> None:
     assert "deep_dive" in names
     assert "dimension_switch" in names
     assert "behavioral_probe" in names
-    assert "resume_anchor" in names
+    assert "question_generation" in names
 
 
 def test_skill_meta_fields_populated() -> None:

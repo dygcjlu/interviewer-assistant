@@ -44,7 +44,7 @@ resolve_python() {
 }
 
 HOST_ADDR="$(read_env HOST 127.0.0.1)"
-PORT="$(read_env PORT 8001)"
+PORT="$(read_env PORT 8000)"
 BACKEND_URL="http://${HOST_ADDR}:${PORT}"
 PYTHON="$(resolve_python)"
 

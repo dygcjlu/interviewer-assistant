@@ -23,7 +23,7 @@ def _make_session(with_summary: bool = False, with_rounds: bool = False) -> Inte
     candidate = CandidateProfile(
         id="c1",
         name="张三",
-        resume_summary="5年后端经验，熟悉分布式系统",
+        resume_content="5年后端经验，熟悉分布式系统",
         history_summary="历史摘要：上次面试评分 7.5" if with_summary else None,
     )
     session = InterviewSession(
@@ -74,7 +74,7 @@ def test_build_first_message_is_system_prompt() -> None:
     config = AgentConfig(name="test", system_prompt="Agent identity here.", skill_names=[], tool_names=[])
     messages = builder.build(session, config)
     assert messages[0].role == "system"
-    assert messages[0].content == "Agent identity here."
+    assert messages[0].content.startswith("Agent identity here.")
 
 
 def test_build_includes_fixed_zone_with_candidate_name() -> None:

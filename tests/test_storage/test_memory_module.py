@@ -1,18 +1,12 @@
 """Tests for src/storage/memory_module.py."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
-import pytest_asyncio
 
-from src.models.candidate import (
-    CandidateProfile,
-    Education,
-    ProjectExperience,
-    WorkExperience,
-)
+from src.models.candidate import CandidateProfile
 from src.models.evaluation import DimensionScore, EvalReport
 from src.models.session import (
     ConversationRound,
@@ -21,18 +15,12 @@ from src.models.session import (
     InterviewStage,
     SessionMetadata,
 )
-from src.storage.database import Database
 from src.storage.memory_module import MemoryModule
 
 
-@pytest_asyncio.fixture
-async def memory() -> MemoryModule:
-    db = Database(":memory:")
-    await db.initialize()
-    try:
-        yield MemoryModule(db)
-    finally:
-        await db.close()
+@pytest.fixture
+def memory(tmp_path: Path) -> MemoryModule:
+    return MemoryModule(candidates_dir=str(tmp_path / "candidates"))
 
 
 def _make_profile(id: str = "c-1", name: str = "张三") -> CandidateProfile:
@@ -41,16 +29,10 @@ def _make_profile(id: str = "c-1", name: str = "张三") -> CandidateProfile:
         name=name,
         email="zhangsan@example.com",
         phone="13800000000",
-        education=[Education(school="清华", degree="本科", major="CS", start_year=2018, end_year=2022)],
-        work_experience=[WorkExperience(company="ACME", title="SWE", duration="2022-2024", description="d")],
         skills=["Python", "Go"],
-        projects=[
-            ProjectExperience(
-                name="P", role="lead", tech_stack=["Py"], description="d", highlights=["h"]
-            )
-        ],
-        resume_text="raw resume",
-        resume_summary="brief summary",
+        years_of_experience=5,
+        current_position="后端工程师",
+        resume_content="raw resume",
     )
 
 
@@ -93,7 +75,7 @@ def _make_session(interview_id: str = "i-1", candidate_id: str = "c-1") -> Inter
 @pytest.mark.asyncio
 async def test_save_and_get_candidate_roundtrip(memory: MemoryModule) -> None:
     profile = _make_profile()
-    cid = await memory.save_candidate(profile)
+    cid = await memory.save_candidate(profile, profile.resume_content)
     assert cid == "c-1"
 
     loaded = await memory.get_candidate("c-1")
@@ -102,23 +84,14 @@ async def test_save_and_get_candidate_roundtrip(memory: MemoryModule) -> None:
     assert loaded.name == "张三"
     assert loaded.email == "zhangsan@example.com"
     assert loaded.phone == "13800000000"
-    assert loaded.resume_text == "raw resume"
-    assert loaded.resume_summary == "brief summary"
     assert loaded.skills == ["Python", "Go"]
-    assert len(loaded.education) == 1
-    assert loaded.education[0].school == "清华"
-    assert loaded.education[0].start_year == 2018
-    assert len(loaded.work_experience) == 1
-    assert loaded.work_experience[0].company == "ACME"
-    assert len(loaded.projects) == 1
-    assert loaded.projects[0].tech_stack == ["Py"]
-    assert loaded.history_summary is None
+    assert await memory.get_resume_markdown("c-1") == "raw resume"
 
 
 @pytest.mark.asyncio
 async def test_save_candidate_generates_id_when_empty(memory: MemoryModule) -> None:
     profile = _make_profile(id="", name="王五")
-    cid = await memory.save_candidate(profile)
+    cid = await memory.save_candidate(profile, profile.resume_content)
     assert cid.startswith("c-")
     loaded = await memory.get_candidate(cid)
     assert loaded is not None
@@ -132,9 +105,9 @@ async def test_get_candidate_missing_returns_none(memory: MemoryModule) -> None:
 
 @pytest.mark.asyncio
 async def test_search_candidates_filters_by_name(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile(id="c-1", name="张三"))
-    await memory.save_candidate(_make_profile(id="c-2", name="张伟"))
-    await memory.save_candidate(_make_profile(id="c-3", name="王五"))
+    await memory.save_candidate(_make_profile(id="c-1", name="张三"), "resume 1")
+    await memory.save_candidate(_make_profile(id="c-2", name="张伟"), "resume 2")
+    await memory.save_candidate(_make_profile(id="c-3", name="王五"), "resume 3")
 
     results = await memory.search_candidates("张")
     names = sorted(p.name for p in results)
@@ -154,21 +127,23 @@ async def test_get_candidate_history_returns_none_for_unknown(memory: MemoryModu
 
 @pytest.mark.asyncio
 async def test_get_candidate_history_returns_none_when_no_interviews(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile())
+    await memory.save_candidate(_make_profile(), "resume")
     history = await memory.get_candidate_history("c-1")
     assert history is None
 
 
 @pytest.mark.asyncio
 async def test_get_candidate_history_summarises_past_interviews(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile())
+    await memory.save_candidate(_make_profile(), "resume")
     session_old = _make_session(interview_id="i-old")
     session_old.metadata.start_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    await memory.save_interview(session_old)
+    await memory.start_interview(session_old)
+    await memory.finish_interview(session_old)
 
     session_new = _make_session(interview_id="i-new")
     session_new.metadata.start_time = datetime(2026, 5, 1, tzinfo=timezone.utc)
-    await memory.save_interview(session_new)
+    await memory.start_interview(session_new)
+    await memory.finish_interview(session_new)
 
     await memory.save_eval_report(
         EvalReport(
@@ -201,9 +176,10 @@ async def test_get_candidate_history_summarises_past_interviews(memory: MemoryMo
 
 @pytest.mark.asyncio
 async def test_save_interview_persists_rounds_and_tokens(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile())
+    await memory.save_candidate(_make_profile(), "resume")
     session = _make_session()
-    await memory.save_interview(session)
+    await memory.start_interview(session)
+    await memory.finish_interview(session)
 
     detail = await memory.get_interview_detail("i-1")
     assert detail is not None
@@ -218,10 +194,11 @@ async def test_save_interview_persists_rounds_and_tokens(memory: MemoryModule) -
 
 @pytest.mark.asyncio
 async def test_save_interview_is_idempotent_on_rounds(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile())
+    await memory.save_candidate(_make_profile(), "resume")
     session = _make_session()
-    await memory.save_interview(session)
-    await memory.save_interview(session)
+    await memory.start_interview(session)
+    await memory.finish_interview(session)
+    await memory.finish_interview(session)
 
     detail = await memory.get_interview_detail("i-1")
     assert detail is not None
@@ -238,8 +215,10 @@ async def test_get_interview_detail_missing_returns_none(memory: MemoryModule) -
 
 @pytest.mark.asyncio
 async def test_save_and_get_eval_report(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile())
-    await memory.save_interview(_make_session())
+    await memory.save_candidate(_make_profile(), "resume")
+    session = _make_session()
+    await memory.start_interview(session)
+    await memory.finish_interview(session)
 
     report = EvalReport(
         id="r-1",
@@ -259,10 +238,10 @@ async def test_save_and_get_eval_report(memory: MemoryModule) -> None:
 
     loaded = await memory.get_eval_report("i-1")
     assert loaded is not None
-    assert loaded.id == "r-1"
+    assert loaded.id == "er-i-1"
     assert loaded.overall_score == 7.5
     assert loaded.recommendation == "hire"
-    assert loaded.summary == "综合评价"
+    assert "综合评价" in loaded.summary
     assert [d.dimension for d in loaded.dimensions] == ["算法", "系统设计"]
     assert loaded.strengths == ["扎实"]
     assert loaded.weaknesses == ["分布式弱"]
@@ -271,56 +250,3 @@ async def test_save_and_get_eval_report(memory: MemoryModule) -> None:
 @pytest.mark.asyncio
 async def test_get_eval_report_missing_returns_none(memory: MemoryModule) -> None:
     assert await memory.get_eval_report("missing") is None
-
-
-# ─── 记忆整合 ───────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_consolidate_memory_appends_insights(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile())
-    session = _make_session()
-    await memory.save_interview(session)
-    await memory.save_eval_report(
-        EvalReport(
-            id="r-1",
-            interview_id="i-1",
-            dimensions=[DimensionScore(dimension="算法", score=8.0, comment="", evidence=[])],
-            overall_score=7.5,
-            strengths=["s1"],
-            weaknesses=["w1"],
-            recommendation="hire",
-            summary="ok",
-            generated_at=datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc),
-        )
-    )
-
-    await memory.consolidate_memory(session)
-
-    candidate_row = await memory._candidates.get_by_id("c-1")  # type: ignore[attr-defined]
-    assert candidate_row is not None
-    payload = json.loads(candidate_row["profile_json"])
-    insights = payload.get("last_interview_insights")
-    assert insights is not None
-    assert insights["interview_id"] == "i-1"
-    assert insights["overall_score"] == 7.5
-    assert insights["recommendation"] == "hire"
-    assert insights["strengths"] == ["s1"]
-    assert insights["dimension_scores"] == {"算法": 8.0}
-    # 原有 profile 字段应保留
-    assert payload.get("email") == "zhangsan@example.com"
-    assert payload.get("skills") == ["Python", "Go"]
-
-
-@pytest.mark.asyncio
-async def test_consolidate_memory_skips_when_no_report(memory: MemoryModule) -> None:
-    await memory.save_candidate(_make_profile())
-    session = _make_session()
-    await memory.save_interview(session)
-
-    await memory.consolidate_memory(session)
-
-    candidate_row = await memory._candidates.get_by_id("c-1")  # type: ignore[attr-defined]
-    assert candidate_row is not None
-    payload = json.loads(candidate_row["profile_json"])
-    assert "last_interview_insights" not in payload

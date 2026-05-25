@@ -149,6 +149,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -231,6 +233,7 @@ logs/
 recordings/
 trajectories/
 resumes/
-openspec/
 conversations/
 candidates/
+USER.md
+USER.local.md
