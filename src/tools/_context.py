@@ -23,8 +23,8 @@ class ToolContext:
     user_memory_store: "UserMemoryStore | None" = None
     prompt_builder: "PromptBuilder | None" = None
     skill_loader: "SkillLoader | None" = None
-    allowed_read_dirs: list[str] = field(default_factory=lambda: ["resumes/"])
-    allowed_write_dirs: list[str] = field(default_factory=lambda: ["resumes/"])
+    allowed_read_dirs: list[str] = field(default_factory=lambda: ["resumes/", "candidates/"])
+    allowed_write_dirs: list[str] = field(default_factory=lambda: ["resumes/", "candidates/"])
 
 
 ctx = ToolContext()

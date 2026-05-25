@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # 存储
-    DB_PATH: str = "interview_assistant.db"
+    CANDIDATES_DIR: str = "candidates"
     RECORDINGS_DIR: str = "recordings"
 
     # 上下文管理

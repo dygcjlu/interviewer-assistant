@@ -34,7 +34,7 @@ data: [DONE]
 |---|---|---|
 | 503 | `not_ready` | MainAgent 未初始化 |
 
-**处理逻辑**：MainAgent.handle_chat() → LLM 对话 + 工具调用（如 delegate_to_resume_agent、update_user_memory）→ 流式返回
+**处理逻辑**：`MainAgent.handle_chat()` → LLM 对话 + 工具调用（如 `dispatch_to_agent`、`manage_user_memory`）→ 流式返回
 
 ---
 
@@ -58,7 +58,8 @@ data: [DONE]
 {
   "candidate_id": "uuid",
   "profile": { ...CandidateProfile },
-  "questions": [ ...InterviewQuestion ]
+  "questions": [ ...InterviewQuestion ],
+  "resume_markdown": "# 简历正文..."
 }
 ```
 
@@ -68,7 +69,7 @@ data: [DONE]
 |---|---|---|
 | 404 | `not_found` | 候选人不存在 |
 
-**处理逻辑**：加载候选人 → 创建/更新 Session → 调用 MainAgent.set_candidate_context()
+**处理逻辑**：加载候选人 → 创建/更新 Session → 调用 `MainAgent.set_candidate_context()` → 读取 `resume_markdown`
 
 ---
 
@@ -76,7 +77,7 @@ data: [DONE]
 
 #### `POST /api/resume/upload`
 
-上传候选人 PDF 简历，保存文件和提取文本，返回 file_path。**不直接触发 LLM 解析**，解析由前端通过聊天框发送消息给 MainAgent 触发。
+上传候选人 PDF 简历，保存文件，返回 `file_path` 和 `safe_stem`。**不直接触发 LLM 解析**，解析由前端通过聊天框发送消息给 MainAgent 触发。
 
 **请求**：`multipart/form-data`
 
@@ -90,7 +91,8 @@ data: [DONE]
 
 ```json
 {
-  "file_path": "/absolute/path/to/resume.pdf",
+  "file_path": "resumes/张三.pdf",
+  "safe_stem": "张三",
   "session_id": "uuid",
   "candidate_id": "uuid"
 }
@@ -101,13 +103,15 @@ data: [DONE]
 | HTTP | code | 说明 |
 |---|---|---|
 | 400 | `invalid_file_type` | 非 PDF 格式 |
-| 409 | `duplicate_candidate` | 同名候选人已存在 |
+| 409 | `duplicate_candidate` | 同名候选人已存在（包含 `existing_candidate_id` 和 `existing_candidate_name`） |
+
+**去重逻辑**：`candidate_id` 为空且 `overwrite=false` 时，通过 `memory.get_candidate_by_name(safe_stem)` 按文件名（去掉扩展名）精确匹配候选人姓名，存在则返回 409。
 
 ---
 
 #### `GET /api/resume/profile`
 
-获取候选人画像和题目清单。
+获取候选人画像、题目清单和简历 Markdown。
 
 **请求参数**（query）：
 
@@ -121,7 +125,8 @@ data: [DONE]
 {
   "candidate_id": "uuid",
   "profile": { ...CandidateProfile },
-  "questions": [ ...InterviewQuestion ]
+  "questions": [ ...InterviewQuestion ],
+  "resume_markdown": "# 简历正文..."
 }
 ```
 
@@ -186,7 +191,7 @@ data: [DONE]
 }
 ```
 
-**处理逻辑**：InterviewController.start_interview() → 启动 AudioManager → 绑定 WS 广播
+**处理逻辑**：`InterviewController.start_interview()` → 激活 InterviewAgent → 启动 AudioManager → `memory.start_interview(session)`（写 session.json）→ 广播 session_snapshot
 
 ---
 
@@ -204,7 +209,7 @@ data: [DONE]
 }
 ```
 
-**处理逻辑**：InterviewController.stop_interview() → flush_pending_round() → 停止 AudioManager
+**处理逻辑**：`InterviewController.stop_interview()` → `flush_pending_round()` → 停止 AudioManager
 
 ---
 
@@ -225,7 +230,9 @@ data: [DONE]
 ```json
 {
   "report": {
-    "dimensions": [...],
+    "dimensions": [
+      {"dimension": "系统设计", "score": 8.0, "comment": "...", "evidence": ["候选人原话..."]}
+    ],
     "overall_score": 7.5,
     "strengths": [...],
     "weaknesses": [...],
@@ -235,7 +242,9 @@ data: [DONE]
 }
 ```
 
-**处理逻辑**：EvalAgent.handle_request("generate_eval") → save_eval_report → close_session
+**处理逻辑（当前会话）**：`EvalAgent.handle_request("generate_eval")` → `memory.save_eval_report(report)` → `controller.close_session()`（写 transcript / 更新 index / 重置状态）
+
+> 注意：路由层不再在调用 EvalAgent 前主动调用 `save_interview`，历史数据由 `close_session()` → `memory.finish_interview()` 统一写入。
 
 ---
 
@@ -253,6 +262,7 @@ data: [DONE]
     "id": "uuid",
     "stage": "interviewing",
     "active_agent": "main",
+    "candidate_id": "uuid",
     "candidate_name": "张三",
     "trigger_mode": "auto",
     "rounds_count": 3,
@@ -270,7 +280,7 @@ data: [DONE]
 
 | 参数 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `keyword` | string | `""` | 按姓名模糊搜索 |
+| `keyword` | string | `""` | 按姓名模糊搜索（读 candidates/index.md） |
 | `limit` | int | 20 | 每页条数 |
 | `offset` | int | 0 | 偏移量 |
 
@@ -284,13 +294,22 @@ data: [DONE]
 
 #### `DELETE /api/candidates/{candidate_id}`
 
-删除候选人（级联删除简历、面试记录、评价报告）。
+删除候选人（递归删除 `candidates/{id}/` 目录及所有文件）。
+
+**错误码**：
+
+| HTTP | code | 说明 |
+|---|---|---|
+| 404 | `not_found` | 候选人不存在 |
+| 409 | `candidate_in_use` | 候选人当前正在面试中，无法删除 |
 
 ---
 
 #### `GET /api/recordings/{session_id}/rounds/{round_number}`
 
 下载指定轮次的录音文件（WAV）。
+
+**请求参数**（query）：`source` (可选，`candidate` 或 `interviewer`，不指定时返回第一个存在的文件)
 
 ---
 
@@ -326,16 +345,16 @@ data: [DONE]
 
 | 接口 | 处理逻辑 |
 |---|---|
-| `POST /api/chat` | MainAgent.handle_chat() → LLM + 工具调用 |
-| `POST /api/candidate/select` | MainAgent.set_candidate_context() |
-| `POST /api/resume/upload` | 保存文件，返回 file_path（解析由聊天触发） |
-| `GET /api/resume/profile` | 读 DB + session 缓存 |
-| `POST /api/interview/start` | InterviewController.start_interview() → AudioManager.start() |
-| `POST /api/interview/stop` | InterviewController.stop_interview() → AudioManager.stop() |
+| `POST /api/chat` | `MainAgent.handle_chat()` → LLM + 工具调用 |
+| `POST /api/candidate/select` | `MainAgent.set_candidate_context()` |
+| `POST /api/resume/upload` | 保存 PDF 文件，返回 file_path（解析由聊天触发） |
+| `GET /api/resume/profile` | `memory.get_candidate()` + session 缓存 + `memory.get_resume_markdown()` |
+| `POST /api/interview/start` | `InterviewController.start_interview()` → AudioManager.start() → `memory.start_interview()` |
+| `POST /api/interview/stop` | `InterviewController.stop_interview()` → AudioManager.stop() |
 | `POST /api/session/switch` | 兼容接口：interview → start_interview()，eval → stop_interview() |
-| `POST /api/interview/suggest` | InterviewController.interview_agent.handle_request("trigger_suggestion") |
-| `GET /api/interview/eval` | InterviewController.eval_agent.handle_request("generate_eval") → close_session() |
-| WS `manual_input` | TranscriptionManager.on_segment() → SuggestionTrigger |
-| WS `request_suggestion` | InterviewController.interview_agent.handle_request("trigger_suggestion") |
-| WS `set_trigger_mode` | InterviewController.interview_agent.handle_request("set_trigger_mode") |
+| `POST /api/interview/suggest` | `controller.interview_agent.handle_request("trigger_suggestion")` |
+| `GET /api/interview/eval` | `EvalAgent.handle_request("generate_eval")` → `memory.save_eval_report()` → `controller.close_session()` |
+| WS `manual_input` | `TranscriptionManager.on_segment()` → SuggestionTrigger |
+| WS `request_suggestion` | `controller.interview_agent.handle_request("trigger_suggestion")` |
+| WS `set_trigger_mode` | `controller.interview_agent.handle_request("set_trigger_mode")` |
 | WS `switch_agent` | 兼容消息：interview → start_interview()，eval → stop_interview() |

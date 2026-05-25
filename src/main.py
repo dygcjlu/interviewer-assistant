@@ -31,7 +31,6 @@ from src.framework.skill import SkillLoader
 from src.framework.tool_registry import ToolRegistry
 from src.llm.client import OpenAICompatibleClient
 from src.llm.config import LLMConfig
-from src.storage.database import Database
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
 from src.tools import register_all
@@ -49,22 +48,19 @@ USER_MEMORY_CHAR_LIMIT = 3000
 
 settings = get_settings()
 
-_db: Database | None = None
 _controller_ref: InterviewController | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    global _db, _controller_ref
+    global _controller_ref
     logger.info("Interview Assistant starting up")
     os.makedirs(settings.RECORDINGS_DIR, exist_ok=True)
+    os.makedirs(settings.CANDIDATES_DIR, exist_ok=True)
     os.makedirs("resumes", exist_ok=True)
 
     # ── Infrastructure ─────────────────────────────────────────────────────────
-    db = Database(settings.DB_PATH)
-    await db.initialize()
-    _db = db
-    memory_module = MemoryModule(db)
+    memory_module = MemoryModule(candidates_dir=settings.CANDIDATES_DIR)
 
     user_memory_store = UserMemoryStore(USER_MEMORY_PATH, char_limit=USER_MEMORY_CHAR_LIMIT)
     user_memory_store.load()
@@ -202,8 +198,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await controller.close_session()
     except Exception:
         logger.exception("Lifespan: close_session failed")
-    if _db is not None:
-        await _db.close()
 
 
 app = create_app(lifespan=lifespan)

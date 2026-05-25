@@ -8,7 +8,7 @@
 
 面试助手是一个运行在本地的单用户技术面试辅助工具。它实时采集面试双方（面试官和候选人）的音频，通过语音识别转写为文字，再由 AI 自动生成追问建议，帮助面试官聚焦关键问题、减少遗漏。
 
-整个系统是一个 Python 单进程服务。无需联网（LLM API 除外），所有数据存储在本地 SQLite 数据库和文件系统中。当音频采集不可用时（如非 Windows 平台），可通过 WebSocket `manual_input` 手动输入文字走完完整面试流程。
+整个系统是一个 Python 单进程服务。无需联网（LLM API 除外），所有数据存储在本地文件系统（`candidates/` 目录）。当音频采集不可用时（如非 Windows 平台），可通过 WebSocket `manual_input` 手动输入文字走完完整面试流程。
 
 ---
 
@@ -29,8 +29,8 @@ graph TD
     TM["TranscriptionManager\n(src/audio/transcription.py)"]
     LLM["LLMClient\n(src/llm/client.py)"]
     Mem["MemoryModule\n(src/storage/memory_module.py)"]
-    DB["SQLite\n(aiosqlite)"]
-    Files["文件系统\nrecordings/ resumes/"]
+    UMS["UserMemoryStore\n(src/storage/user_memory.py)"]
+    Files["文件系统\ncandidates/ recordings/"]
     UserMD["USER.md\n面试官偏好记忆"]
 
     User --> UI
@@ -38,8 +38,9 @@ graph TD
     UI --> WS
     REST -->|对话| MA
     REST -->|面试控制| IC
-    MA -->|delegate_to_resume_agent| RA
-    MA -->|update_user_memory| UserMD
+    MA -->|dispatch_to_agent| RA
+    MA -->|manage_user_memory| UMS
+    UMS --> UserMD
     IC --> IA
     IC --> EA
     IC --> Audio
@@ -49,10 +50,9 @@ graph TD
     IA --> LLM
     EA --> LLM
     MA --> LLM
-    EA --> Mem
     IC --> Mem
-    Mem --> DB
-    Audio --> Files
+    EA --> Mem
+    Mem --> Files
 ```
 
 ---
@@ -61,7 +61,7 @@ graph TD
 
 ```
 src/
-├── main.py                  # 启动入口，bootstrap() 手动组装所有依赖
+├── main.py                  # 启动入口，lifespan() 手动组装所有依赖
 ├── config.py                # pydantic-settings 配置，get_settings() 单例
 ├── logging/                 # 日志初始化（setup_logging）和 contextvars 绑定
 ├── web/
@@ -75,7 +75,7 @@ src/
 │   ├── base.py              # BaseAgent、AgentRequest、AgentResponse 基类
 │   ├── main_agent.py        # MainAgent：面试官唯一对话入口（常驻单例）
 │   ├── interview_controller.py  # InterviewController：面试状态机控制器
-│   ├── resume_agent.py      # 简历解析与题目生成
+│   ├── resume_agent.py      # 简历解析与题目生成（ReAct 模式）
 │   ├── interview_agent.py   # 实时追问建议（流式），持有 SuggestionTrigger
 │   ├── eval_agent.py        # 评价报告生成
 │   └── prompts.py           # Agent system prompt 常量
@@ -98,28 +98,32 @@ src/
 │   ├── script_player.py     # ScriptPlayer：按 JSON 脚本注入转写片段（调试模式）
 │   ├── wasapi.py            # WasapiCapturer：Windows 双声道采集（生产）
 │   ├── baidu_stt.py         # BaiduRealtimeSTT：百度实时语音识别（生产）
+│   ├── xunfei_stt.py        # XunfeiRealtimeSTT：讯飞实时语音转写（生产可选）
 │   ├── mock.py              # MockAudioCapturer + MockSTTEngine（非 Windows）[Mock]
 │   ├── stream.py            # 音频流处理辅助
 │   └── protocol.py          # AudioFrame、TranscriptSegment 协议数据类
 ├── tools/
-│   ├── resume_parser.py     # parse_resume_pdf：读取 PDF 文本
-│   ├── skill_tools.py       # 生成 skills_list / skill_view 工具函数
-│   └── main_agent_tools.py  # MainAgent 工具集（delegate/memory/session/candidate）
+│   ├── _context.py          # ToolContext 单例，持有运行时组件引用
+│   ├── dispatch_to_agent.py # 通用 Agent 分发工具（委托 ResumeAgent）
+│   ├── manage_user_memory.py# 面试官记忆管理工具（add/replace/remove/list）
+│   ├── file_tools.py        # file_read / file_write 工具
+│   ├── skill_tools.py       # skill_view 工具
+│   └── __init__.py          # register_all：统一注册所有工具到 ToolRegistry
 ├── storage/
-│   ├── database.py          # Database：aiosqlite 连接封装和表结构创建
-│   ├── repositories.py      # 各表的 CRUD Repository 类
-│   ├── memory_module.py     # MemoryModule：短期/长期记忆统一接口
+│   ├── memory_module.py     # MemoryModule：文件系统存储（candidates/ 目录）
+│   ├── user_memory.py       # UserMemoryStore：USER.md 条目化读写
 │   └── conversation_logger.py  # ConversationLogger：JSONL 格式 Agent 对话持久化
 └── models/
     ├── session.py           # InterviewSession、ConversationRound、InterviewStage 等
-    ├── candidate.py         # CandidateProfile、Education、WorkExperience 等
+    ├── candidate.py         # CandidateProfile、update_candidate_from_data
     ├── evaluation.py        # EvalReport、DimensionScore
     ├── message.py           # LLM 消息 Message 数据类
     └── exceptions.py        # 业务异常定义（SessionError、StorageError 等）
 
 skills/                      # SKILL.md 面试技巧文件，由 SkillLoader 读取
 recordings/                  # 录音文件（按 session_id 分目录）
-resumes/                     # 上传的简历 PDF 和转换后的 Markdown
+candidates/                  # 候选人档案（profile.md / interviews/ 等）
+resumes/                     # 临时存放上传的简历 PDF（解析完成后 PDF 迁移至 candidates/{id}/）
 data/                        # 调试数据（如 mock_script.json 脚本回放文件）
 conversations/               # Agent 对话日志 JSONL（调试用，已加入 .gitignore）
 ```
@@ -136,15 +140,15 @@ conversations/               # Agent 对话日志 JSONL（调试用，已加入 
 | 前端 UI | NiceGUI | — | Python 声明式单页面 UI，与后端同进程 |
 | LLM | OpenAI SDK（兼容） | — | 通义千问 / DeepSeek 等 OpenAI 兼容端点 |
 | 配置管理 | pydantic-settings | — | 从 `.env` 加载配置，类型安全 |
-| 数据库 | SQLite + aiosqlite | — | 本地持久化，异步访问 |
+| 文件存储 | 文件系统 + PyYAML | — | 候选人档案与面试数据，原子写入（mkstemp+os.replace） |
 | 音频采集 | Windows WASAPI | Windows 专属 | 双声道实时音频采集（生产） |
-| 语音识别 | 百度实时 ASR | Windows 专属 | 候选人和面试官实时转写（生产） |
+| 语音识别 | 百度实时 ASR / 讯飞实时 | Windows 专属 | 候选人和面试官实时转写（生产，通过 `STT_ENGINE` 选择） |
 | PDF 解析 | pymupdf / pdfplumber | — | 简历 PDF 文本提取 |
 | HTTP 客户端 | httpx | — | UI Agent 工具调本地 REST 接口 |
 
 ---
 
-## 启动流程（`src/main.py` bootstrap 顺序）
+## 启动流程（`src/main.py` lifespan 顺序）
 
 ```
 main.py 执行时：
@@ -152,26 +156,27 @@ main.py 执行时：
 2. get_settings()                → 加载 .env / 环境变量，生成 Settings 单例
 
 lifespan(app) 启动时（FastAPI 生命周期钩子）：
-3. mkdir recordings/ resumes/    → 确保目录存在
-4. Database(settings.DB_PATH)    → 创建 SQLite 连接
-5. db.initialize()               → 建表，启用外键
-6. MemoryModule(db)              → 短期/长期记忆接口
-7. OpenAICompatibleClient(...)   → LLM 客户端
-8. SkillLoader(SKILLS_DIR)       → 加载 skills/ 下所有 SKILL.md
-9. ToolRegistry()                → 注册 parse_resume / skills / MainAgent 工具
+3. mkdir recordings/ candidates/ resumes/  → 确保目录存在
+4. MemoryModule(candidates_dir)  → 文件系统存储（candidates/ 目录）
+5. UserMemoryStore(USER.md)      → 加载面试官偏好记忆
+6. OpenAICompatibleClient(...)   → LLM 客户端
+7. SkillLoader(SKILLS_DIR)       → 加载 skills/ 下所有 SKILL.md
+8. ToolRegistry()                → 工具注册表
+9. register_all(tool_registry)   → 统一注册所有工具（dispatch_to_agent / manage_user_memory / file_read / file_write / skill_view 等）
 10. ContextManager(...)          → 滑动窗口上下文管理器
-11. PromptBuilder(...)           → 组装 LLM Messages
-12. ResumeAgent(...)             → 简历分析 Agent
+11. PromptBuilder(...)           → 组装 LLM Messages（注入 UserMemoryStore）
+12. ResumeAgent(...)             → 简历分析 Agent（ReAct 模式，最大 15 轮工具调用）
 13. InterviewAgent(...)          → 面试 Agent
-14. EvalAgent(...)               → 评价 Agent
+14. EvalAgent(...)               → 评价 Agent（注入 UserMemoryStore）
 15. 根据配置选择音频实现
     - MOCK_AUDIO=true  → MockAudioManager（按 mock_script.json 脚本回放，跳过采集和 STT）
-    - Windows          → WasapiCapturer + BaiduRealtimeSTT + AudioManager（生产）
-    - 其他平台         → MockAudioCapturer + MockSTTEngine + AudioManager（开发）
+    - Windows + STT_ENGINE=xunfei → WasapiCapturer + XunfeiRealtimeSTT（生产）
+    - Windows（默认）  → WasapiCapturer + BaiduRealtimeSTT（生产）
+    - 其他平台         → MockAudioCapturer + MockSTTEngine（开发）
 16. AudioManager 或 MockAudioManager(...)  → 组装音频管道
 17. InterviewController(...)     → 面试状态机控制器
 18. MainAgent(...)               → 常驻对话入口，绑定 ResumeAgent 和 Controller
-19. main_agent_tools.setup_tools(...)  → 连接工具与运行时引用
+19. tool_ctx.* = ...             → 注入工具依赖（main_agent / resume_agent / controller / memory_module / user_memory_store / prompt_builder / skill_loader）
 20. app.state.* = ...            → 注入依赖到 FastAPI app.state
 
 启动完成后：

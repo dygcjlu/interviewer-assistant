@@ -15,7 +15,6 @@ openai>=1.30.0
 tiktoken>=0.7.0
 
 # Storage
-aiosqlite>=0.20.0
 aiofiles>=23.2.1
 
 # PDF parsing

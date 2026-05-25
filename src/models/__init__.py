@@ -8,9 +8,6 @@ from .session import (
 )
 from .candidate import (
     CandidateProfile,
-    Education,
-    WorkExperience,
-    ProjectExperience,
 )
 from .evaluation import EvalReport, DimensionScore
 from .message import Message, ToolCallInfo, FunctionCallInfo
@@ -33,9 +30,6 @@ __all__ = [
     "InterviewQuestion",
     "TokenUsageInfo",
     "CandidateProfile",
-    "Education",
-    "WorkExperience",
-    "ProjectExperience",
     "EvalReport",
     "DimensionScore",
     "Message",

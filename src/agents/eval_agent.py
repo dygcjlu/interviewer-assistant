@@ -319,8 +319,8 @@ def _build_candidate_context(session: InterviewSession) -> str:
         parts.append(f"工作年限：{candidate.years_of_experience} 年")
     if candidate.skills:
         parts.append(f"技能：{', '.join(candidate.skills[:20])}")
-    if candidate.resume_summary:
-        parts.append(f"简历摘要：{candidate.resume_summary}")
+    if candidate.resume_content:
+        parts.append(f"\n简历内容：\n{candidate.resume_content[:2000]}")
     if session.question_plan:
         parts.append("面试题目清单：")
         for q in session.question_plan:

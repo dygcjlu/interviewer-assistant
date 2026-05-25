@@ -32,6 +32,9 @@ _SEND_CHUNK_BYTES = 5120     # 百度建议每次发送 5120 字节（160ms）
 # -3005（本句无有效语音）是非致命错误，连接仍活跃，不应触发重连
 _FATAL_ERR_NOS = {4002, -3004}
 
+# 百度 ASR 会将上一句的末尾标点延迟到下一句结果的开头，需在接收层纠正
+_LEADING_PUNCT = frozenset("，。！？；：、…"'""''（）【】「」")
+
 
 class BaiduRealtimeSTT:
     """百度实时 ASR WebSocket 客户端。
@@ -157,7 +160,27 @@ class BaiduRealtimeSTT:
     # ── internals ─────────────────────────────────────────────────────────────
 
     async def _recv_loop(self) -> None:
-        """后台 task：持续从 WS 接收百度 ASR 响应，解析后入队。"""
+        """后台 task：持续从 WS 接收百度 ASR 响应，解析后入队。
+
+        百度 ASR 存在已知行为：上一句的末尾标点会出现在下一句结果文本的开头。
+        此处通过缓冲上一个 FIN_TEXT，在下一条结果到来时将开头的标点归还给上一句，
+        再将修正后的 FIN_TEXT 入队，确保每句话首尾标点位置正确。
+        """
+        pending_fin_text: str | None = None  # 已识别但尚未入队的上一句 FIN_TEXT 文本
+
+        async def _flush_pending(extra_punct: str = "") -> None:
+            nonlocal pending_fin_text
+            if pending_fin_text is None:
+                return
+            text = pending_fin_text + extra_punct
+            await self._recv_queue.put(TranscriptSegment(
+                text=text,
+                source=self._channel,
+                is_final=True,
+                timestamp=datetime.now(),
+            ))
+            pending_fin_text = None
+
         try:
             async for raw in self._ws:
                 if isinstance(raw, bytes):
@@ -193,18 +216,37 @@ class BaiduRealtimeSTT:
                 if msg_type not in ("MID_TEXT", "FIN_TEXT"):
                     continue
 
-                segment = TranscriptSegment(
-                    text=result,
-                    source=self._channel,
-                    is_final=is_final,
-                    timestamp=datetime.now(),
-                )
-                await self._recv_queue.put(segment)
+                # 将开头的孤立标点归还给上一句 FIN_TEXT
+                leading_punct = ""
+                while result and result[0] in _LEADING_PUNCT:
+                    leading_punct += result[0]
+                    result = result[1:]
+
+                if leading_punct:
+                    await _flush_pending(extra_punct=leading_punct)
+                else:
+                    await _flush_pending()
+
+                if not result:
+                    # 本条结果仅含标点，已合并到上一句，无需再入队
+                    continue
+
+                if is_final:
+                    # 缓冲 FIN_TEXT，等待下一条结果确认其末尾标点已到位
+                    pending_fin_text = result
+                else:
+                    await self._recv_queue.put(TranscriptSegment(
+                        text=result,
+                        source=self._channel,
+                        is_final=False,
+                        timestamp=datetime.now(),
+                    ))
         except asyncio.CancelledError:
             pass
         except Exception:
             logger.exception("BaiduRealtimeSTT [%s]: recv loop error", self._channel)
         finally:
+            await _flush_pending()
             # WebSocket 被服务器关闭（如 backend timeout 后）时，标记为断连
             self._connected = False
             logger.debug("BaiduRealtimeSTT [%s]: recv loop exited, _connected set to False", self._channel)

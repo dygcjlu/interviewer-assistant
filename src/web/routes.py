@@ -114,11 +114,18 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     if main_agent is not None:
         main_agent.set_candidate_context(candidate, questions)
 
+    resume_markdown = await memory.get_resume_markdown(body.candidate_id)
+
+    latest_report = await memory.get_latest_eval_report(body.candidate_id)
+    eval_report = _to_dict(latest_report) if latest_report is not None else None
+
     logger.info("candidate_select done candidate_id=%s name=%s", body.candidate_id, candidate.name)
     return {
         "candidate_id": body.candidate_id,
         "profile": _to_dict(candidate),
         "questions": questions,
+        "resume_markdown": resume_markdown,
+        "eval_report": eval_report,
     }
 
 
@@ -196,7 +203,7 @@ async def upload_resume(
     pdf_path.write_bytes(file_bytes)
 
     if session:
-        session.candidate.resume_pdf_path = str(pdf_path)
+        session.candidate.resume_pdf = str(pdf_path)
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info("upload_resume saved file_path=%s elapsed_ms=%.1f", pdf_path, elapsed_ms)
@@ -226,7 +233,13 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
     )
     if not questions:
         questions = await memory.get_latest_question_plan(candidate_id)
-    return {"candidate_id": candidate_id, "profile": _to_dict(candidate), "questions": questions}
+    resume_markdown = await memory.get_resume_markdown(candidate_id)
+    return {
+        "candidate_id": candidate_id,
+        "profile": _to_dict(candidate),
+        "questions": questions,
+        "resume_markdown": resume_markdown,
+    }
 
 
 # ── questions ─────────────────────────────────────────────────────────────────
@@ -363,12 +376,6 @@ async def get_eval(request: Request, interview_id: str | None = None):
     session = await controller.get_session() if controller else None
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
-
-    # Save interview record first so EvalReport FK constraint is satisfied
-    try:
-        await memory.save_interview(session)
-    except Exception:
-        logger.exception("get_eval: pre-save interview failed")
 
     resp = await controller.eval_agent.handle_request(
         AgentRequest(type="generate_eval", payload={}, session=session)

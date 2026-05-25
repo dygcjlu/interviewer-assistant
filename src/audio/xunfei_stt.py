@@ -29,6 +29,9 @@ _SAMPLE_RATE = 16000
 _SEND_CHUNK_BYTES = 1280     # 官方建议：每 40ms 发送 1280 字节
 _RECONNECT_DELAY_SEC = 1.5
 
+# 讯飞 ASR 会将上一句的末尾标点延迟到下一句结果的开头，需在接收层纠正
+_LEADING_PUNCT = frozenset("，。！？；：、…"'""''（）【】「」")
+
 
 class XunfeiRealtimeSTT:
     """讯飞实时语音转写大模型 WebSocket 客户端。
@@ -173,7 +176,26 @@ class XunfeiRealtimeSTT:
           识别结果: {"msg_type": "result", "res_type": "asr", "data": {...}}
           引擎报错: {"msg_type": "result", "res_type": "frc", "data": {"desc": "...", "normal": false}}
           服务报错: {"action": "error", "code": "35001", "desc": "..."}
+
+        讯飞 ASR 存在已知行为：上一句的末尾标点会出现在下一句结果文本的开头。
+        此处通过缓冲上一个最终结果（type=0），在下一条结果到来时将开头的标点归还给上一句，
+        再将修正后的最终结果入队，确保每句话首尾标点位置正确。
         """
+        pending_fin_text: str | None = None  # 已识别但尚未入队的上一句最终结果文本
+
+        async def _flush_pending(extra_punct: str = "") -> None:
+            nonlocal pending_fin_text
+            if pending_fin_text is None:
+                return
+            text = pending_fin_text + extra_punct
+            await self._recv_queue.put(TranscriptSegment(
+                text=text,
+                source=self._channel,
+                is_final=True,
+                timestamp=datetime.now(),
+            ))
+            pending_fin_text = None
+
         try:
             async for raw in self._ws:
                 if isinstance(raw, bytes):
@@ -227,19 +249,38 @@ class XunfeiRealtimeSTT:
                 if not text:
                     continue
 
-                segment = TranscriptSegment(
-                    text=text,
-                    source=self._channel,
-                    is_final=is_final,
-                    timestamp=datetime.now(),
-                )
-                await self._recv_queue.put(segment)
+                # 将开头的孤立标点归还给上一句最终结果
+                leading_punct = ""
+                while text and text[0] in _LEADING_PUNCT:
+                    leading_punct += text[0]
+                    text = text[1:]
+
+                if leading_punct:
+                    await _flush_pending(extra_punct=leading_punct)
+                else:
+                    await _flush_pending()
+
+                if not text:
+                    # 本条结果仅含标点，已合并到上一句，无需再入队
+                    continue
+
+                if is_final:
+                    # 缓冲最终结果，等待下一条结果确认其末尾标点已到位
+                    pending_fin_text = text
+                else:
+                    await self._recv_queue.put(TranscriptSegment(
+                        text=text,
+                        source=self._channel,
+                        is_final=False,
+                        timestamp=datetime.now(),
+                    ))
 
         except asyncio.CancelledError:
             pass
         except Exception:
             logger.exception("XunfeiRealtimeSTT [%s]: recv loop error", self._channel)
         finally:
+            await _flush_pending()
             self._connected = False
             logger.debug(
                 "XunfeiRealtimeSTT [%s]: recv loop exited, _connected set to False",

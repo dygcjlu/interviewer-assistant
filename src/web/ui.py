@@ -118,21 +118,12 @@ async def index() -> None:
                 ):
                     ui.label("候选人").classes("text-sm font-semibold text-grey-8 flex-1")
                     async def _do_upload_left(e: Any) -> None:
-                        await _handle_upload(e, chat_col, chat_scroll, q_col, state)
-                        await _load_candidates()
-                        if state.get("candidate_id"):
-                            try:
-                                async with httpx.AsyncClient(timeout=10) as _c:
-                                    _r = await _c.get(
-                                        f"{_base_url}/api/resume/profile",
-                                        params={"candidate_id": state["candidate_id"]},
-                                    )
-                                    _r.raise_for_status()
-                                    _d = _r.json()
-                                _render_profile_tab(profile_col, _d.get("profile", {}), _d.get("questions", []))
-                                panels.set_value(tab_profile)
-                            except Exception:
-                                pass
+                        await _handle_upload(
+                            e, chat_col, chat_scroll, q_col, state,
+                            on_chat_complete=_sync_candidate_panel,
+                        )
+                        _refresh_bar(stage_badge, candidate_label, round_label, state)
+                        await _sync_candidate_panel()
                     ui.upload(
                         label="上传简历",
                         on_upload=lambda e: asyncio.create_task(_do_upload_left(e)),
@@ -220,7 +211,37 @@ async def index() -> None:
         _render_candidate_list(candidate_list_col, candidates, state,
                                chat_col, chat_scroll, q_col, profile_col,
                                panels, tab_profile,
-                               stage_badge, candidate_label, round_label)
+                               stage_badge, candidate_label, round_label,
+                               r_col=r_col, tab_r=tab_r)
+
+    async def _sync_candidate_panel() -> None:
+        """解析或对话完成后，同步候选人列表与右侧简历/题目面板。"""
+        await _load_candidates()
+        cid = state.get("candidate_id")
+        if not cid:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"{_base_url}/api/resume/profile",
+                    params={"candidate_id": cid},
+                )
+                if r.status_code == 404:
+                    return
+                r.raise_for_status()
+                data = r.json()
+        except Exception as exc:
+            logger.debug("sync_candidate_panel failed: %s", exc)
+            return
+        profile = data.get("profile", {})
+        if profile.get("name"):
+            state["candidate_name"] = profile["name"]
+            _refresh_bar(stage_badge, candidate_label, round_label, state)
+        questions = data.get("questions", [])
+        resume_markdown = data.get("resume_markdown", "")
+        _render_profile_tab(profile_col, profile, questions, resume_markdown)
+        if questions:
+            _render_questions(q_col, questions, cid)
 
     asyncio.create_task(_load_candidates())
 
@@ -251,6 +272,8 @@ async def index() -> None:
             state["trigger_mode"] = trigger_mode
         _refresh_bar(stage_badge, candidate_label, round_label, state)
         _refresh_trigger_controls()
+        if cid:
+            await _sync_candidate_panel()
         logger.debug(
             "restore_session_state done stage=%s candidate_id=%s", stage, cid
         )
@@ -269,7 +292,7 @@ async def index() -> None:
         await _scroll(chat_scroll)
 
         # Call /api/chat with SSE streaming
-        await _chat_stream(text, chat_col, chat_scroll)
+        await _chat_stream(text, chat_col, chat_scroll, on_complete=_sync_candidate_panel)
 
     send_btn.on("click", lambda: asyncio.create_task(_do_send()))
     user_in.on(
@@ -642,7 +665,14 @@ def _render_report(col, report: dict) -> None:
                 ui.label(comment).classes("text-sm text-grey-7")
 
 
-async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) -> None:
+async def _handle_upload(
+    event: Any,
+    chat_col,
+    chat_scroll,
+    q_col,
+    state: dict,
+    on_chat_complete=None,
+) -> None:
     filename = event.file.name
     content = await event.file.read()
     logger.info("PDF upload: %s (%d bytes)", filename, len(content))
@@ -694,6 +724,8 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
     safe_stem = data.get("safe_stem", "")
     cid = data.get("candidate_id", "")
     state["candidate_id"] = cid
+    if safe_stem:
+        state["candidate_name"] = safe_stem
 
     # 展示系统通知气泡，附带「解析简历」确认按钮
     with chat_col:
@@ -702,21 +734,34 @@ async def _handle_upload(event: Any, chat_col, chat_scroll, q_col, state: dict) 
             parse_btn = ui.button(
                 "解析简历",
                 on_click=lambda: asyncio.ensure_future(
-                    _trigger_parse(file_path, safe_stem, parse_btn, chat_col, chat_scroll)
+                    _trigger_parse(
+                        file_path, safe_stem, parse_btn, chat_col, chat_scroll,
+                        on_complete=on_chat_complete,
+                    )
                 ),
             ).classes("q-mt-xs")
     await _scroll(chat_scroll)
 
 
-async def _trigger_parse(file_path: str, safe_stem: str, btn, chat_col, chat_scroll) -> None:
+async def _trigger_parse(
+    file_path: str,
+    safe_stem: str,
+    btn,
+    chat_col,
+    chat_scroll,
+    on_complete=None,
+) -> None:
     """用户点击「解析简历」按钮后触发的解析请求。"""
     btn.disable()
     md_path = f"resumes/{safe_stem}.md"
-    parse_msg = f"简历 {file_path} 已就绪，请解析为 Markdown 并保存为 {md_path}"
-    await _chat_stream(parse_msg, chat_col, chat_scroll)
+    parse_msg = (
+        f"简历 {file_path} 已就绪，请解析为 Markdown 并保存为 {md_path}，"
+        f"解析完成后提取候选人基本信息（姓名、邮箱、电话、技能、工作年限、职位等）"
+    )
+    await _chat_stream(parse_msg, chat_col, chat_scroll, on_complete=on_complete)
 
 
-async def _chat_stream(text: str, chat_col, chat_scroll) -> None:
+async def _chat_stream(text: str, chat_col, chat_scroll, on_complete=None) -> None:
     """调用 /api/chat SSE 接口，流式展示回复。"""
     reply_text = ""
     reply_label = None
@@ -761,6 +806,12 @@ async def _chat_stream(text: str, chat_col, chat_scroll) -> None:
     except Exception as exc:
         logger.exception("chat_stream_inner failed")
         _error(chat_col, f"AI 解析失败：{exc}")
+    finally:
+        if on_complete is not None:
+            try:
+                await on_complete()
+            except Exception:
+                logger.exception("chat_stream on_complete failed")
     await _scroll(chat_scroll)
 
 
@@ -795,6 +846,7 @@ def _render_candidate_list(
     chat_col, chat_scroll, q_col, profile_col,
     panels, tab_profile,
     stage_badge, candidate_label, round_label,
+    r_col=None, tab_r=None,
 ) -> None:
     col.clear()
     if not candidates:
@@ -852,7 +904,7 @@ def _render_candidate_list(
                     await _on_candidate_select_inner(
                         _cid, state, chat_col, chat_scroll, q_col, profile_col,
                         panels, tab_profile, stage_badge, candidate_label, round_label,
-                        col, candidates,
+                        col, candidates, r_col=r_col, tab_r=tab_r,
                     )
 
                 async def _on_delete_candidate(_cid=_cid, _name=name) -> None:
@@ -882,6 +934,7 @@ def _render_candidate_list(
                         chat_col, chat_scroll, q_col, profile_col,
                         panels, tab_profile,
                         stage_badge, candidate_label, round_label,
+                        r_col=r_col, tab_r=tab_r,
                     )
                     ui.notify(f"已删除候选人「{_name}」", type="positive")
 
@@ -896,6 +949,7 @@ async def _on_candidate_select_inner(
     panels, tab_profile,
     stage_badge, candidate_label, round_label,
     list_col, candidates: list,
+    r_col=None, tab_r=None,
 ) -> None:
     """点击候选人后调用 /api/candidate/select 更新上下文。"""
     try:
@@ -913,6 +967,8 @@ async def _on_candidate_select_inner(
 
     profile = data.get("profile", {})
     questions = data.get("questions", [])
+    resume_markdown = data.get("resume_markdown", "")
+    eval_report = data.get("eval_report")
 
     state["candidate_id"] = cid
     state["candidate_name"] = profile.get("name") or "—"
@@ -923,6 +979,7 @@ async def _on_candidate_select_inner(
         chat_col, chat_scroll, q_col, profile_col,
         panels, tab_profile,
         stage_badge, candidate_label, round_label,
+        r_col=r_col, tab_r=tab_r,
     )
 
     skills = ", ".join((profile.get("skills") or [])[:8])
@@ -950,7 +1007,9 @@ async def _on_candidate_select_inner(
     _bubble(chat_col, reply, sent=False, name="Agent")
     if questions:
         _render_questions(q_col, questions, cid)
-    _render_profile_tab(profile_col, profile, questions)
+    if eval_report and r_col is not None:
+        _render_report(r_col, eval_report)
+    _render_profile_tab(profile_col, profile, questions, resume_markdown)
     panels.set_value(tab_profile)
     await _scroll(chat_scroll)
 
@@ -979,7 +1038,7 @@ async def _confirm_delete_dialog(candidate_name: str) -> bool:
     return await dialog_done
 
 
-def _render_profile_tab(col, profile: dict, questions: list) -> None:
+def _render_profile_tab(col, profile: dict, questions: list, resume_markdown: str = "") -> None:
     col.clear()
     if not profile:
         with col:
@@ -996,54 +1055,15 @@ def _render_profile_tab(col, profile: dict, questions: list) -> None:
                 ui.label(f"职位：{pos}").classes("text-sm text-grey-7")
             if yoe is not None:
                 ui.label(f"工作年限：{yoe} 年").classes("text-sm text-grey-7")
-            edu_list = profile.get("education") or []
-            if edu_list:
-                edu_strs = [
-                    f"{e.get('school', '')} {e.get('degree', '')} {e.get('major', '')}".strip()
-                    for e in edu_list if isinstance(e, dict)
-                ]
-                ui.label(f"教育：{'; '.join(edu_strs)}").classes("text-sm text-grey-7")
             skills = profile.get("skills") or []
             if skills:
                 with ui.row().classes("flex-wrap gap-1 mt-1"):
                     for s in skills[:15]:
                         ui.badge(s).props("color=blue-2 text-color=blue-9")
 
-        summary = profile.get("resume_summary") or ""
-        if summary:
-            with ui.expansion("简历摘要", icon="summarize").classes("w-full"):
-                ui.label(summary).classes("text-sm text-grey-8 whitespace-pre-wrap")
-
-        work_exp = profile.get("work_experience") or []
-        if work_exp:
-            with ui.expansion(f"工作经历（{len(work_exp)}）", icon="work").classes("w-full"):
-                for w in work_exp:
-                    if not isinstance(w, dict):
-                        continue
-                    with ui.column().classes("w-full gap-0 py-1"):
-                        ui.label(f"{w.get('company', '')} · {w.get('title', '')}").classes("text-sm font-semibold")
-                        ui.label(w.get("duration", "")).classes("text-xs text-grey-5")
-                        desc = w.get("description", "")
-                        if desc:
-                            ui.label(desc).classes("text-xs text-grey-7 mt-1 whitespace-pre-wrap")
-                    ui.separator()
-
-        projects = profile.get("projects") or []
-        if projects:
-            with ui.expansion(f"项目经历（{len(projects)}）", icon="code").classes("w-full"):
-                for p in projects:
-                    if not isinstance(p, dict):
-                        continue
-                    with ui.column().classes("w-full gap-0 py-1"):
-                        ui.label(p.get("name", "")).classes("text-sm font-semibold")
-                        ui.label(f"角色：{p.get('role', '')}").classes("text-xs text-grey-6")
-                        ts = p.get("tech_stack") or []
-                        if ts:
-                            ui.label(f"技术：{', '.join(ts[:8])}").classes("text-xs text-grey-6")
-                        desc = p.get("description", "")
-                        if desc:
-                            ui.label(desc).classes("text-xs text-grey-7 mt-1 whitespace-pre-wrap")
-                    ui.separator()
+        if resume_markdown:
+            with ui.expansion("简历详情", icon="description", value=True).classes("w-full"):
+                ui.markdown(resume_markdown).classes("text-sm text-grey-8")
 
         if questions:
             with ui.expansion(f"面试题目（{len(questions)}）", icon="list_alt").classes("w-full"):

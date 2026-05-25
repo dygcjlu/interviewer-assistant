@@ -1,151 +1,178 @@
 # 数据存储
 
-本文档说明 SQLite 表结构、MemoryModule 职责划分、录音目录规则以及数据恢复逻辑。
+本文档说明文件系统存储方案、MemoryModule 职责划分、录音目录规则以及数据恢复逻辑。
+
+> **存储后端**：系统已从 SQLite 迁移至**基于文件系统的纯文本存储**。所有候选人档案、面试记录、评价报告均以 Markdown + YAML frontmatter 形式存储在 `candidates/` 目录下，无需数据库依赖。
 
 ---
 
-## SQLite 数据库表结构
+## 目录结构总览
 
-数据库文件路径由 `.env` 中 `DB_PATH` 配置（默认 `interview_assistant.db`）。
-
-所有表在 `Database.initialize()` 时通过 `CREATE TABLE IF NOT EXISTS` 创建，外键约束在连接初始化时启用（`PRAGMA foreign_keys = ON`）。
-
-### `Candidate` 表
-
-存储候选人基础信息和 JSON 序列化的详细画像。
-
-| 字段 | 类型 | 约束 | 说明 |
-|---|---|---|---|
-| `id` | TEXT | PRIMARY KEY | UUID，由 Orchestrator 创建会话时生成 |
-| `name` | TEXT | NOT NULL | 候选人姓名 |
-| `resume_text` | TEXT | NOT NULL DEFAULT `''` | PDF 提取的原始文本 |
-| `profile_json` | TEXT | NOT NULL DEFAULT `'{}'` | JSON 序列化的详细画像（见下） |
-| `created_at` | TEXT | NOT NULL | ISO 格式时间戳 |
-
-`profile_json` 包含字段：`email`、`phone`、`age`、`education`（数组）、`work_experience`（数组）、`skills`（数组）、`projects`（数组）、`resume_summary`、`resume_markdown_path`、`last_interview_insights`（面试后 `consolidate_memory` 写入）
-
-**索引**：`idx_candidate_name ON Candidate(name)`（支持姓名搜索）
-
----
-
-### `Interview` 表
-
-存储每次面试的元数据和题目清单。
-
-| 字段 | 类型 | 约束 | 说明 |
-|---|---|---|---|
-| `id` | TEXT | PRIMARY KEY | 对应 `InterviewSession.id`（UUID） |
-| `candidate_id` | TEXT | NOT NULL REFERENCES Candidate(id) | 关联候选人 |
-| `start_time` | TEXT | NOT NULL | ISO 格式开始时间 |
-| `end_time` | TEXT | — | ISO 格式结束时间，`close_session()` 时写入 |
-| `stage` | TEXT | NOT NULL DEFAULT `'idle'` | 最终阶段值 |
-| `question_plan_json` | TEXT | NOT NULL DEFAULT `'[]'` | JSON 序列化的 `InterviewQuestion` 数组 |
-| `context_summary` | TEXT | NOT NULL DEFAULT `''` | ContextManager 压缩摘要 |
-| `trigger_mode` | TEXT | NOT NULL DEFAULT `'auto'` | `auto` 或 `manual` |
-| `full_recording_candidate_path` | TEXT | — | 候选人完整录音文件路径 |
-| `full_recording_interviewer_path` | TEXT | — | 面试官完整录音文件路径 |
-
-**索引**：`idx_interview_candidate ON Interview(candidate_id, start_time)`
-
----
-
-### `ConversationRound` 表
-
-存储每轮对话的转写文本和关联录音。
-
-| 字段 | 类型 | 约束 | 说明 |
-|---|---|---|---|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 自增主键 |
-| `interview_id` | TEXT | NOT NULL REFERENCES Interview(id) | 关联面试 |
-| `round_number` | INTEGER | NOT NULL | 轮次序号（从 1 开始） |
-| `interviewer_text` | TEXT | NOT NULL DEFAULT `''` | 面试官转写文本 |
-| `candidate_text` | TEXT | NOT NULL DEFAULT `''` | 候选人转写文本 |
-| `llm_suggestion` | TEXT | — | LLM 生成的追问建议（当前版本保留字段，未写入） |
-| `candidate_audio_path` | TEXT | — | 候选人轮次录音文件路径 |
-| `interviewer_audio_path` | TEXT | — | 面试官轮次录音文件路径 |
-| `timestamp` | TEXT | NOT NULL | 轮次归档时间 |
-
-**索引**：`idx_round_interview ON ConversationRound(interview_id, round_number)`
-
----
-
-### `EvalReport` 表
-
-存储评价报告。
-
-| 字段 | 类型 | 约束 | 说明 |
-|---|---|---|---|
-| `id` | TEXT | PRIMARY KEY | UUID |
-| `interview_id` | TEXT | NOT NULL REFERENCES Interview(id) | 关联面试 |
-| `scores_json` | TEXT | NOT NULL DEFAULT `'[]'` | JSON 序列化，含 `dimensions`、`overall_score`、`generated_at` |
-| `strengths` | TEXT | NOT NULL DEFAULT `'[]'` | JSON 数组，优势列表 |
-| `weaknesses` | TEXT | NOT NULL DEFAULT `'[]'` | JSON 数组，不足列表 |
-| `recommendation` | TEXT | — | `strong_hire \| hire \| weak_hire \| no_hire` |
-| `full_report` | TEXT | — | 整体评价文字（即 `EvalReport.summary`） |
-
----
-
-### `TokenUsage` 表
-
-存储 LLM token 消耗统计（供监控用）。
-
-| 字段 | 类型 | 约束 | 说明 |
-|---|---|---|---|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 自增主键 |
-| `interview_id` | TEXT | NOT NULL REFERENCES Interview(id) | 关联面试 |
-| `round_number` | INTEGER | — | 记录时的轮次（可为 null） |
-| `prompt_tokens` | INTEGER | NOT NULL DEFAULT 0 | 输入 token 数 |
-| `completion_tokens` | INTEGER | NOT NULL DEFAULT 0 | 输出 token 数 |
-| `timestamp` | TEXT | NOT NULL | 记录时间 |
-
-**索引**：`idx_token_interview ON TokenUsage(interview_id)`
-
----
-
-### 表关系
-
-```mermaid
-erDiagram
-    Candidate {
-        TEXT id PK
-        TEXT name
-        TEXT resume_text
-        TEXT profile_json
-        TEXT created_at
-    }
-    Interview {
-        TEXT id PK
-        TEXT candidate_id FK
-        TEXT start_time
-        TEXT end_time
-        TEXT question_plan_json
-        TEXT trigger_mode
-    }
-    ConversationRound {
-        INTEGER id PK
-        TEXT interview_id FK
-        INTEGER round_number
-        TEXT interviewer_text
-        TEXT candidate_text
-    }
-    EvalReport {
-        TEXT id PK
-        TEXT interview_id FK
-        TEXT scores_json
-        TEXT recommendation
-    }
-    TokenUsage {
-        INTEGER id PK
-        TEXT interview_id FK
-        INTEGER prompt_tokens
-        INTEGER completion_tokens
-    }
-
-    Candidate ||--o{ Interview : "has"
-    Interview ||--o{ ConversationRound : "has"
-    Interview ||--o| EvalReport : "has"
-    Interview ||--o{ TokenUsage : "tracks"
 ```
+candidates/
+├── index.md                          # 全局候选人目录（YAML frontmatter + Markdown 表格）
+└── {candidate_id}/                   # 每个候选人一个 UUID 子目录
+    ├── profile.md                    # 候选人档案（YAML frontmatter + 简历 Markdown 正文）
+    ├── resume.pdf                    # 原始 PDF（上传时复制至此）
+    └── interviews/
+        ├── index.md                  # 本候选人的面试历史摘要
+        └── {interview_id}/           # 每次面试一个 UUID 子目录
+            ├── session.json          # 会话元数据（阶段、时间、录音路径）
+            ├── questions.md          # 面试问题清单（YAML frontmatter + Markdown 列表）
+            ├── transcript.md         # 完整对话记录（YAML frontmatter + 各轮发言）
+            └── eval_report.md        # 评价报告（YAML frontmatter + Markdown 正文）
+```
+
+根目录由 `.env` 中 `CANDIDATES_DIR` 配置（默认 `candidates`）。
+
+---
+
+## 文件格式说明
+
+### `candidates/index.md`
+
+全局候选人目录，YAML frontmatter 包含所有候选人的结构化列表，供快速搜索。
+
+```yaml
+---
+candidates:
+  - id: 93ba2cdd-a8f6-...
+    name: 张三
+    created_at: "2026-05-20"
+    latest_interview: "2026-05-21"
+---
+# 候选人目录
+| 候选人 | ID | 创建时间 | 最近面试 |
+```
+
+---
+
+### `candidates/{id}/profile.md`
+
+YAML frontmatter 存储候选人结构化信息，Markdown 正文为完整简历内容（用于 Agent 读取）。
+
+**frontmatter 字段**：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 候选人 UUID |
+| `name` | string | 姓名 |
+| `created_at` | string | 创建时间（ISO） |
+| `resume_pdf` | string | 原始 PDF 相对路径 |
+| `email` | string? | 邮箱（可选） |
+| `phone` | string? | 电话（可选） |
+| `age` | int? | 年龄（可选） |
+| `current_position` | string? | 当前职位（可选） |
+| `years_of_experience` | int? | 工作年限（可选） |
+| `skills` | list[string]? | 技能列表（可选） |
+
+正文为 ResumeAgent 解析出的 Markdown 格式简历全文，由 `MemoryModule.get_resume_markdown()` 单独读取，供 Agent 调用 `file_read` 或直接注入 prompt。
+
+---
+
+### `candidates/{id}/interviews/index.md`
+
+候选人面试历史汇总，YAML frontmatter 列出所有面试条目（含评分和关键结论）。
+
+**frontmatter 中每个 interview 条目**：
+
+| 字段 | 说明 |
+|---|---|
+| `interview_id` | 面试 UUID |
+| `start_time` | 开始时间（ISO） |
+| `end_time` | 结束时间（ISO，可为 null） |
+| `stage` | 最终阶段（`interviewing` / `completed`） |
+| `trigger_mode` | `auto` / `manual` |
+| `overall_score` | 综合评分（可为 null） |
+| `recommendation` | 推荐结论（可为 null） |
+| `key_findings` | 关键结论摘要 |
+
+---
+
+### `candidates/{id}/interviews/{id}/session.json`
+
+会话元数据，JSON 格式：
+
+```json
+{
+  "interview_id": "uuid",
+  "candidate_id": "uuid",
+  "start_time": "2026-05-20T10:00:00",
+  "end_time": "2026-05-20T11:30:00",
+  "stage": "completed",
+  "trigger_mode": "auto",
+  "recording_candidate_path": "recordings/uuid/full_candidate.wav",
+  "recording_interviewer_path": "recordings/uuid/full_interviewer.wav",
+  "context_summary": "..."
+}
+```
+
+---
+
+### `candidates/{id}/interviews/{id}/questions.md`
+
+YAML frontmatter 存储题目清单，每道题包含维度、难度、预设追问点和覆盖状态。
+
+```yaml
+---
+questions:
+  - id: 1
+    dimension: 系统设计
+    difficulty: hard
+    question: 请设计一个...
+    follow_ups: ["追问1", "追问2"]
+    is_covered: false
+---
+# 面试问题清单
+## 系统设计（困难难度）
+- [ ] 请设计一个...
+  - 追问：追问1
+```
+
+---
+
+### `candidates/{id}/interviews/{id}/transcript.md`
+
+YAML frontmatter 存储面试元数据，正文按轮次格式化面试官和候选人发言。
+
+```markdown
+---
+interview_id: uuid
+candidate_id: uuid
+start_time: "2026-05-20T10:00:00"
+end_time: "2026-05-20T11:30:00"
+rounds: 5
+---
+# 面试记录 · 张三 · 2026-05-20
+
+## Round 1 · 10:05
+
+**面试官：** 请介绍一下你最近的项目经历
+
+**候选人：** 我最近参与了...
+
+**追问建议：** 项目中遇到的最大技术挑战是什么？
+
+---
+```
+
+---
+
+### `candidates/{id}/interviews/{id}/eval_report.md`
+
+YAML frontmatter 存储评价报告结构化数据，正文为 Markdown 格式详细评价文字。
+
+**frontmatter 字段**：
+
+| 字段 | 说明 |
+|---|---|
+| `interview_id` | 关联面试 UUID |
+| `overall_score` | 综合评分（float） |
+| `recommendation` | `strong_hire \| hire \| weak_hire \| no_hire` |
+| `generated_at` | 生成时间（ISO） |
+| `strengths` | 优势列表 |
+| `weaknesses` | 不足列表 |
+| `dimensions` | 维度评分列表（`dimension`/`score`/`comment`） |
 
 ---
 
@@ -153,32 +180,54 @@ erDiagram
 
 **文件**：`src/storage/memory_module.py`
 
-`MemoryModule` 是唯一对外暴露的存储接口，内部通过 Repository 类与 SQLite 交互。
+`MemoryModule` 是唯一对外暴露的存储接口，所有读写操作均通过原子写入（`mkstemp + os.replace`）保证文件安全，避免写入中途崩溃损坏数据。
 
-### 短期记忆
-
-- **载体**：运行时 `InterviewSession` 对象（Python 内存）
-- **生命周期**：从 `Orchestrator.create_session()` 到 `close_session()`
-- **内容**：`session.candidate`、`session.question_plan`、`session.rounds`、`session.stage`、`session.context_summary`
-- **访问方式**：直接操作 Python 对象，不经过 MemoryModule
-
-### 长期记忆
-
-- **载体**：SQLite 数据库（aiosqlite）
-- **读写接口**（`MemoryModule` 方法）：
+### 候选人 CRUD
 
 | 方法 | 说明 |
 |---|---|
-| `save_candidate(profile)` | 插入或替换候选人记录（`INSERT OR REPLACE`） |
-| `get_candidate(candidate_id)` | 按 ID 查询候选人 |
-| `search_candidates(keyword, limit)` | 按姓名模糊查询候选人列表 |
-| `get_latest_question_plan(candidate_id)` | 从最近一次面试恢复题目清单 |
-| `get_candidate_history(candidate_id, limit)` | 查询最近 N 次面试历史（含评价摘要） |
-| `save_interview(session)` | UPSERT 面试记录和所有对话轮次 |
-| `get_interview_detail(interview_id)` | 查询面试完整详情（含轮次和报告） |
-| `save_eval_report(report)` | 插入评价报告 |
-| `get_eval_report(interview_id)` | 按面试 ID 查询评价报告 |
-| `consolidate_memory(session)` | 面试后将评价洞察写回候选人 `profile_json` |
+| `save_candidate(profile, resume_markdown)` | 写 `profile.md`（frontmatter + 正文），更新 `candidates/index.md` |
+| `get_candidate(candidate_id)` | 读 `profile.md` frontmatter，返回 `CandidateProfile` |
+| `get_resume_markdown(candidate_id)` | 读 `profile.md` 正文（frontmatter 之后的 Markdown） |
+| `get_candidate_by_name(name)` | 从 index.md 按姓名精确查找 |
+| `search_candidates(keyword, limit, offset)` | 从 index.md 按姓名模糊搜索 |
+| `delete_candidate(candidate_id)` | 递归删除候选人目录，更新 index.md |
+
+### 面试生命周期
+
+| 方法 | 触发时机 | 说明 |
+|---|---|---|
+| `start_interview(session)` | `dispatch_to_agent` questions_done 时 | 写 `session.json`（stage=interviewing）+ `questions.md` |
+| `finish_interview(session)` | `close_session()` 时 | 写 `transcript.md`，更新 `session.json`（end_time / stage），更新两级 index |
+| `get_latest_question_plan(candidate_id)` | 前端加载候选人时 | 读最近一次面试的 `questions.md` frontmatter |
+| `get_interview_detail(interview_id, candidate_id?)` | 历史查询 | 读 `session.json` + 解析 `transcript.md` + 读 `eval_report.md` |
+
+### 候选人历史记忆
+
+| 方法 | 说明 |
+|---|---|
+| `get_candidate_history(candidate_id, limit=3)` | 读 `interviews/index.md`，返回最近 N 次面试摘要 + 格式化文字 |
+
+返回 `CandidateHistory(past_interviews, history_summary)`，`history_summary` 字段直接注入到 `session.candidate.history_summary`，供 PromptBuilder Layer 4 使用。
+
+### 评价报告
+
+| 方法 | 说明 |
+|---|---|
+| `save_eval_report(report)` | 写 `eval_report.md`，更新 `interviews/index.md` 中的评分和关键结论 |
+| `get_eval_report(interview_id, candidate_id?)` | 读 `eval_report.md`，反序列化为 `EvalReport` |
+
+---
+
+## 短期记忆 vs 长期记忆
+
+| 维度 | 短期记忆 | 长期记忆 |
+|---|---|---|
+| 载体 | `InterviewSession` 对象（内存） | 文件系统（`candidates/` 目录） |
+| 范围 | 单次面试会话期间 | 跨会话、跨服务重启 |
+| 管理方 | `InterviewController`（Agent 层） | `MemoryModule`（Storage 层） |
+| 内容 | 实时对话轮次、题目覆盖状态、当前阶段 | 候选人档案（profile.md）、历史面试（transcript/eval） |
+| 生命周期 | 随 `create_session()` 创建，`close_session()` 清空 | 永久保存，支持查询和删除 |
 
 ---
 
@@ -194,8 +243,8 @@ recordings/
     └── rounds/
         ├── round_001_candidate.wav         # 第 1 轮候选人录音
         ├── round_001_interviewer.wav       # 第 1 轮面试官录音
-        ├── round_002_candidate.wav         # 第 2 轮候选人录音
-        ├── round_002_interviewer.wav       # 第 2 轮面试官录音
+        ├── round_002_candidate.wav
+        ├── round_002_interviewer.wav
         └── ...
 ```
 
@@ -209,34 +258,43 @@ recordings/
 
 - `AudioRecorder.mark_round_boundary(round_number)` 在 `finalize_round()` 时调用，触发对应轮次录音文件的边界标记和写入
 - 完整录音在面试结束（`AudioManager.stop()`）时写入
+- 录音路径写回 `session.metadata.recording_candidate_path / recording_interviewer_path`，由 `finish_interview()` 持久化到 `session.json`
 
 ---
 
-## DB fallback：`GET /resume/profile` 数据恢复逻辑
+## 索引重建
 
-当前端在新会话或页面刷新后请求候选人信息时，系统按以下优先级返回数据：
+`MemoryModule.rebuild_index()` 可从目录结构重建 `candidates/index.md` 和各 `interviews/index.md`，用于数据修复或手动编辑文件后的一致性恢复。
+
+---
+
+## 候选人数据恢复逻辑（`GET /resume/profile`）
 
 ```
 GET /api/resume/profile?candidate_id=xxx
 
 1. memory.get_candidate(candidate_id)
-   ↓ 从 DB 的 Candidate 表读取候选人基础信息
+   ↓ 读 candidates/{id}/profile.md frontmatter → CandidateProfile
+   ↓ 若不存在 → 404 not_found
 
-2. session = orchestrator.get_session()
+2. session = controller.get_session()
    若 session 非空 且 session.candidate.id == candidate_id
    且 session.question_plan 非空
    → 直接返回内存中的 session.question_plan（最新，未持久化的也在这里）
 
 3. 否则：
    memory.get_latest_question_plan(candidate_id)
-   ↓ 查 Interview 表，取最近一次面试的 question_plan_json 字段反序列化
+   ↓ 读 interviews/index.md → 取最新 interview_id
+   ↓ 读 interviews/{id}/questions.md frontmatter → list[dict]
+
+4. memory.get_resume_markdown(candidate_id)
+   ↓ 读 profile.md 正文
 
 最终返回：
 {
   "candidate_id": "...",
-  "profile": <DB 中的 CandidateProfile>,
-  "questions": <内存 question_plan 或 DB 最近一次题目清单>
+  "profile": <CandidateProfile>,
+  "questions": <内存 question_plan 或 questions.md 反序列化>,
+  "resume_markdown": "<profile.md 正文>"
 }
 ```
-
-**注意**：若候选人 ID 在 DB 中不存在，直接返回 `404 not_found`（不做 fallback）。

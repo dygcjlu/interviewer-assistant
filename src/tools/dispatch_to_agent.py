@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 
 from ..logging import truncate
 from ._context import ctx
@@ -35,6 +36,7 @@ async def dispatch_to_agent(agent: str, task: str) -> str:
     if ctx.resume_agent is None or ctx.controller is None:
         return json.dumps({"type": "error", "message": "服务未初始化"}, ensure_ascii=False)
 
+    task = await _enrich_task_with_session_context(task)
     logger.info("dispatch_to_agent agent=%s task=%s", agent, truncate(task))
     start = time.perf_counter()
 
@@ -60,6 +62,31 @@ async def dispatch_to_agent(agent: str, task: str) -> str:
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
+async def _enrich_task_with_session_context(task: str) -> str:
+    """注入当前 session 的文件路径，避免 ResumeAgent 猜测错误路径。"""
+    session = await ctx.controller.get_session()
+    if session is None:
+        return task
+    cid = session.candidate.id
+    name = session.candidate.name or ""
+    profile_md = f"candidates/{cid}/profile.md"
+    resume_pdf = session.candidate.resume_pdf or ""
+    stem = Path(resume_pdf).stem if resume_pdf else ""
+    lines = [
+        task,
+        "",
+        "[系统上下文 — 生成题目时读取持久化简历，解析任务仍用 resumes/ 路径]",
+        f"- 候选人 ID: {cid}",
+        f"- 姓名: {name}",
+        f"- 持久化简历（file_read 首选）: {profile_md}",
+    ]
+    if stem:
+        lines.append(f"- PDF: resumes/{stem}.pdf")
+        lines.append(f"- 临时 Markdown: resumes/{stem}.md")
+        lines.append(f"- 题目 JSON: resumes/{stem}_questions.json")
+    return "\n".join(lines)
+
+
 async def _apply_side_effects(result_type: str | None, result: dict) -> None:
     """根据结果类型执行副作用（更新 session、持久化）。"""
     from ..models.candidate import update_candidate_from_data
@@ -73,13 +100,27 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
         profile_data = result.get("profile") or {}
         if profile_data:
             update_candidate_from_data(session.candidate, profile_data)
+
+        # 读取 ResumeAgent 写出的 Markdown 文件内容，读取成功后删除临时文件
+        resume_markdown = ""
         markdown_path = result.get("markdown_path")
         if markdown_path:
-            session.candidate.resume_markdown_path = markdown_path
+            md_file = Path(markdown_path)
+            try:
+                resume_markdown = md_file.read_text(encoding="utf-8")
+            except Exception:
+                logger.warning("dispatch_to_agent: failed to read markdown file %s", markdown_path)
+            else:
+                try:
+                    md_file.unlink()
+                except OSError:
+                    pass
 
         if ctx.memory_module is not None:
             try:
-                await ctx.memory_module.save_candidate(session.candidate)
+                await ctx.memory_module.save_candidate(session.candidate, resume_markdown)
+                # 更新 session 中的 resume_content 以便后续 Agent 直接使用
+                session.candidate.resume_content = resume_markdown
             except Exception:
                 logger.exception("dispatch_to_agent: save_candidate failed")
 
@@ -104,6 +145,6 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
         if ctx.memory_module is not None:
             try:
                 if session.question_plan:
-                    await ctx.memory_module.save_interview(session)
+                    await ctx.memory_module.start_interview(session)
             except Exception:
-                logger.exception("dispatch_to_agent: save_interview failed")
+                logger.exception("dispatch_to_agent: start_interview failed")

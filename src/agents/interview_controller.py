@@ -83,6 +83,8 @@ class InterviewController:
                 history = await self._memory.get_candidate_history(candidate_id)
                 if history is not None:
                     candidate.history_summary = history.history_summary
+                resume_content = await self._memory.get_resume_markdown(candidate_id)
+                candidate.resume_content = resume_content
             else:
                 candidate = CandidateProfile(id=candidate_id, name="")
         else:
@@ -133,9 +135,9 @@ class InterviewController:
             self._session.context_summary = self._interview_agent.context_manager.summary
 
         try:
-            await self._memory.save_interview(self._session)
+            await self._memory.finish_interview(self._session)
         except Exception:
-            logger.exception("InterviewController: save_interview failed")
+            logger.exception("InterviewController: finish_interview failed")
 
         if self._interview_agent.context_manager is not None:
             try:
@@ -197,6 +199,12 @@ class InterviewController:
                 )
 
         self._session.stage = InterviewStage.INTERVIEWING
+
+        try:
+            await self._memory.start_interview(self._session)
+        except Exception:
+            logger.exception("InterviewController: start_interview memory write failed")
+
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info("start_interview done elapsed_ms=%.1f", elapsed_ms)
 

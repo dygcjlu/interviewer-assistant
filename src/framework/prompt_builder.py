@@ -135,15 +135,12 @@ def _build_fixed_zone(session: InterviewSession, user_memory: str = "") -> str:
         lines.append(f"工作年限：{c.years_of_experience} 年")
     if c.age is not None:
         lines.append(f"年龄：{c.age}")
-    if c.education:
-        edu_parts = [f"{e.school} {e.degree} {e.major}" for e in c.education]
-        lines.append(f"教育背景：{'; '.join(edu_parts)}")
     if c.skills:
         lines.append(f"技能：{', '.join(c.skills)}")
-    if c.resume_markdown_path:
-        lines.append(f"简历文件路径：{c.resume_markdown_path}（可调用 read_resume_markdown 工具查看完整内容）")
-    if c.resume_summary:
-        lines.append(f"\n简历摘要：\n{c.resume_summary}")
+    if c.resume_content:
+        lines.append(f"\n## 候选人简历\n\n{c.resume_content.strip()}")
+    elif c.id:
+        lines.append(f"简历档案：candidates/{c.id}/profile.md（可调用 file_read 工具查看完整内容）")
     if session.question_plan:
         lines.append("\n面试题目清单：")
         for q in session.question_plan:
