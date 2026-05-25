@@ -230,8 +230,7 @@ logs/
 *.db
 recordings/
 trajectories/
-resumes/*.pdf
-resumes/*.md
+resumes/
 openspec/
 conversations/
 candidates/

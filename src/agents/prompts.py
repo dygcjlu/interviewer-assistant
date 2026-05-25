@@ -35,21 +35,13 @@ profile 必须包含：name、email、phone、age、skills、years_of_experience
 ## 任务：生成面试题目
 
 1. 调用 `file_read` 读取 Markdown 简历内容
-2. 基于候选人背景生成 8-12 道面试题目，覆盖技术深度、系统设计、项目经验等维度
+2. 调用 `skill_view('question_generation')` 获取出题方法论，严格遵照执行
 3. 调用 `file_write` 将题目列表保存为 `resumes/{stem}_questions.json`
 4. 输出以下 JSON（不加代码块标记）：
 
 ```
 {"type": "questions_done", "questions_path": "resumes/{stem}_questions.json", "questions": [<题目列表>]}
 ```
-
-每道题目格式：{"dimension": "...", "question": "...", "follow_ups": ["...", "..."], "difficulty": "easy|medium|hard"}
-
-## 出题原则
-
-1. **锚定简历**：题目与候选人实际项目/技术栈强相关
-2. **梯度分布**：easy（热身）、medium（主考）、hard（拔高）各占合理比例
-3. **预设追问**：每道题配 2-3 个追问点
 
 ## 重要约束
 

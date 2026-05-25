@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     MOCK_AUDIO: bool = False
     MOCK_AUDIO_SCRIPT: str = "data/mock_script.json"
 
+    # PDF 解析引擎：pymupdf | qwen_vl | mineru
+    PDF_PARSER: str = "qwen_vl"
+
+    # Qwen-VL 解析配置（PDF_PARSER=qwen_vl 时有效，复用 QWEN_API_KEY）
+    QWEN_VL_MODEL: str = "qwen-vl-max"
+
+    # MinerU Cloud API 配置（PDF_PARSER=mineru 时有效）
+    MINERU_API_TOKEN: str = ""
+    MINERU_MODEL_VERSION: str = "vlm"
+
 
 _settings: Settings | None = None
 

@@ -30,7 +30,7 @@ _SEND_CHUNK_BYTES = 1280     # 官方建议：每 40ms 发送 1280 字节
 _RECONNECT_DELAY_SEC = 1.5
 
 # 讯飞 ASR 会将上一句的末尾标点延迟到下一句结果的开头，需在接收层纠正
-_LEADING_PUNCT = frozenset("，。！？；：、…"'""''（）【】「」")
+_LEADING_PUNCT = frozenset("""，。！？；：、…"'""''（）【】「」""")
 
 
 class XunfeiRealtimeSTT:

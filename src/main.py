@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     resume_config = AgentConfig(
         name="resume",
         system_prompt=RESUME_AGENT_SYSTEM_PROMPT,
-        skill_names=["resume_anchor"],
+        skill_names=["question_generation"],
         tool_names=["parse_resume_pdf", "file_read", "file_write", "skill_view"],
     )
     interview_config = AgentConfig(
