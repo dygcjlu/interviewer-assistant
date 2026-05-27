@@ -6,7 +6,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.logging import bind_op, text_summary, truncate
 
@@ -14,10 +14,12 @@ from .base import AgentRequest, AgentResponse, BaseAgent
 from ..framework.prompt_builder import AgentConfig, PromptBuilder
 from ..framework.tool_registry import ToolRegistry
 from ..models.evaluation import DimensionScore, EvalReport
+from ..models.exceptions import StorageError
 from ..models.message import Message
 from ..models.session import ConversationRound, InterviewSession
 from ..storage.memory_module import MemoryModule
 from ..storage.user_memory import UserMemoryStore
+from ..utils import safe_float as _safe_float
 
 if TYPE_CHECKING:
     from ..llm.protocol import LLMClient
@@ -65,7 +67,7 @@ class EvalAgent(BaseAgent):
         logger.info("EvalAgent deactivated for session %s", session.id)
 
     async def handle_request(self, request: AgentRequest) -> AgentResponse:
-        bind_op(request.type)
+        self._bind_log_context(request.type)
         logger.info(
             "EvalAgent handle_request start type=%s session_id=%s",
             request.type,
@@ -105,8 +107,9 @@ class EvalAgent(BaseAgent):
             text_summary(full_text, preview_len=80),
         )
 
-        # 中文每字约 1 token，比英文更密集；保守估算避免漏判超窗口情况
-        estimated_tokens = len(full_text)
+        # 中文每字约 1 token；同时计入系统消息开销，避免漏判超窗口情况
+        system_text_len = sum(len(m.content or "") for m in base_messages)
+        estimated_tokens = len(full_text) + system_text_len
         if estimated_tokens <= _TOKEN_THRESHOLD:
             logger.info(
                 "EvalAgent generate_eval using single-call path estimated_tokens=%d",
@@ -142,11 +145,23 @@ class EvalAgent(BaseAgent):
             data = _parse_eval_json(result_text)
         except json.JSONDecodeError:
             logger.warning(
-                "EvalAgent generate_eval invalid_json session_id=%s response %s",
+                "EvalAgent generate_eval invalid_json session_id=%s response %s, retrying",
                 session.id,
                 text_summary(result_text, preview_len=80),
             )
-            data = {}
+            try:
+                result_text = await self._retry_fix_json(base_messages, result_text)
+                data = _parse_eval_json(result_text)
+            except (json.JSONDecodeError, Exception):
+                logger.error(
+                    "EvalAgent generate_eval retry_invalid_json session_id=%s response %s",
+                    session.id,
+                    text_summary(result_text, preview_len=80),
+                )
+                return AgentResponse(
+                    success=False,
+                    error="评价生成失败：LLM 返回内容无法解析为有效 JSON",
+                )
 
         report = EvalReport(
             id=str(uuid.uuid4()),
@@ -154,13 +169,14 @@ class EvalAgent(BaseAgent):
             dimensions=[
                 DimensionScore(
                     dimension=str(d.get("dimension", "综合")),
-                    score=float(d.get("score", 5.0)),
+                    score=_safe_float(d.get("score"), default=5.0),
                     comment=str(d.get("comment", "")),
                     evidence=list(d.get("evidence", [])),
                 )
                 for d in data.get("dimensions", [])
+                if isinstance(d, dict)
             ],
-            overall_score=float(data.get("overall_score", 5.0)),
+            overall_score=_safe_float(data.get("overall_score"), default=5.0),
             strengths=list(data.get("strengths", [])),
             weaknesses=list(data.get("weaknesses", [])),
             recommendation=str(data.get("recommendation", "hire")),
@@ -168,9 +184,19 @@ class EvalAgent(BaseAgent):
             generated_at=datetime.now(),
         )
 
+        save_warning: str | None = None
         try:
             await self._memory_module.save_eval_report(report)
-        except Exception:
+        except StorageError as exc:
+            # M4-2: 持久化降级（写入 eval_orphans）属于已知降级路径，把 warning 透传给路由层。
+            save_warning = str(exc)
+            logger.warning(
+                "EvalAgent generate_eval: save degraded report_id=%s reason=%s",
+                report.id,
+                exc,
+            )
+        except Exception as exc:
+            save_warning = f"评价报告存储失败：{exc.__class__.__name__}。报告对象仍在内存中。"
             logger.exception(
                 "EvalAgent generate_eval save_eval_report failed report_id=%s",
                 report.id,
@@ -188,7 +214,10 @@ class EvalAgent(BaseAgent):
             elapsed_ms,
             truncate(report.summary),
         )
-        return AgentResponse(success=True, data={"report": report})
+        data: dict[str, Any] = {"report": report}
+        if save_warning:
+            data["save_warning"] = save_warning
+        return AgentResponse(success=True, data=data)
 
     def _read_user_memory(self) -> str:
         """从 UserMemoryStore 读取面试官岗位要求，失败时返回空字符串。"""
@@ -220,6 +249,16 @@ class EvalAgent(BaseAgent):
             ))
 
         return messages
+
+    async def _retry_fix_json(self, base_messages: list[Message], bad_output: str) -> str:
+        """JSON 格式有误时，要求 LLM 基于前次输出重新整理为合法 JSON。"""
+        messages = list(base_messages)
+        messages.append(Message(role="assistant", content=bad_output))
+        messages.append(Message(
+            role="user",
+            content="输出格式有误，请仅输出符合要求的 JSON 对象，不包含代码块标记或任何说明文字。",
+        ))
+        return await self._run_with_tools(messages)
 
     async def _eval_single(
         self,
@@ -256,9 +295,19 @@ class EvalAgent(BaseAgent):
             chunk_idx = i // _CHUNK_SIZE + 1
 
             messages = list(base_messages)
+
+            prior_context = ""
+            if partial_analyses:
+                prior_context = (
+                    "【前序对话段分析摘要（供参考，了解已覆盖内容与候选人已展示的能力信号）】\n\n"
+                    + "\n\n".join(partial_analyses)
+                    + "\n\n"
+                )
+
             messages.append(Message(
                 role="user",
                 content=(
+                    f"{prior_context}"
                     f"以下是面试对话的第 {start_round}–{end_round} 轮"
                     f"（共 {total} 轮中的第 {chunk_idx}/{chunk_count} 段）：\n\n"
                     f"{_format_rounds(chunk)}\n\n"

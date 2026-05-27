@@ -56,7 +56,6 @@ def _make_session(interview_id: str = "i-1", candidate_id: str = "c-1") -> Inter
         stage=InterviewStage.COMPLETED,
         context_summary="本次面试摘要",
         covered_dimensions={"算法"},
-        working_notes="表现良好",
         metadata=SessionMetadata(
             candidate_id=candidate_id,
             start_time=start,
@@ -250,3 +249,113 @@ async def test_save_and_get_eval_report(memory: MemoryModule) -> None:
 @pytest.mark.asyncio
 async def test_get_eval_report_missing_returns_none(memory: MemoryModule) -> None:
     assert await memory.get_eval_report("missing") is None
+
+
+# ── S-6 + recovery ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_append_round_creates_jsonl_wal(memory: MemoryModule) -> None:
+    """S-6 回归：append_round 每次写一行 JSON，进程崩溃也能从 WAL 恢复。"""
+    session = _make_session()
+    await memory.save_candidate(session.candidate, "## 测试简历")
+    await memory.start_interview(session)
+
+    r = ConversationRound(round_number=1, interviewer_text="q1", candidate_text="a1")
+    await memory.append_round(session.candidate.id, session.id, r)
+    await memory.append_round(
+        session.candidate.id,
+        session.id,
+        ConversationRound(round_number=2, interviewer_text="q2", candidate_text="a2"),
+    )
+
+    wal = Path(memory._root) / session.candidate.id / "interviews" / session.id / "rounds.jsonl"
+    assert wal.exists()
+    lines = wal.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+
+
+@pytest.mark.asyncio
+async def test_scan_orphan_wal_finds_unfinished_interviews(memory: MemoryModule) -> None:
+    """recovery: 未归档的 rounds.jsonl 会被列出供恢复。"""
+    session = _make_session(interview_id="i-orphan")
+    await memory.save_candidate(session.candidate, "## md")
+    await memory.start_interview(session)
+    await memory.append_round(
+        session.candidate.id,
+        session.id,
+        ConversationRound(round_number=1, interviewer_text="qa", candidate_text="ab"),
+    )
+
+    orphans = await memory.scan_orphan_wal()
+    assert len(orphans) == 1
+    o = orphans[0]
+    assert o["candidate_id"] == session.candidate.id
+    assert o["interview_id"] == "i-orphan"
+    assert o["round_count"] == 1
+    assert o["candidate_name"] == "张三"
+
+
+@pytest.mark.asyncio
+async def test_recover_interview_from_wal_rebuilds_transcript(memory: MemoryModule) -> None:
+    """recovery: 从 WAL 重建 transcript.md 并归档 WAL。"""
+    session = _make_session(interview_id="i-recover")
+    await memory.save_candidate(session.candidate, "## md")
+    await memory.start_interview(session)
+    for n in (1, 2, 3):
+        await memory.append_round(
+            session.candidate.id,
+            session.id,
+            ConversationRound(
+                round_number=n,
+                interviewer_text=f"q{n}",
+                candidate_text=f"a{n}",
+            ),
+        )
+
+    recovered = await memory.recover_interview_from_wal(session.candidate.id, "i-recover")
+    assert recovered == 3
+
+    # transcript.md 已生成
+    transcript = (
+        Path(memory._root)
+        / session.candidate.id
+        / "interviews"
+        / "i-recover"
+        / "transcript.md"
+    )
+    assert transcript.exists()
+    text = transcript.read_text(encoding="utf-8")
+    assert "q1" in text and "a3" in text
+
+    # WAL 已归档
+    wal = transcript.parent / "rounds.jsonl"
+    archived = transcript.parent / "rounds.jsonl.archived"
+    assert not wal.exists()
+    assert archived.exists()
+
+    # 再扫一次应该没有 orphans
+    assert await memory.scan_orphan_wal() == []
+
+
+@pytest.mark.asyncio
+async def test_discard_orphan_wal_removes_file(memory: MemoryModule) -> None:
+    session = _make_session(interview_id="i-discard")
+    await memory.save_candidate(session.candidate, "## md")
+    await memory.start_interview(session)
+    await memory.append_round(
+        session.candidate.id,
+        session.id,
+        ConversationRound(round_number=1, interviewer_text="q", candidate_text="a"),
+    )
+
+    deleted = await memory.discard_orphan_wal(session.candidate.id, "i-discard")
+    assert deleted is True
+    wal = (
+        Path(memory._root)
+        / session.candidate.id
+        / "interviews"
+        / "i-discard"
+        / "rounds.jsonl"
+    )
+    assert not wal.exists()

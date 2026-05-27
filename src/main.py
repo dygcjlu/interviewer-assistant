@@ -31,6 +31,7 @@ from src.framework.skill import SkillLoader
 from src.framework.tool_registry import ToolRegistry
 from src.llm.client import OpenAICompatibleClient
 from src.llm.config import LLMConfig
+from src.models.session import InterviewStage
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
 from src.tools import register_all
@@ -48,16 +49,28 @@ USER_MEMORY_CHAR_LIMIT = 3000
 
 settings = get_settings()
 
-_controller_ref: InterviewController | None = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    global _controller_ref
     logger.info("Interview Assistant starting up")
     os.makedirs(settings.RECORDINGS_DIR, exist_ok=True)
     os.makedirs(settings.CANDIDATES_DIR, exist_ok=True)
     os.makedirs("resumes", exist_ok=True)
+
+    # S-15: 启动时校验关键配置，缺失时 ERROR 日志 + 暴露给 UI 显示红色横幅。
+    # 不阻断启动：本地工具仍允许用 MOCK_AUDIO=true 等 mock 模式后补 key。
+    startup_warnings: list[str] = []
+    if not settings.QWEN_API_KEY:
+        msg = (
+            "QWEN_API_KEY 未配置：LLM 功能不可用（聊天、生成题目、追问建议、评价报告均会失败）。"
+            "请在 .env 中设置后重启服务。"
+        )
+        logger.error("S-15 config check failed: %s", msg)
+        startup_warnings.append(msg)
+    if settings.MOCK_AUDIO and not Path(settings.MOCK_AUDIO_SCRIPT).exists():
+        msg = f"MOCK_AUDIO 已启用但脚本文件不存在：{settings.MOCK_AUDIO_SCRIPT}（开始面试时音频会异常）。"
+        logger.error("S-15 config check failed: %s", msg)
+        startup_warnings.append(msg)
 
     # ── Infrastructure ─────────────────────────────────────────────────────────
     memory_module = MemoryModule(candidates_dir=settings.CANDIDATES_DIR)
@@ -108,7 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         name="eval",
         system_prompt=EVAL_AGENT_SYSTEM_PROMPT,
         skill_names=[],
-        tool_names=["skill_view"],
+        tool_names=[],
     )
 
     resume_agent = ResumeAgent(resume_config, prompt_builder, llm_client, tool_registry)
@@ -158,7 +171,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     controller = InterviewController(
         interview_agent, eval_agent, memory_module, audio_manager
     )
-    _controller_ref = controller
 
     # ── MainAgent (single entry point for conversation) ──────────────────────
     main_agent = MainAgent(
@@ -167,8 +179,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         memory_module=memory_module,
         user_memory_store=user_memory_store,
     )
-    main_agent.bind_resume_agent(resume_agent)
-    main_agent.bind_controller(controller)
 
     # 注入工具依赖（在所有组件创建完毕后）
     tool_ctx.main_agent = main_agent
@@ -179,13 +189,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     tool_ctx.prompt_builder = prompt_builder
     tool_ctx.skill_loader = skill_loader
 
+    # 崩溃恢复：扫描残留 rounds.jsonl，提示用户处理
+    try:
+        orphans = await memory_module.scan_orphan_wal()
+        if orphans:
+            msg = (
+                f"检测到 {len(orphans)} 个未完成的面试残留（上次进程崩溃前未保存）。"
+                f"调用 GET /api/recovery/scan 查看详情，"
+                f"POST /api/recovery/finish 或 /api/recovery/discard 处理。"
+            )
+            logger.warning("recovery: %d orphan WAL(s) detected", len(orphans))
+            startup_warnings.append(msg)
+    except Exception:
+        logger.exception("recovery scan at startup failed")
+
     # Inject dependencies into NiceGUI UI module and FastAPI app state
-    _web_ui.set_dependencies(memory_module, llm_client, tool_registry, settings)
+    _web_ui.set_dependencies(settings)
+    _web_ui.set_startup_warnings(startup_warnings)
     app.state.controller = controller
     app.state.main_agent = main_agent
     app.state.memory_module = memory_module
     app.state.context_manager = context_manager
     app.state.settings = settings
+    app.state.startup_warnings = startup_warnings
 
     logger.info(
         "Interview Assistant ready on http://%s:%d", settings.HOST, settings.PORT
@@ -195,6 +221,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("Interview Assistant shutting down")
     try:
+        if controller.stage == InterviewStage.INTERVIEWING:
+            try:
+                await controller.stop_interview()
+            except Exception:
+                logger.exception("Lifespan: stop_interview during shutdown failed")
         await controller.close_session()
     except Exception:
         logger.exception("Lifespan: close_session failed")

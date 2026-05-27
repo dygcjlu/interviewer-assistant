@@ -1,0 +1,22 @@
+[
+  {
+    "source": "interviewer",
+    "text": "你好，请先简单介绍一下自己和你的技术背景。",
+    "delay_ms": 500
+  },
+  {
+    "source": "candidate",
+    "text": "你好，我叫示例候选人，有三年后端开发经验，主要用 Python 和 Go。",
+    "delay_ms": 2000
+  },
+  {
+    "source": "interviewer",
+    "text": "好的，你在最近一个项目中遇到的最大技术挑战是什么？",
+    "delay_ms": 3000
+  },
+  {
+    "source": "candidate",
+    "text": "最大的挑战是把单体服务拆分为微服务，需要保证数据一致性和零停机迁移。",
+    "delay_ms": 2500
+  }
+]

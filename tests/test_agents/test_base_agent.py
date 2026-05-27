@@ -78,7 +78,7 @@ async def test_run_with_tools_returns_content_on_no_tool_calls() -> None:
 async def test_run_with_tools_executes_tool_and_continues() -> None:
     registry = ToolRegistry()
 
-    @registry.register(description="echo input")
+    @registry.register(description="echo input", parameters_schema={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]})
     async def echo(text: str) -> str:
         return f"echo:{text}"
 

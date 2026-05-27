@@ -5,7 +5,14 @@ from ..models.exceptions import (
     InterviewAssistantError as LLMError,
     LLMRateLimitError,
     LLMResponseError,
+    LLMRetryExhaustedError,
     LLMTimeoutError,
 )
 
-__all__ = ["LLMError", "LLMTimeoutError", "LLMRateLimitError", "LLMResponseError"]
+__all__ = [
+    "LLMError",
+    "LLMTimeoutError",
+    "LLMRateLimitError",
+    "LLMResponseError",
+    "LLMRetryExhaustedError",
+]

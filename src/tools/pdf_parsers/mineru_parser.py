@@ -53,9 +53,8 @@ class MineruParser(BasePDFParser):
             task_id = data["task_id"]
             file_url = data["file_url"]
 
-            # 2. 上传文件到 OSS
-            with open(file_path, "rb") as f:
-                content = f.read()
+            # L1-4: 同步 read 会阻塞事件循环（1-10MB PDF 几十到几百 ms），移到线程池
+            content = await asyncio.to_thread(Path(file_path).read_bytes)
             put_resp = await client.put(file_url, content=content)
             put_resp.raise_for_status()
             logger.info("MineruParser[agent]: uploaded %s, task_id=%s", file_name, task_id)
@@ -110,9 +109,8 @@ class MineruParser(BasePDFParser):
             batch_id = data["batch_id"]
             upload_url = data["files"][0]["url"]
 
-            # 2. 上传文件
-            with open(file_path, "rb") as f:
-                content = f.read()
+            # L1-4: 同上，移到线程池避免阻塞事件循环
+            content = await asyncio.to_thread(Path(file_path).read_bytes)
             put_resp = await client.put(upload_url, content=content)
             put_resp.raise_for_status()
             logger.info("MineruParser[precise]: uploaded %s, batch_id=%s", file_name, batch_id)

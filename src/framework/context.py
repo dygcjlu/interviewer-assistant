@@ -71,6 +71,19 @@ class ContextManager:
 
     # ── public interface ──────────────────────────────────────────────────────
 
+    def set_compress_done_handler(
+        self, handler: Callable[[str], None] | None
+    ) -> None:
+        """注册/更换压缩完成回调。
+
+        L3-2 / M5-3：外部组件（如 InterviewController）需在 reset 后重新注入
+        handler，应通过此公开方法而非直接 setattr 私有属性。
+
+        Args:
+            handler: 接收新 summary 文本的回调；传 ``None`` 取消订阅。
+        """
+        self._on_compress_done = handler
+
     async def add_round(self, round_: ConversationRound) -> None:
         """新增对话轮次，内部异步检查是否需要触发压缩（不阻塞）。"""
         self._all_rounds.append(round_)
@@ -230,11 +243,15 @@ class ContextManager:
             ]
             response = await self._llm_client.chat(messages, temperature=0.3)
             self._summary = SUMMARY_PREFIX + response.content
-            self._all_rounds = self._all_rounds[-window_size:]
+            # M5-4: 用「跳过已压缩的前 N 条」语义写回，保留压缩期间 add_round 新加入的 rounds。
+            # 旧实现 `self._all_rounds[-window_size:]` 在并发 add_round 后会丢失中间 rounds。
+            compressed_count = len(rounds_to_compress)
+            self._all_rounds = self._all_rounds[compressed_count:]
             logger.info(
-                "ContextManager: compressed %d rounds into summary (%d chars)",
-                len(rounds_to_compress),
+                "ContextManager: compressed %d rounds into summary (%d chars), %d rounds retained",
+                compressed_count,
                 len(self._summary),
+                len(self._all_rounds),
             )
 
             # 抗抖动：若压缩后 token 利用率仍超阈值，视为无效（否则清零）。

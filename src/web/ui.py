@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _base_url: str = "http://127.0.0.1:8000"
 _ws_url: str = "ws://127.0.0.1:8000/ws/interview"
+_startup_warnings: list[str] = []  # S-15: lifespan 启动校验失败的提示，UI 顶部红色横幅显示
 
 _STAGE_COLORS = {
     "idle": "grey",
@@ -39,11 +40,17 @@ _STAGE_LABELS = {
 }
 
 
-def set_dependencies(memory_module: Any, llm_client: Any,
-                     tool_registry: Any, settings: Any) -> None:
+def set_dependencies(settings: Any) -> None:
+    """注入 UI 所需的 settings；其它依赖通过 app.state / API 访问。"""
     global _base_url, _ws_url
     _base_url = f"http://{settings.HOST}:{settings.PORT}"
     _ws_url = f"ws://{settings.HOST}:{settings.PORT}/ws/interview"
+
+
+def set_startup_warnings(warnings: list[str]) -> None:
+    """由 main.lifespan 注入启动配置校验告警；为空时 UI 不显示横幅。"""
+    global _startup_warnings
+    _startup_warnings = list(warnings or [])
 
 
 # ── Page registration ─────────────────────────────────────────────────────────
@@ -87,6 +94,20 @@ async def index() -> None:
     ui.query("body").style("margin:0; overflow:hidden; background:#F0F2F5;")
 
     with ui.column().classes("w-full h-screen gap-0"):
+        # S-15: 启动配置告警横幅（缺少 QWEN_API_KEY 等）
+        if _startup_warnings:
+            with ui.column().classes("w-full flex-shrink-0").style(
+                "background:#FEF2F2; border-bottom:1px solid #FECACA;"
+            ):
+                for _w in _startup_warnings:
+                    with ui.row().classes(
+                        "w-full items-center px-5 py-2 gap-2"
+                    ):
+                        ui.icon("error").classes("text-red-7").style("font-size:18px;")
+                        ui.label(_w).classes("text-sm text-red-9").style(
+                            "white-space:normal; word-break:break-word;"
+                        )
+
         # Top status bar
         with ui.row().classes(
             "w-full items-center px-5 py-3 gap-4 flex-shrink-0"
@@ -99,6 +120,10 @@ async def index() -> None:
                 candidate_label = ui.label("—").classes("text-sm font-semibold text-grey-9")
                 round_label = ui.label("轮次：0").classes("text-xs text-grey-5")
             ui.space()
+            # L3-3: 音频状态 badge — 默认隐藏，audio_status WS 消息到达时显示
+            audio_badge = ui.badge("音频未启用").props("rounded color=negative outline").tooltip("")
+            audio_badge.set_visibility(False)
+            state["audio_badge"] = audio_badge
             start_btn = ui.button("开始面试", icon="play_arrow").props(
                 "unelevated dense color=positive"
             )
@@ -505,6 +530,9 @@ async def _dispatch(
             await _scroll(chat_scroll)
 
     elif t == "suggestion_delta":
+        # L4-8: 用户切到 manual 时丢弃残留 delta（后端虽然取消了，但有时间窗）
+        if state.get("trigger_mode") == "manual":
+            return
         delta = msg.get("delta", "")
         if state["suggestion_card"] is None:
             with chat_col:
@@ -571,6 +599,22 @@ async def _dispatch(
     elif t == "error":
         _error(chat_col, msg.get("message", str(msg)))
         await _scroll(chat_scroll)
+
+    elif t == "audio_status":
+        # L3-3: 音频启动状态 — 失败时显示红色 badge + tooltip 说明原因
+        badge = state.get("audio_badge")
+        if badge is None:
+            return
+        ok = bool(msg.get("ok"))
+        if ok:
+            badge.set_visibility(False)
+        else:
+            tip = msg.get("message", "音频未启用，仅支持手动输入")
+            badge.set_text("音频未启用")
+            badge.tooltip(tip)
+            badge.set_visibility(True)
+            _error(chat_col, tip)
+            await _scroll(chat_scroll)
 
     elif t == "heartbeat":
         pass

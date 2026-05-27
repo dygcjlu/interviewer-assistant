@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -15,7 +16,13 @@ import openai
 import tiktoken
 
 from ..models.message import FunctionCallInfo, Message, ToolCallInfo
-from ..models.exceptions import LLMRateLimitError, LLMTimeoutError
+from ..models.exceptions import (
+    LLMConnectionError,
+    LLMRateLimitError,
+    LLMResponseError,
+    LLMRetryExhaustedError,
+    LLMTimeoutError,
+)
 from .config import LLMConfig
 from .protocol import ChatResponse, StreamChunk, ToolSchema
 
@@ -93,14 +100,28 @@ class OpenAICompatibleClient:
                     "LLM rate limit hit (attempt %d/%d): %s", attempt + 1, attempts, exc
                 )
                 last_exc = LLMRateLimitError(str(exc))
+                # 限流：指数退避（2^attempt 秒），给服务端时间恢复
+                if attempt < attempts - 1:
+                    await asyncio.sleep(2 ** attempt)
             except openai.APITimeoutError as exc:
                 logger.warning(
                     "LLM request timed out (attempt %d/%d): %s", attempt + 1, attempts, exc
                 )
                 last_exc = LLMTimeoutError(str(exc))
-
-        assert last_exc is not None
-        raise last_exc
+                if attempt < attempts - 1:
+                    await asyncio.sleep(1.0)
+            except openai.APIConnectionError as exc:
+                logger.warning(
+                    "LLM connection error (attempt %d/%d): %s", attempt + 1, attempts, exc
+                )
+                last_exc = LLMConnectionError(str(exc))
+                if attempt < attempts - 1:
+                    await asyncio.sleep(1.0)
+        else:
+            # M3-4: for-else — 循环耗尽所有重试次数仍未成功（每次都由 return 提前退出才算成功）
+            raise LLMRetryExhaustedError(
+                f"LLM 请求重试 {attempts} 次后仍失败，最后错误：{last_exc}"
+            )
 
     async def chat_stream(
         self,
@@ -141,6 +162,9 @@ class OpenAICompatibleClient:
         except openai.APITimeoutError as exc:
             logger.warning("LLM stream timed out: %s", exc)
             raise LLMTimeoutError(str(exc)) from exc
+        except openai.APIConnectionError as exc:
+            logger.warning("LLM stream connection error: %s", exc)
+            raise LLMConnectionError(str(exc)) from exc
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
@@ -203,6 +227,9 @@ class OpenAICompatibleClient:
 
     @staticmethod
     def _build_chat_response(response: Any) -> ChatResponse:
+        # M3-3: 兜底空 choices[]（通义千问等兼容端点偶发此情况）
+        if not response.choices:
+            raise LLMResponseError("LLM 返回了空 choices[]，无法解析响应")
         choice = response.choices[0]
         message = choice.message
         content = message.content or ""

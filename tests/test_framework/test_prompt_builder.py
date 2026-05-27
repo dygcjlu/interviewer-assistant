@@ -36,7 +36,6 @@ def _make_session(with_summary: bool = False, with_rounds: bool = False) -> Inte
         stage=InterviewStage.INTERVIEWING,
         context_summary="",
         covered_dimensions={"算法"},
-        working_notes="",
         metadata=SessionMetadata(candidate_id="c1", start_time=datetime.now()),
     )
     if with_rounds:

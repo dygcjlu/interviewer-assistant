@@ -20,11 +20,21 @@ async def interview_ws_handler(websocket: WebSocket, controller) -> None:
     bind_connection_id(connection_id)
     logger.info("WebSocket connected connection_id=%s", connection_id)
 
+    # L4-6: closed 标志短路已断连的 sender；失败时主动 raise 触发 controller 内主动 detach
+    sender_state = {"closed": False}
+
     async def ws_sender(msg: dict) -> None:
+        if sender_state["closed"]:
+            raise ConnectionError("ws_sender closed")
         try:
             await websocket.send_json(msg)
-        except Exception:
-            logger.debug("WebSocket send failed connection_id=%s type=%s", connection_id, msg.get("type"))
+        except Exception as exc:
+            sender_state["closed"] = True
+            logger.info(
+                "WebSocket send failed (marking closed) connection_id=%s type=%s err=%s",
+                connection_id, msg.get("type"), exc,
+            )
+            raise
 
     controller.attach_ws_sender(ws_sender)
     conn_id = id(ws_sender)

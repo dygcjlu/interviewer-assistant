@@ -121,16 +121,23 @@ python -m pytest
 
 ## 数据与隐私
 
+> **重要提示（S-17）**：本工具仅供本机本地使用。所有候选人简历、面试录音、转写记录和评价报告均以**明文**存储在本地磁盘，无任何加密。请使用操作系统提供的磁盘加密（Windows BitLocker / macOS FileVault）保护存储介质。
+
 本项目默认在本地文件系统保存运行数据：
 
 - `USER.md`：面试官岗位要求与偏好记忆，运行时自动生成。
-- `candidates/`：候选人长期数据。
-- `recordings/`：面试录音。
-- `resumes/`：上传简历及解析后的 Markdown。
-- `logs/`：运行日志。
-- `*.db`：历史版本或本地实验可能产生的 SQLite 数据库。
+- `candidates/`：候选人长期数据（简历、面试记录、评价报告）。
+- `recordings/`：面试录音文件。
+- `resumes/`：上传的 PDF 简历及解析后的 Markdown。
+- `logs/`：运行日志（可能包含简历片段和面试对话，受 `LOG_SENSITIVE` 配置控制）。
+- `conversations/`：Agent 对话历史。
 
-这些文件已在 [.gitignore](.gitignore) 中忽略。公开提交前请确认没有真实候选人资料、录音、API key、招聘计划或内部业务信息。
+这些目录已在 [.gitignore](.gitignore) 中忽略。**公开提交前请确认没有真实候选人资料、录音、API key、招聘计划或内部业务信息。**
+
+**使用建议**：
+- 勿将 `HOST` 改为 `0.0.0.0`（默认 `127.0.0.1` 仅本机访问）；若需局域网访问，须同时配置鉴权。
+- 定期清理不再需要的候选人数据：删除对应的 `candidates/{id}/`、`recordings/`、`resumes/` 下的文件。
+- 可使用 `scripts/cleanup-old.ps1`（Windows）或 `scripts/cleanup-old.sh`（Linux/macOS）按最后访问时间批量清理历史数据。
 
 ## 文档
 

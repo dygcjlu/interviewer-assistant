@@ -237,3 +237,5 @@ conversations/
 candidates/
 USER.md
 USER.local.md
+openspec/
+.cursor/mcp.json

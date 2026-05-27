@@ -1,7 +1,6 @@
 """ToolRegistry — 工具注册中心与调度器。"""
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 import time
@@ -89,9 +88,18 @@ class ToolRegistry:
             result = await entry.fn(**parsed_args)
             if entry.post_hook:
                 entry.post_hook(result)
-        except Exception:
-            logger.exception("ToolRegistry: error dispatching tool %r", name)
-            return json.dumps({"error": f"Tool {name!r} raised an exception"})
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "ToolRegistry: error dispatching tool %r elapsed_ms=%.1f", name, elapsed_ms,
+            )
+            return json.dumps(
+                {
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "tool": name,
+                },
+                ensure_ascii=False,
+            )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         if isinstance(result, str):
@@ -110,18 +118,12 @@ class ToolRegistry:
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _build_schema(fn: Callable) -> dict:
-    """Auto-generate a minimal JSON Schema from a function's signature."""
-    sig = inspect.signature(fn)
-    properties: dict = {}
-    required: list[str] = []
-    for param_name, param in sig.parameters.items():
-        if param_name in ("self", "cls"):
-            continue
-        properties[param_name] = {"type": "string"}
-        if param.default is inspect.Parameter.empty:
-            required.append(param_name)
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-    }
+    """M5-2: 强制要求调用方提供显式 SCHEMA，防止自动推导产生不准确的类型。
+
+    所有工具模块必须在顶部定义 ``SCHEMA = {...}`` 并通过
+    ``registry.register(..., parameters_schema=SCHEMA)`` 传入。
+    """
+    raise LookupError(
+        f"工具 {fn.__name__!r} 未提供显式 SCHEMA；"
+        "请在工具模块顶部定义 SCHEMA = {...} 并通过 parameters_schema 参数传入。"
+    )

@@ -22,7 +22,6 @@ def sample_session(sample_candidate):
         stage=InterviewStage.IDLE,
         context_summary="",
         covered_dimensions=set(),
-        working_notes="",
         metadata=SessionMetadata(
             candidate_id="c-test-001",
             start_time=datetime.now(),

@@ -16,11 +16,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import os
 import shutil
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,7 +30,9 @@ import yaml
 
 from ..models.candidate import CandidateProfile
 from ..models.evaluation import DimensionScore, EvalReport
+from ..models.exceptions import StorageError
 from ..models.session import ConversationRound, InterviewQuestion, InterviewSession
+from ..utils import write_atomic as _write_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -69,27 +70,6 @@ class InterviewDetail:
     rounds: list[ConversationRound] = field(default_factory=list)
     eval_report: EvalReport | None = None
     recording_paths: RecordingPaths | None = None
-
-
-# ─── 原子写入 ────────────────────────────────────────────────────────
-
-
-def _write_atomic(path: Path, content: str) -> None:
-    """原子写入：mkstemp + os.replace，防止写入中途崩溃损坏文件。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp_", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
 
 
 # ─── YAML frontmatter 解析 ────────────────────────────────────────────
@@ -317,6 +297,11 @@ class MemoryModule:
     def _transcript_path(self, candidate_id: str, interview_id: str) -> Path:
         return self._interview_dir(candidate_id, interview_id) / "transcript.md"
 
+    def _rounds_wal_path(self, candidate_id: str, interview_id: str) -> Path:
+        """rounds.jsonl: 面试进行中的 WAL，每完成一轮 append 一行。
+        finish_interview 时归档为 rounds.jsonl.archived。"""
+        return self._interview_dir(candidate_id, interview_id) / "rounds.jsonl"
+
     def _eval_report_path(self, candidate_id: str, interview_id: str) -> Path:
         return self._interview_dir(candidate_id, interview_id) / "eval_report.md"
 
@@ -520,6 +505,216 @@ class MemoryModule:
 
         logger.info("start_interview written session_id=%s candidate_id=%s", interview_id, candidate_id)
 
+    async def append_round(
+        self,
+        candidate_id: str,
+        interview_id: str,
+        round_: ConversationRound,
+    ) -> None:
+        """每完成一轮后 append 到 `rounds.jsonl`（WAL），防止进程崩溃丢失。
+
+        采用 append-only 写入；finish_interview 时会把该文件归档为 .archived。
+        """
+        path = self._rounds_wal_path(candidate_id, interview_id)
+        record = {
+            "round_number": round_.round_number,
+            "interviewer_text": round_.interviewer_text,
+            "candidate_text": round_.candidate_text,
+            "timestamp": getattr(round_, "timestamp", datetime.now()).isoformat()
+            if not isinstance(getattr(round_, "timestamp", None), str)
+            else round_.timestamp,
+        }
+        line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+
+        def _append() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+
+        await asyncio.to_thread(_append)
+        logger.debug(
+            "append_round wal session_id=%s round=%d", interview_id, round_.round_number
+        )
+
+    async def scan_orphan_wal(self) -> list[dict]:
+        """扫描所有候选人目录下未归档的 rounds.jsonl —— 上次进程崩溃前未 finish 的面试。
+
+        每条返回 dict 含：candidate_id / candidate_name / interview_id / round_count /
+        start_time / wal_path（绝对路径）。供 recovery API 列出供用户选择恢复或丢弃。
+        """
+        orphans: list[dict] = []
+        if not self._root.exists():
+            return orphans
+        for cand_dir in self._root.iterdir():
+            if not cand_dir.is_dir():
+                continue
+            interviews_dir = cand_dir / "interviews"
+            if not interviews_dir.is_dir():
+                continue
+            cand_meta = self._read_profile_meta(cand_dir.name) or {}
+            for iv_dir in interviews_dir.iterdir():
+                if not iv_dir.is_dir():
+                    continue
+                wal_path = iv_dir / "rounds.jsonl"
+                if not wal_path.exists():
+                    continue
+                # S-6: 若 transcript.md 已存在，说明 finish_interview 写入成功但
+                # 归档 WAL 前崩溃——WAL 是冗余残留，不应列为待恢复 orphan，
+                # 以避免重复 recover 覆盖已完整的 transcript。
+                if (iv_dir / "transcript.md").exists():
+                    logger.debug(
+                        "scan_orphan_wal: skip %s (transcript.md already exists)",
+                        wal_path,
+                    )
+                    continue
+                round_count = 0
+                try:
+                    with open(wal_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if line.strip():
+                                round_count += 1
+                except Exception:
+                    logger.warning(
+                        "scan_orphan_wal: failed to read %s", wal_path, exc_info=True
+                    )
+                    continue
+                start_time = ""
+                session_json = iv_dir / "session.json"
+                if session_json.exists():
+                    try:
+                        start_time = json.loads(session_json.read_text(encoding="utf-8")).get(
+                            "start_time", ""
+                        )
+                    except Exception:
+                        pass
+                orphans.append(
+                    {
+                        "candidate_id": cand_dir.name,
+                        "candidate_name": str(cand_meta.get("name", "")) if cand_meta else "",
+                        "interview_id": iv_dir.name,
+                        "round_count": round_count,
+                        "start_time": start_time,
+                        "wal_path": str(wal_path),
+                    }
+                )
+        return orphans
+
+    async def recover_interview_from_wal(
+        self, candidate_id: str, interview_id: str
+    ) -> int:
+        """从 rounds.jsonl 重建 ConversationRound 列表并写入 transcript.md + 归档 WAL。
+
+        Returns: 恢复出的 round 数量。
+
+        与 finish_interview 的区别：本方法不读 InterviewSession（崩溃后无法重建完整 session），
+        直接基于 WAL + session.json 拼装最小可用的归档结果。
+        """
+        wal_path = self._rounds_wal_path(candidate_id, interview_id)
+        if not wal_path.exists():
+            raise StorageError(f"WAL 不存在：{wal_path}")
+
+        rounds: list[ConversationRound] = []
+        with open(wal_path, "r", encoding="utf-8") as f:
+            for line_no, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    logger.warning(
+                        "recover_interview_from_wal: skip malformed line %d in %s",
+                        line_no,
+                        wal_path,
+                    )
+                    continue
+                ts_raw = rec.get("timestamp", "")
+                ts = _parse_dt(ts_raw) or datetime.now()
+                rounds.append(
+                    ConversationRound(
+                        round_number=int(rec.get("round_number", line_no)),
+                        interviewer_text=str(rec.get("interviewer_text", "")),
+                        candidate_text=str(rec.get("candidate_text", "")),
+                        timestamp=ts,
+                    )
+                )
+
+        if not rounds:
+            # 空 WAL：直接归档丢弃
+            archived = wal_path.with_suffix(".jsonl.archived")
+            try:
+                wal_path.replace(archived)
+            except OSError:
+                pass
+            return 0
+
+        iv_dir = self._interview_dir(candidate_id, interview_id)
+        session_json_path = iv_dir / "session.json"
+        try:
+            existing = json.loads(session_json_path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {
+                "interview_id": interview_id,
+                "candidate_id": candidate_id,
+                "start_time": rounds[0].timestamp.isoformat(),
+                "trigger_mode": "auto",
+            }
+
+        end_time = rounds[-1].timestamp
+
+        # 用一个最小 session 拼 transcript.md（复用已有渲染逻辑）
+        candidate_meta = self._read_profile_meta(candidate_id) or {}
+        candidate = CandidateProfile(
+            id=candidate_id, name=str(candidate_meta.get("name", "")) if candidate_meta else ""
+        )
+        from ..models.session import InterviewStage, SessionMetadata
+        meta = SessionMetadata(
+            candidate_id=candidate_id,
+            start_time=_parse_dt(existing.get("start_time")) or rounds[0].timestamp,
+            end_time=end_time,
+            trigger_mode=str(existing.get("trigger_mode", "auto")),
+            recording_candidate_path=str(existing.get("recording_candidate_path", "")) or None,
+            recording_interviewer_path=str(existing.get("recording_interviewer_path", "")) or None,
+        )
+        recovered_session = InterviewSession(
+            id=interview_id,
+            candidate=candidate,
+            question_plan=[],
+            rounds=rounds,
+            stage=InterviewStage.COMPLETED,
+            context_summary=str(existing.get("context_summary", "")) or "",
+            covered_dimensions=set(),
+            metadata=meta,
+        )
+
+        # 写 transcript.md + 更新 session.json + index + 归档 WAL（复用 finish_interview）
+        await self.finish_interview(recovered_session)
+        logger.info(
+            "recover_interview_from_wal: recovered %d rounds candidate=%s interview=%s",
+            len(rounds),
+            candidate_id,
+            interview_id,
+        )
+        return len(rounds)
+
+    async def discard_orphan_wal(self, candidate_id: str, interview_id: str) -> bool:
+        """丢弃残留 WAL：直接删除（已 finish_interview 的 .archived 不动）。"""
+        wal_path = self._rounds_wal_path(candidate_id, interview_id)
+        if not wal_path.exists():
+            return False
+        try:
+            wal_path.unlink()
+            logger.info(
+                "discard_orphan_wal: deleted candidate=%s interview=%s",
+                candidate_id,
+                interview_id,
+            )
+            return True
+        except OSError:
+            logger.exception("discard_orphan_wal: failed to delete %s", wal_path)
+            return False
+
     async def finish_interview(self, session: InterviewSession) -> None:
         """面试结束：写 transcript.md，更新 session.json，更新 index 文件。"""
         candidate_id = session.candidate.id
@@ -584,6 +779,22 @@ class MemoryModule:
                 c["latest_interview"] = end_time.strftime("%Y-%m-%d")
                 break
         self._write_candidates_index(candidates)
+
+        # 5. 归档 rounds.jsonl WAL（transcript.md 已写入，WAL 完成使命）
+        wal_path = self._rounds_wal_path(candidate_id, interview_id)
+        if wal_path.exists():
+            archived = wal_path.with_suffix(".jsonl.archived")
+            try:
+                wal_path.replace(archived)
+                logger.debug(
+                    "finish_interview archived WAL session_id=%s -> %s", interview_id, archived.name
+                )
+            except OSError:
+                logger.warning(
+                    "finish_interview: failed to archive rounds.jsonl session_id=%s",
+                    interview_id,
+                    exc_info=True,
+                )
 
         logger.info("finish_interview done session_id=%s candidate_id=%s", interview_id, candidate_id)
 
@@ -672,8 +883,26 @@ class MemoryModule:
         # 通过 interviews/index.md 找 candidate_id
         candidate_id = await self._find_candidate_for_interview(report.interview_id)
         if candidate_id is None:
-            logger.warning("save_eval_report: cannot find candidate for interview %s", report.interview_id)
-            return
+            # 找不到 candidate_id 时：兜底写入 eval_orphans/，再 raise StorageError 让上层感知。
+            # 评价报告是 LLM 多次调用的结晶，绝不能静默丢失。
+            orphan_path = self._root / "eval_orphans" / f"{report.interview_id}.md"
+            try:
+                _write_atomic(orphan_path, _build_eval_report_md(report, ""))
+                logger.error(
+                    "save_eval_report: candidate not found for interview %s, "
+                    "fallback wrote orphan eval to %s",
+                    report.interview_id,
+                    orphan_path,
+                )
+            except Exception:
+                logger.exception(
+                    "save_eval_report: orphan fallback write also failed for interview %s",
+                    report.interview_id,
+                )
+            raise StorageError(
+                f"无法定位候选人档案，评价报告已降级写入 eval_orphans/{report.interview_id}.md，"
+                f"请检查候选人索引或手动迁移"
+            )
 
         # 写 eval_report.md
         profile_meta = self._read_profile_meta(candidate_id)

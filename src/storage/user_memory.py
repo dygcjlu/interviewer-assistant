@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 from pathlib import Path
+
+from ..utils import write_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,11 @@ class UserMemoryStore:
         content = content.strip()
         if not content:
             raise ValueError("条目内容不能为空")
+        # M4-5: 内容含分隔符时写入后 load() 会被错误拆分为多条
+        if ENTRY_DELIMITER in content:
+            raise ValueError(
+                f"条目内容不能包含分隔符（{ENTRY_DELIMITER!r}），请检查内容是否异常"
+            )
         new_render = self.render() + (ENTRY_DELIMITER if self._entries else "") + content
         if len(new_render) > self.char_limit:
             raise ValueError(
@@ -100,6 +105,11 @@ class UserMemoryStore:
         content = content.strip()
         if not content:
             raise ValueError("替换内容不能为空")
+        # M4-5: 与 add() 保持一致，防止含分隔符的内容破坏 load() 解析
+        if ENTRY_DELIMITER in content:
+            raise ValueError(
+                f"条目内容不能包含分隔符（{ENTRY_DELIMITER!r}），请检查内容是否异常"
+            )
         old = self._entries[index]
         self._entries[index] = content
         new_render = self.render()
@@ -127,24 +137,9 @@ class UserMemoryStore:
             )
 
     def _write_atomic(self) -> None:
-        """原子写入：使用临时文件 + os.replace，避免写入中途崩溃导致文件损坏。"""
+        """原子写入 USER.md：委托公共 write_atomic 工具。"""
         content = self.render()
-        dir_ = self._path.parent
-        dir_.mkdir(parents=True, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=dir_, prefix=".user_memory_", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self._path)
-        except Exception:
-            # 清理临时文件，不吃异常
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        write_atomic(self._path, content)
         logger.debug(
             "UserMemoryStore: wrote %d entries (%d chars) to %s",
             len(self._entries),

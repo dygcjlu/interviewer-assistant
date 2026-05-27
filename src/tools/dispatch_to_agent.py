@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..logging import truncate
 from ._context import ctx
+from ._helpers import normalize_questions
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,14 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 except OSError:
                     pass
 
-        if ctx.memory_module is not None:
+        # 拒绝在简历 Markdown 为空时落盘 profile，避免覆盖既有数据为空文件
+        if not resume_markdown.strip():
+            logger.warning(
+                "dispatch_to_agent: empty resume_markdown for candidate_id=%s, skip save_candidate",
+                session.candidate.id,
+            )
+            result["warning"] = "简历正文为空，未写入候选人档案；请检查 PDF 解析结果"
+        elif ctx.memory_module is not None:
             try:
                 await ctx.memory_module.save_candidate(session.candidate, resume_markdown)
                 # 更新 session 中的 resume_content 以便后续 Agent 直接使用
@@ -126,21 +134,52 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
 
     elif result_type == "questions_done":
         from ..models.session import InterviewQuestion
-        questions = result.get("questions", [])
-        if questions:
+        # L2-2: 前置守卫：若候选人档案尚未落盘（跳过解析直接出题的边界路径），
+        # 跳过 start_interview 并透传 warning，避免磁盘/内存不一致。
+        cid = session.candidate.id
+        profile_path = Path(f"candidates/{cid}/profile.md")
+        if not profile_path.exists():
+            logger.warning(
+                "dispatch_to_agent: questions_done but profile.md not found for candidate_id=%s, "
+                "skip start_interview",
+                cid,
+            )
+            result["warning"] = (
+                "未找到候选人档案，请先上传并解析简历后再生成面试题目；"
+                "题目已生成但面试会话尚未初始化。"
+            )
+            # 仍写入 question_plan，让 UI 能看到题目
+            normalized = normalize_questions(result.get("questions", []))
+            if normalized:
+                session.question_plan = [
+                    InterviewQuestion(
+                        id=i + 1,
+                        dimension=q["dimension"],
+                        question=q["question"],
+                        follow_ups=q["follow_ups"],
+                        difficulty=q["difficulty"],
+                    )
+                    for i, q in enumerate(normalized)
+                ]
+            if ctx.main_agent is not None:
+                ctx.main_agent.set_candidate_context(session.candidate, normalized)
+            return
+
+        # L2-3: 复用共享 normalize_questions，兼容中英文键 + LLM 漂移
+        normalized = normalize_questions(result.get("questions", []))
+        if normalized:
             session.question_plan = [
                 InterviewQuestion(
                     id=i + 1,
-                    dimension=q.get("dimension", "通用"),
-                    question=q.get("question", ""),
-                    follow_ups=q.get("follow_ups", []),
-                    difficulty=q.get("difficulty", "medium"),
+                    dimension=q["dimension"],
+                    question=q["question"],
+                    follow_ups=q["follow_ups"],
+                    difficulty=q["difficulty"],
                 )
-                for i, q in enumerate(questions)
-                if isinstance(q, dict)
+                for i, q in enumerate(normalized)
             ]
         if ctx.main_agent is not None:
-            ctx.main_agent.set_candidate_context(session.candidate, questions)
+            ctx.main_agent.set_candidate_context(session.candidate, normalized)
 
         if ctx.memory_module is not None:
             try:

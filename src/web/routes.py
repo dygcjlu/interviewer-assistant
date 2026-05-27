@@ -1,6 +1,7 @@
 """REST API 路由 — 业务逻辑委托给 MainAgent / InterviewController / MemoryModule。"""
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -11,13 +12,17 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+# M9-2: PDF 上传大小上限，防止恶意大文件 OOM；简历 20MB 通常足够
+_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from src.logging import bind_op, bind_session_id
 
 from ..agents.base import AgentRequest, AgentResponse
-from ..models.exceptions import SessionError
+from ..models.exceptions import SessionError, StorageError
+from ..models.session import InterviewStage
 from .schemas import (
     ChatRequest,
     CandidateSelectRequest,
@@ -33,6 +38,17 @@ router = APIRouter(prefix="/api")
 
 def _controller(request: Request):
     return request.app.state.controller
+
+
+def _require_controller(request: Request):
+    """FastAPI 依赖：保证 controller 已初始化，否则 503。"""
+    controller = getattr(request.app.state, "controller", None)
+    if controller is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "not_ready", "message": "服务未初始化"},
+        )
+    return controller
 
 
 def _main_agent(request: Request):
@@ -177,12 +193,32 @@ async def upload_resume(
 
     # Ensure session exists
     session = await controller.get_session() if controller else None
+
+    # 拒绝在面试进行中或评价中上传新简历，避免破坏现场 session 数据
+    if session is not None and session.stage in (
+        InterviewStage.INTERVIEWING,
+        InterviewStage.EVALUATING,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "interview_in_progress",
+                "message": "当前面试进行中或正在评价，无法上传新简历",
+            },
+        )
+
     if session is None and controller is not None:
         session = await controller.create_session(candidate_id)
     elif session is not None and candidate_id and session.candidate.id != candidate_id:
         session = await controller.create_session(candidate_id)
     elif session is not None and not candidate_id:
-        session = await controller.create_session(None)
+        # 仅当当前 session 已绑定其它候选人（有姓名或 PDF 路径）时才重建，
+        # 否则复用现有空 session 避免清空已积累的对话上下文。
+        has_existing_candidate = bool(
+            session.candidate.name or session.candidate.resume_pdf
+        )
+        if has_existing_candidate:
+            session = await controller.create_session(None)
 
     if session:
         bind_session_id(session.id)
@@ -195,18 +231,54 @@ async def upload_resume(
         overwrite,
     )
 
-    file_bytes = await file.read()
-
+    # M9-2: 流式写入 + 限制 20MB —— 防止恶意/异常大文件 OOM
     resumes_dir = Path("resumes")
     resumes_dir.mkdir(exist_ok=True)
     pdf_path = resumes_dir / f"{safe_stem}.pdf"
-    pdf_path.write_bytes(file_bytes)
+    max_bytes = _UPLOAD_MAX_BYTES
+    written = 0
+    try:
+        with open(pdf_path, "wb") as f:
+            while True:
+                chunk = await file.read(8192)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > max_bytes:
+                    f.close()
+                    try:
+                        pdf_path.unlink()
+                    except OSError:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail={
+                            "code": "file_too_large",
+                            "message": f"PDF 大小超过 {max_bytes // (1024 * 1024)}MB 上限",
+                        },
+                    )
+                f.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        try:
+            pdf_path.unlink()
+        except OSError:
+            pass
+        logger.exception("upload_resume: write failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "write_failed", "message": f"保存文件失败：{exc}"},
+        ) from exc
 
     if session:
         session.candidate.resume_pdf = str(pdf_path)
 
     elapsed_ms = (time.perf_counter() - start) * 1000
-    logger.info("upload_resume saved file_path=%s elapsed_ms=%.1f", pdf_path, elapsed_ms)
+    logger.info(
+        "upload_resume saved file_path=%s bytes=%d elapsed_ms=%.1f",
+        pdf_path, written, elapsed_ms,
+    )
 
     return {
         "file_path": str(pdf_path),
@@ -245,8 +317,10 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
 # ── questions ─────────────────────────────────────────────────────────────────
 
 @router.get("/interview/questions")
-async def get_questions(request: Request, candidate_id: str = Query(...)):
-    controller = _controller(request)
+async def get_questions(
+    candidate_id: str = Query(...),
+    controller=Depends(_require_controller),
+):
     session = await controller.get_session()
     if session is None or session.candidate.id != candidate_id:
         raise HTTPException(status_code=404, detail={"code": "no_session", "message": "无对应会话"})
@@ -254,8 +328,10 @@ async def get_questions(request: Request, candidate_id: str = Query(...)):
 
 
 @router.put("/interview/questions")
-async def update_questions(request: Request, body: QuestionsUpdateRequest):
-    controller = _controller(request)
+async def update_questions(
+    body: QuestionsUpdateRequest,
+    controller=Depends(_require_controller),
+):
     session = await controller.get_session()
     if session is None or session.candidate.id != body.candidate_id:
         raise HTTPException(status_code=404, detail={"code": "no_session", "message": "无对应会话"})
@@ -276,12 +352,11 @@ async def update_questions(request: Request, body: QuestionsUpdateRequest):
 # ── interview lifecycle ───────────────────────────────────────────────────────
 
 @router.post("/interview/start")
-async def start_interview(request: Request, body: StartInterviewRequest):
+async def start_interview(
+    body: StartInterviewRequest,
+    controller=Depends(_require_controller),
+):
     bind_op("start_interview")
-    controller = _controller(request)
-    if controller is None:
-        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "服务未初始化"})
-
     session = await controller.get_session()
     if session is None:
         session = await controller.create_session(body.candidate_id)
@@ -310,12 +385,8 @@ async def start_interview(request: Request, body: StartInterviewRequest):
 
 
 @router.post("/interview/stop")
-async def stop_interview(request: Request):
+async def stop_interview(controller=Depends(_require_controller)):
     bind_op("stop_interview")
-    controller = _controller(request)
-    if controller is None:
-        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "服务未初始化"})
-
     session = await controller.get_session()
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
@@ -336,10 +407,10 @@ async def stop_interview(request: Request):
 # ── session switch (legacy — maps to controller operations) ───────────────────
 
 @router.post("/session/switch")
-async def switch_agent(request: Request, body: SwitchAgentRequest):
-    controller = _controller(request)
-    if controller is None:
-        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "服务未初始化"})
+async def switch_agent(
+    body: SwitchAgentRequest,
+    controller=Depends(_require_controller),
+):
     try:
         if body.target_agent == "interview":
             await controller.start_interview()
@@ -355,9 +426,8 @@ async def switch_agent(request: Request, body: SwitchAgentRequest):
 # ── suggestion ────────────────────────────────────────────────────────────────
 
 @router.post("/interview/suggest")
-async def trigger_suggest(request: Request):
-    controller = _controller(request)
-    session = await controller.get_session() if controller else None
+async def trigger_suggest(controller=Depends(_require_controller)):
+    session = await controller.get_session()
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
     resp = await controller.interview_agent.handle_request(
@@ -390,11 +460,35 @@ async def get_eval(request: Request, interview_id: str | None = None):
     )
     if not resp.success:
         raise HTTPException(status_code=500, detail={"code": "eval_error", "message": resp.error})
-    try:
-        await controller.close_session()
-    except Exception:
-        logger.exception("get_eval: close_session failed")
-    return {"report": _to_dict(resp.data["report"])}
+
+    # M4-2: EvalAgent 在持久化降级到 eval_orphans 时会在 data.save_warning 里写说明。
+    save_warning: str | None = resp.data.get("save_warning")
+
+    # L5-5: close_session 失败重试 3 次，仍失败时附带 warning（评价数据不重新生成）。
+    close_warning: str | None = None
+    for attempt in range(3):
+        try:
+            await controller.close_session()
+            close_warning = None
+            break
+        except Exception as exc:
+            logger.warning(
+                "get_eval: close_session attempt %d/3 failed: %s",
+                attempt + 1,
+                exc,
+                exc_info=(attempt == 2),
+            )
+            close_warning = (
+                "评价已生成，但会话关闭失败（已重试3次）。请刷新页面或重启服务再开始下一次面试。"
+            )
+            if attempt < 2:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+    result: dict[str, Any] = {"report": _to_dict(resp.data["report"])}
+    warnings = [w for w in (save_warning, close_warning) if w]
+    if warnings:
+        result["warning"] = " | ".join(warnings)
+    return result
 
 
 # ── candidates ────────────────────────────────────────────────────────────────
@@ -450,6 +544,65 @@ async def delete_candidate(request: Request, candidate_id: str):
     return {"deleted": True, "candidate_id": candidate_id}
 
 
+# ── recovery (rounds.jsonl WAL 残留处理) ──────────────────────────────────────
+
+@router.get("/recovery/scan")
+async def scan_recovery(request: Request):
+    """列出上次进程崩溃前未 finish_interview 的残留 WAL（rounds.jsonl）。"""
+    bind_op("recovery_scan")
+    memory = _memory(request)
+    orphans = await memory.scan_orphan_wal()
+    return {"orphans": orphans, "count": len(orphans)}
+
+
+@router.post("/recovery/finish")
+async def finish_recovery(request: Request):
+    """从 WAL 恢复指定面试：重建 rounds → 写 transcript.md → 归档 WAL。
+
+    body: {"candidate_id": "...", "interview_id": "..."}
+    """
+    bind_op("recovery_finish")
+    payload = await request.json()
+    candidate_id = str(payload.get("candidate_id", "")).strip()
+    interview_id = str(payload.get("interview_id", "")).strip()
+    if not candidate_id or not interview_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "bad_request", "message": "缺少 candidate_id / interview_id"},
+        )
+    memory = _memory(request)
+    try:
+        recovered = await memory.recover_interview_from_wal(candidate_id, interview_id)
+    except (SessionError, StorageError) as exc:
+        # StorageError 在 WAL 不存在时抛出，语义上属于 404
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": str(exc)}
+        ) from exc
+    except Exception as exc:
+        logger.exception("finish_recovery failed candidate=%s interview=%s", candidate_id, interview_id)
+        raise HTTPException(
+            status_code=500, detail={"code": "recovery_failed", "message": str(exc)}
+        ) from exc
+    return {"recovered_rounds": recovered, "candidate_id": candidate_id, "interview_id": interview_id}
+
+
+@router.post("/recovery/discard")
+async def discard_recovery(request: Request):
+    """丢弃残留 WAL（用户确认不需要恢复时）。"""
+    bind_op("recovery_discard")
+    payload = await request.json()
+    candidate_id = str(payload.get("candidate_id", "")).strip()
+    interview_id = str(payload.get("interview_id", "")).strip()
+    if not candidate_id or not interview_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "bad_request", "message": "缺少 candidate_id / interview_id"},
+        )
+    memory = _memory(request)
+    deleted = await memory.discard_orphan_wal(candidate_id, interview_id)
+    return {"deleted": deleted, "candidate_id": candidate_id, "interview_id": interview_id}
+
+
 # ── recordings ────────────────────────────────────────────────────────────────
 
 @router.get("/recordings/{session_id}/rounds/{round_number}")
@@ -471,6 +624,36 @@ async def get_round_recording(
         if path and os.path.exists(path):
             return FileResponse(path, media_type="audio/wav")
     raise HTTPException(status_code=404, detail={"code": "not_found", "message": "录音文件不存在"})
+
+
+# ── health / metrics ─────────────────────────────────────────────────────────
+
+@router.get("/health")
+async def health(request: Request):
+    """S-10: 轻量健康探针，供 Docker healthcheck / 进程守护脚本使用。
+
+    controller 或 memory 任意一个未就绪时返回 503，以便 Docker/K8s 探针
+    在服务真正可用前不将流量路由过来。
+    """
+    controller = getattr(request.app.state, "controller", None)
+    memory = getattr(request.app.state, "memory_module", None)
+    ready = controller is not None and memory is not None
+    payload = {
+        "status": "ok" if ready else "not_ready",
+        "controller": controller is not None,
+        "memory": memory is not None,
+    }
+    if not ready:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content=payload)
+    return payload
+
+
+@router.get("/metrics")
+async def get_metrics():
+    """S-11: 返回进程级累积 LLM 指标（token / 请求次数 / 延迟百分位数）。"""
+    from ..utils.metrics import Metrics
+    return Metrics.get().to_dict()
 
 
 # ── session state ─────────────────────────────────────────────────────────────

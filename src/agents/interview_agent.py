@@ -64,12 +64,29 @@ class InterviewAgent(BaseAgent):
             Path("conversations") / f"interview_agent_{session.id}.jsonl"
         )
         # 完整系统提示（含候选人信息）在首次 generate_suggestion 调用时写入日志
+        # L4-8: 切到 manual 时 trigger 会调用 cancel_current_stream 取消已 fire 的 LLM 流
         self._suggestion_trigger = SuggestionTrigger(
             on_trigger=self._on_trigger_fired,
             silence_threshold_sec=self._silence_threshold,
             min_interval_sec=self._min_interval,
+            on_cancel_current=self.cancel_current_stream,
         )
         logger.info("InterviewAgent activated for session %s", session.id)
+
+    async def cancel_current_stream(self) -> None:
+        """L4-8: 主动取消正在进行的 LLM 流式生成（切换到 manual 时调用）。"""
+        task = self._current_stream_task
+        if task is None or task.done():
+            return
+        logger.info("InterviewAgent: cancel_current_stream called")
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("InterviewAgent: cancelled stream raised unexpected error")
+        self._current_stream_task = None
 
     async def on_deactivate(self, session: InterviewSession) -> None:
         if self._suggestion_trigger is not None:
@@ -94,7 +111,7 @@ class InterviewAgent(BaseAgent):
     # ── public interface ──────────────────────────────────────────────────────
 
     async def handle_request(self, request: AgentRequest) -> AgentResponse:
-        bind_op(request.type)
+        self._bind_log_context(request.type)
         start = time.perf_counter()
         logger.info(
             "InterviewAgent handle_request start type=%s session_id=%s",
@@ -175,7 +192,7 @@ class InterviewAgent(BaseAgent):
             logger.warning("InterviewAgent.generate_suggestion called without active session")
             return
 
-        bind_op("generate_suggestion")
+        self._bind_log_context("generate_suggestion")
         start = time.perf_counter()
         rounds_count = len(self._session.rounds)
         if self._session.rounds:
@@ -237,6 +254,15 @@ class InterviewAgent(BaseAgent):
             await self._logger.append([user_msg])
         messages.append(user_msg)
 
+        # L4-7: token 预算硬保护——超限时截断历史中间段，仍超限则跳过本次建议
+        messages = self._enforce_token_budget(messages)
+        if messages is None:
+            logger.warning(
+                "InterviewAgent generate_suggestion skipped (token over budget) request_id=%d",
+                request_id,
+            )
+            return
+
         try:
             response = await self.llm_client.chat(messages)
             reply_text = (response.content or "").strip()
@@ -284,6 +310,49 @@ class InterviewAgent(BaseAgent):
 
     # ── internals ─────────────────────────────────────────────────────────────
 
+    def _enforce_token_budget(self, messages: list[Message]) -> list[Message] | None:
+        """L4-7: 主动校验 prompt token，超限时截断历史中间段，仍超则返回 None 跳过。
+
+        策略：
+        - budget = context_manager 配置的 token_budget × (1 - safety_margin)
+        - 超出时保留 system（第 0 条）+ 最近 K 轮对话 + 最后一条 user（最终问题）
+        - K 从大到小递减直至满足预算，最少保留 2 条对话；K=0 仍超限说明 fixed zone 单独过大，跳过
+        """
+        try:
+            cfg = self.context_manager._config  # 内部访问，但本模块同包
+            limit = int(cfg.token_budget * (1.0 - cfg.token_safety_margin))
+        except Exception:
+            limit = 64_000  # 兜底
+
+        total = self.llm_client.count_tokens(messages)
+        if total <= limit:
+            return messages
+        if len(messages) <= 3:
+            logger.warning(
+                "InterviewAgent token over budget but messages too short to trim: %d > %d",
+                total, limit,
+            )
+            return None
+
+        # 保留 system（0）+ 最后一条 user（最终问题）+ 最近 K 轮
+        system = messages[0]
+        last_user = messages[-1]
+        middle = messages[1:-1]
+        for keep in (8, 6, 4, 2):
+            trimmed = [system] + middle[-keep:] + [last_user]
+            tokens = self.llm_client.count_tokens(trimmed)
+            if tokens <= limit:
+                logger.warning(
+                    "InterviewAgent token over budget, trimmed history middle=%d->%d (keep_last=%d) tokens=%d/%d",
+                    len(middle), keep, keep, tokens, limit,
+                )
+                return trimmed
+        logger.warning(
+            "InterviewAgent token still over budget after max trimming: %d > %d (fixed zone too large)",
+            self.llm_client.count_tokens([system, last_user]), limit,
+        )
+        return None
+
     async def _on_trigger_fired(self, request_id: int) -> None:
         """SuggestionTrigger 回调：在后台 task 内消费 generate_suggestion 流。"""
         trigger_mode = (
@@ -300,9 +369,11 @@ class InterviewAgent(BaseAgent):
 
         async def _runner() -> None:
             tokens_yielded = 0
+            accumulated_text = ""
             try:
                 async for token in self.generate_suggestion(request_id):
                     tokens_yielded += 1
+                    accumulated_text += token
                     if self._ws_sender is not None:
                         try:
                             await self._ws_sender(
@@ -320,6 +391,7 @@ class InterviewAgent(BaseAgent):
                             {
                                 "type": "suggestion_final",
                                 "request_id": request_id,
+                                "text": accumulated_text,
                                 "skipped": tokens_yielded == 0,
                             }
                         )

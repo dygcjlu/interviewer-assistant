@@ -1,6 +1,8 @@
 """应用配置 — 从 .env 文件和环境变量加载。"""
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,9 +21,9 @@ class Settings(BaseSettings):
     PORT: int = 8000
     DEBUG: bool = False
 
-    # 存储
-    CANDIDATES_DIR: str = "candidates"
-    RECORDINGS_DIR: str = "recordings"
+    # 存储（M1-2: 统一为 Path 类型，避免调用方各自 Path(...) 包裹的混乱）
+    CANDIDATES_DIR: Path = Path("candidates")
+    RECORDINGS_DIR: Path = Path("recordings")
 
     # 上下文管理
     CONTEXT_WINDOW_SIZE: int = 6
@@ -48,11 +50,17 @@ class Settings(BaseSettings):
     MOCK_AUDIO: bool = False
     MOCK_AUDIO_SCRIPT: str = "data/mock_script.json"
 
+    # S-16: 敏感日志开关 — 默认 False，不把 LLM messages 完整内容写入日志文件。
+    # 开启（True）时可在 logs/app.log 中看到完整 LLM 消息体，便于本地调试；
+    # 生产 / 长期运行时应保持 False，避免简历、面试对话等敏感内容落盘。
+    LOG_SENSITIVE: bool = False
+
     # PDF 解析引擎：pymupdf | qwen_vl | mineru
     PDF_PARSER: str = "qwen_vl"
 
     # Qwen-VL 解析配置（PDF_PARSER=qwen_vl 时有效，复用 QWEN_API_KEY）
     QWEN_VL_MODEL: str = "qwen-vl-max"
+    QWEN_VL_CONCURRENCY: int = 8  # L1-5: 单份 PDF 多页并发上限，防限流
 
     # MinerU Cloud API 配置（PDF_PARSER=mineru 时有效）
     MINERU_API_TOKEN: str = ""

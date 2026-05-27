@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -31,11 +32,19 @@ async def _noop_ws_sender(_msg: dict) -> None:
 
 
 async def _broadcast(senders: dict[int, WsSender], msg: dict) -> None:
-    for sender in list(senders.values()):
+    """向所有 ws_sender 广播；L4-6: 失败的 sender 主动从 dict 中移除（避免持续 push 浪费 CPU）。"""
+    dead: list[int] = []
+    for sid, sender in list(senders.items()):
         try:
             await sender(msg)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.info(
+                "ws_sender broadcast dropped sid=%d type=%s err=%s",
+                sid, msg.get("type"), exc,
+            )
+            dead.append(sid)
+    for sid in dead:
+        senders.pop(sid, None)
 
 
 class InterviewController:
@@ -59,6 +68,8 @@ class InterviewController:
         self._memory = memory_module
         self._audio = audio_manager
         self._session: InterviewSession | None = None
+        # 保护 _session 状态切换：create / close / start / stop 互斥
+        self._state_lock = asyncio.Lock()
         self._ws_senders: dict[int, WsSender] = {}
 
     @property
@@ -73,6 +84,13 @@ class InterviewController:
     # ── session lifecycle ─────────────────────────────────────────────────────
 
     async def create_session(
+        self, candidate_id: str | None = None
+    ) -> InterviewSession:
+        """创建新会话（受 `_state_lock` 串行化保护）。"""
+        async with self._state_lock:
+            return await self._create_session_impl(candidate_id)
+
+    async def _create_session_impl(
         self, candidate_id: str | None = None
     ) -> InterviewSession:
         candidate: CandidateProfile
@@ -98,7 +116,6 @@ class InterviewController:
             stage=InterviewStage.IDLE,
             context_summary="",
             covered_dimensions=set(),
-            working_notes="",
             metadata=SessionMetadata(
                 candidate_id=candidate.id,
                 start_time=datetime.now(),
@@ -117,48 +134,74 @@ class InterviewController:
         return self._session
 
     async def close_session(self) -> None:
+        """关闭当前会话（受 `_state_lock` 保护）。"""
+        async with self._state_lock:
+            await self._close_session_impl()
+
+    async def _close_session_impl(self) -> None:
         if self._session is None:
             return
 
-        # Deactivate interview agent if active
-        if self._session.stage == InterviewStage.INTERVIEWING:
-            try:
-                await self._interview_agent.on_deactivate(self._session)
-            except Exception:
-                logger.exception("InterviewController: on_deactivate interview failed")
-
-        self._session.stage = InterviewStage.COMPLETED
-        self._session.metadata.end_time = datetime.now()
-
-        # Sync context summary
-        if self._interview_agent.context_manager is not None:
-            self._session.context_summary = self._interview_agent.context_manager.summary
-
+        session_id = self._session.id
         try:
-            await self._memory.finish_interview(self._session)
-        except Exception:
-            logger.exception("InterviewController: finish_interview failed")
+            # 兜底：若 close 被直接调用（如 lifespan shutdown 跳过 stop_interview），
+            # 必须显式释放 audio 资源（WASAPI / STT WebSocket）
+            if self._session.stage == InterviewStage.INTERVIEWING:
+                try:
+                    await self._audio.stop()
+                except Exception:
+                    logger.warning(
+                        "InterviewController: audio stop in close_session failed",
+                        exc_info=True,
+                    )
 
-        if self._interview_agent.context_manager is not None:
+            # Deactivate interview agent if active
+            if self._session.stage == InterviewStage.INTERVIEWING:
+                try:
+                    await self._interview_agent.on_deactivate(self._session)
+                except Exception:
+                    logger.exception("InterviewController: on_deactivate interview failed")
+
+            self._session.stage = InterviewStage.COMPLETED
+            self._session.metadata.end_time = datetime.now()
+
+            # Sync context summary
+            if self._interview_agent.context_manager is not None:
+                self._session.context_summary = self._interview_agent.context_manager.summary
+
             try:
-                await self._interview_agent.context_manager.reset()
+                await self._memory.finish_interview(self._session)
             except Exception:
-                logger.exception("InterviewController: context_manager.reset() failed")
+                logger.exception("InterviewController: finish_interview failed")
 
-        logger.info("InterviewController: closed session %s", self._session.id)
-        self._session = None
+            if self._interview_agent.context_manager is not None:
+                try:
+                    await self._interview_agent.context_manager.reset()
+                except Exception:
+                    logger.exception("InterviewController: context_manager.reset() failed")
+
+            logger.info("InterviewController: closed session %s", session_id)
+        finally:
+            # L5-5: 无论清理是否成功都置 None，防止跨会话状态污染。
+            # 意外异常会向上传播，但 _session 引用已释放。
+            self._session = None
 
     # ── interview start/stop ──────────────────────────────────────────────────
 
     async def start_interview(self) -> None:
+        """开始面试（受 `_state_lock` 保护，避免与 stop/close/create 竞态）。"""
+        async with self._state_lock:
+            await self._start_interview_impl()
+
+    async def _start_interview_impl(self) -> None:
         if self._session is None:
             raise SessionError("当前没有活跃会话")
         if self._session.stage == InterviewStage.INTERVIEWING:
-            logger.warning(
-                "start_interview called but session already interviewing, ignoring session_id=%s",
-                self._session.id,
+            # L3-4 / S-13: 重入时 raise 而非静默 return，让 routes 层返回 409 给前端，
+            # 前端应在收到 409 后禁用"开始面试"按钮（防抖）。
+            raise SessionError(
+                f"面试已在进行中（session_id={self._session.id}），请勿重复开始"
             )
-            return
         if not self._session.candidate.id:
             raise SessionError("切换到面试前需先确认候选人信息")
 
@@ -170,9 +213,10 @@ class InterviewController:
         await self._interview_agent.on_activate(self._session)
 
         # Register compression callback so context_summary stays current mid-session
+        # L3-2 / M5-3: 通过公开 setter 注入，避免直接 setattr 私有属性
         session_ref = self._session
         if self._interview_agent.context_manager is not None:
-            self._interview_agent.context_manager._on_compress_done = (
+            self._interview_agent.context_manager.set_compress_done_handler(
                 lambda summary: setattr(session_ref, "context_summary", summary)
             )
 
@@ -181,25 +225,67 @@ class InterviewController:
         trigger = self._interview_agent.suggestion_trigger
         if trigger is not None:
             try:
-                on_round_finalized = (
-                    self._interview_agent.context_manager.add_round
-                    if self._interview_agent.context_manager is not None
-                    else None
-                )
+                cm = self._interview_agent.context_manager
+                memory_ref = self._memory
+                candidate_id_ref = self._session.candidate.id
+                interview_id_ref = self._session.id
+
+                async def _on_round_finalized(round_) -> None:
+                    """每轮 finalize 后：①更新 ContextManager 短记忆；②append 到 rounds.jsonl WAL。"""
+                    if cm is not None:
+                        try:
+                            await cm.add_round(round_)
+                        except Exception:
+                            logger.exception(
+                                "InterviewController: context_manager.add_round failed"
+                            )
+                    try:
+                        await memory_ref.append_round(
+                            candidate_id_ref, interview_id_ref, round_
+                        )
+                    except Exception:
+                        logger.exception(
+                            "InterviewController: append_round (WAL) failed session_id=%s round=%d",
+                            interview_id_ref,
+                            getattr(round_, "round_number", -1),
+                        )
+
                 await self._audio.start(
                     session=self._session,
                     ws_sender=broadcast,
                     suggestion_trigger=trigger,
-                    on_round_finalized=on_round_finalized,
+                    on_round_finalized=_on_round_finalized,
                 )
                 tm = self._audio.transcription_manager
                 if tm is not None:
                     self._interview_agent.set_current_round_getter(tm.get_current_round_text)
-            except Exception:
+                # L3-3: 音频启动成功也推一条 ok 状态，便于 UI 重置 badge
+                if broadcast is not None:
+                    try:
+                        await broadcast({"type": "audio_status", "ok": True})
+                    except Exception:
+                        logger.debug("audio_status ok broadcast failed", exc_info=True)
+            except Exception as audio_exc:
                 logger.warning(
                     "InterviewController: audio start failed (continuing without audio)",
                     exc_info=True,
                 )
+                # L3-3: 音频降级时通过 WS 推送 audio_status 让 UI 显示红色 badge
+                if broadcast is not None:
+                    try:
+                        await broadcast(
+                            {
+                                "type": "audio_status",
+                                "ok": False,
+                                "reason": audio_exc.__class__.__name__,
+                                "message": (
+                                    f"音频启动失败（{audio_exc.__class__.__name__}），"
+                                    f"已降级为仅手动输入模式。请检查麦克风/STT 配置。"
+                                ),
+                            }
+                        )
+                    except Exception:
+                        logger.debug("audio_status fail broadcast failed", exc_info=True)
 
         self._session.stage = InterviewStage.INTERVIEWING
 
@@ -212,6 +298,11 @@ class InterviewController:
         logger.info("start_interview done elapsed_ms=%.1f", elapsed_ms)
 
     async def stop_interview(self) -> None:
+        """停止面试（受 `_state_lock` 保护）。"""
+        async with self._state_lock:
+            await self._stop_interview_impl()
+
+    async def _stop_interview_impl(self) -> None:
         if self._session is None:
             raise SessionError("当前没有活跃会话")
 

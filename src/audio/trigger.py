@@ -19,8 +19,11 @@ class SuggestionTrigger:
         on_trigger: Callable[[int], Awaitable[None]],
         silence_threshold_sec: float = 2.0,
         min_interval_sec: float = 5.0,
+        on_cancel_current: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._on_trigger = on_trigger
+        # L4-8: 切到 manual 时调用此回调取消"已 fire 但仍在生成中"的 LLM 流。
+        self._on_cancel_current = on_cancel_current
         self._silence_threshold = silence_threshold_sec
         self._min_interval = min_interval_sec
         self._mode: str = "auto"
@@ -49,12 +52,25 @@ class SuggestionTrigger:
             logger.warning("SuggestionTrigger: no running event loop, cannot schedule timer")
 
     def set_mode(self, mode: str) -> None:
-        """切换触发模式 'auto' | 'manual'。切换到 manual 时取消待触发定时器。"""
+        """切换触发模式 'auto' | 'manual'。
+
+        L4-8: 切到 manual 不仅取消待触发定时器，还取消"已 fire 但仍在 LLM 流式生成中"的请求，
+              避免用户切换后仍看到一段刚生成的建议出现。
+        """
         if mode not in ("auto", "manual"):
             raise ValueError(f"Invalid trigger mode: {mode!r}")
+        prev = self._mode
         self._mode = mode
         if mode == "manual":
             self.cancel_pending()
+            if prev == "auto" and self._on_cancel_current is not None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(self._on_cancel_current())
+                except RuntimeError:
+                    logger.warning(
+                        "SuggestionTrigger: no running event loop, cannot cancel current stream"
+                    )
 
     @property
     def mode(self) -> str:

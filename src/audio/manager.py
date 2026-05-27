@@ -36,7 +36,6 @@ class AudioManager:
         self._transcription_manager: TranscriptionManager | None = None
         self._candidate_loop_task: asyncio.Task | None = None
         self._interviewer_loop_task: asyncio.Task | None = None
-        self._paused: bool = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -144,42 +143,7 @@ class AudioManager:
         logger.info("AudioManager: stopped, duration=%.1fs", result.total_duration_sec)
         return result
 
-    async def pause(self) -> None:
-        """暂停音频采集和 STT 接收（不销毁 STT 连接）。"""
-        self._paused = True
-        await self._capturer.stop()
-        if self._bridge:
-            await self._bridge.stop()
-        for task in (self._candidate_loop_task, self._interviewer_loop_task):
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        self._candidate_loop_task = None
-        self._interviewer_loop_task = None
-        logger.info("AudioManager: paused")
-
-    async def resume(self) -> None:
-        """恢复 STT 和录音。"""
-        self._paused = False
-        # Recreate bridge since the previous one was stopped during pause()
-        self._bridge = AudioStreamBridge(
-            candidate_stt=self._candidate_stt,
-            interviewer_stt=self._interviewer_stt,
-            recorder=self._recorder,
-        )
-        # STT connections remain alive after pause — just restart the receive loops
-        if self._loop is not None:
-            self._candidate_loop_task = self._loop.create_task(
-                self._stt_receive_loop(self._candidate_stt)
-            )
-            self._interviewer_loop_task = self._loop.create_task(
-                self._stt_receive_loop(self._interviewer_stt)
-            )
-        await self._capturer.start()
-        logger.info("AudioManager: resumed")
+    # M8-1: pause/resume 已删除（定义但全代码无调用）。当前业务只用 start/stop。
 
     # ── properties ────────────────────────────────────────────────────────────
 

@@ -8,7 +8,7 @@ from src.llm.protocol import ToolSchema
 async def test_register_and_dispatch() -> None:
     registry = ToolRegistry()
 
-    @registry.register(description="Add two numbers")
+    @registry.register(description="Add two numbers", parameters_schema={"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}}, "required": ["a", "b"]})
     async def add(a: str, b: str) -> str:
         return str(int(a) + int(b))
 
@@ -27,7 +27,7 @@ async def test_dispatch_unknown_tool_returns_error_json() -> None:
 async def test_dispatch_invalid_json_returns_error() -> None:
     registry = ToolRegistry()
 
-    @registry.register(description="Dummy")
+    @registry.register(description="Dummy", parameters_schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]})
     async def dummy(x: str) -> str:
         return x
 
@@ -38,7 +38,7 @@ async def test_dispatch_invalid_json_returns_error() -> None:
 def test_get_schemas_returns_tool_schemas() -> None:
     registry = ToolRegistry()
 
-    @registry.register(description="Test tool")
+    @registry.register(description="Test tool", parameters_schema={"type": "object", "properties": {"param": {"type": "string"}}, "required": ["param"]})
     async def my_tool(param: str) -> str:
         return param
 
@@ -52,11 +52,11 @@ def test_get_schemas_returns_tool_schemas() -> None:
 def test_get_schemas_filtered_by_names() -> None:
     registry = ToolRegistry()
 
-    @registry.register(description="Tool A")
+    @registry.register(description="Tool A", parameters_schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]})
     async def tool_a(x: str) -> str:
         return x
 
-    @registry.register(description="Tool B")
+    @registry.register(description="Tool B", parameters_schema={"type": "object", "properties": {"y": {"type": "string"}}, "required": ["y"]})
     async def tool_b(y: str) -> str:
         return y
 
@@ -68,7 +68,7 @@ def test_get_schemas_filtered_by_names() -> None:
 def test_get_tool_returns_entry() -> None:
     registry = ToolRegistry()
 
-    @registry.register(description="Hello tool")
+    @registry.register(description="Hello tool", parameters_schema={"type": "object", "properties": {}})
     async def hello() -> str:
         return "hello"
 
@@ -88,7 +88,7 @@ async def test_pre_hook_called() -> None:
 
     registry = ToolRegistry()
 
-    @registry.register(description="Hookable tool")
+    @registry.register(description="Hookable tool", parameters_schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]})
     async def hookable(x: str) -> str:
         return x
 

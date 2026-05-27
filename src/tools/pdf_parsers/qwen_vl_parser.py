@@ -35,10 +35,22 @@ class QwenVLParser(BasePDFParser):
         )
         logger.info("QwenVLParser: rendered %d pages from %s", len(pages_b64), file_path)
 
-        tasks = [
-            self._extract_page(client, settings.QWEN_VL_MODEL, b64)
-            for b64 in pages_b64
-        ]
+        # L1-5: Semaphore 限并发 + 单页 try/except → 长 PDF 不再单页失败全批挂
+        concurrency = max(1, int(getattr(settings, "QWEN_VL_CONCURRENCY", 8)))
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _run_one(idx: int, b64: str) -> str:
+            async with semaphore:
+                try:
+                    return await self._extract_page(client, settings.QWEN_VL_MODEL, b64)
+                except Exception as exc:
+                    logger.warning(
+                        "QwenVLParser: page %d/%d failed: %s",
+                        idx + 1, len(pages_b64), exc,
+                    )
+                    return f"[第 {idx + 1} 页解析失败：{exc.__class__.__name__}: {str(exc)[:120]}]"
+
+        tasks = [_run_one(i, b64) for i, b64 in enumerate(pages_b64)]
         results = await asyncio.gather(*tasks)
         return "\n\n".join(results)
 

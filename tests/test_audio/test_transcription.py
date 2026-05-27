@@ -23,7 +23,6 @@ def _make_session() -> InterviewSession:
         stage=InterviewStage.INTERVIEWING,
         context_summary="",
         covered_dimensions=set(),
-        working_notes="",
         metadata=SessionMetadata(candidate_id="c1", start_time=datetime.now()),
     )
 

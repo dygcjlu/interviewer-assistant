@@ -33,7 +33,14 @@ async def file_read(file_path: str) -> str:
 
 
 def _is_allowed(path: Path, allowed_dirs: list[str]) -> bool:
-    """检查 path 是否位于允许的目录之一内（基于 resolve() 防止路径穿越）。"""
+    """检查 path 是否位于允许的目录之一内。
+
+    M6-1: 使用 resolve()（strict=False，路径不存在时也不抛错）将路径规范化为绝对路径。
+    resolve() 会解析所有 symlink，因此：
+      - `resumes/../../../etc/passwd`  → 解析后不在 resumes/ 下，拒绝
+      - resumes/ 下放的 symlink 指向 /etc/passwd → 解析后路径是 /etc/passwd，拒绝
+    Windows 短文件名、UNC 路径等同样被 resolve() 规范化，不会绕过检查。
+    """
     try:
         resolved = path.resolve()
     except Exception:

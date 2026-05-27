@@ -145,12 +145,13 @@ async def test_start_interview_without_session_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_start_interview_idempotent_when_already_interviewing() -> None:
+    # L3-4: 重入时抛 SessionError（不再静默忽略）
     controller, interview_agent, *_ = _make_controller()
     await controller.create_session()
     await controller.start_interview()
 
-    # second call should be ignored
-    await controller.start_interview()
+    with pytest.raises(SessionError):
+        await controller.start_interview()
 
     assert interview_agent.activated == 1
 

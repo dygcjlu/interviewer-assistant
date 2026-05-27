@@ -23,8 +23,16 @@ class LLMRateLimitError(InterviewAssistantError):
     """LLM 触发限流（HTTP 429 等）。"""
 
 
+class LLMConnectionError(InterviewAssistantError):
+    """LLM 网络连接错误（DNS 失败、连接拒绝、对端断开等）。"""
+
+
 class LLMResponseError(InterviewAssistantError):
     """LLM 返回非预期结果（解析失败、内容缺失等）。"""
+
+
+class LLMRetryExhaustedError(InterviewAssistantError):
+    """LLM 重试次数耗尽，全部尝试均失败。"""
 
 
 class StorageError(InterviewAssistantError):

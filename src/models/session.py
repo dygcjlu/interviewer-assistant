@@ -60,7 +60,6 @@ class InterviewSession:
     stage: InterviewStage
     context_summary: str
     covered_dimensions: set[str]
-    working_notes: str
     metadata: SessionMetadata
 
 

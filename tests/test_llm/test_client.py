@@ -12,7 +12,7 @@ import pytest
 
 from src.llm.client import OpenAICompatibleClient
 from src.llm.config import LLMConfig
-from src.llm.errors import LLMRateLimitError, LLMTimeoutError
+from src.llm.errors import LLMRateLimitError, LLMRetryExhaustedError, LLMTimeoutError
 from src.llm.protocol import ChatResponse, StreamChunk
 from src.models.message import Message
 
@@ -85,19 +85,22 @@ async def test_chat_returns_chat_response(client_with_mock):
 
 @pytest.mark.asyncio
 async def test_chat_raises_llm_timeout_error(client_with_mock):
+    # M3-4: 所有重试耗尽后抛 LLMRetryExhaustedError（而非直接透传 LLMTimeoutError）
     client, mock_instance = client_with_mock
     mock_instance.chat.completions.create.side_effect = openai.APITimeoutError(
         request=MagicMock()
     )
 
-    with pytest.raises(LLMTimeoutError):
-        await client.chat([Message(role="user", content="hi")])
+    with patch("src.llm.client.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(LLMRetryExhaustedError):
+            await client.chat([Message(role="user", content="hi")])
 
     assert mock_instance.chat.completions.create.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_chat_raises_llm_rate_limit_error(client_with_mock):
+    # M3-4: 所有重试耗尽后抛 LLMRetryExhaustedError（而非直接透传 LLMRateLimitError）
     client, mock_instance = client_with_mock
     rate_limit_exc = openai.RateLimitError(
         message="rate limit",
@@ -106,8 +109,9 @@ async def test_chat_raises_llm_rate_limit_error(client_with_mock):
     )
     mock_instance.chat.completions.create.side_effect = rate_limit_exc
 
-    with pytest.raises(LLMRateLimitError):
-        await client.chat([Message(role="user", content="hi")])
+    with patch("src.llm.client.asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(LLMRetryExhaustedError):
+            await client.chat([Message(role="user", content="hi")])
 
 
 @pytest.mark.asyncio
