@@ -192,6 +192,9 @@ class InterviewController:
                     suggestion_trigger=trigger,
                     on_round_finalized=on_round_finalized,
                 )
+                tm = self._audio.transcription_manager
+                if tm is not None:
+                    self._interview_agent.set_current_round_getter(tm.get_current_round_text)
             except Exception:
                 logger.warning(
                     "InterviewController: audio start failed (continuing without audio)",

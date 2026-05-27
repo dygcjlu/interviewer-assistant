@@ -24,6 +24,10 @@ class AgentConfig:
     system_prompt: str
     skill_names: list[str] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
+    # 若为 True，Layer 7 使用 ContextManager.all_rounds 而非滑动窗口
+    full_history: bool = False
+    # 若为 False，Layer 7 跳过 assistant=[追问建议] 条目
+    include_suggestions: bool = True
 
 
 class PromptBuilder:
@@ -86,15 +90,20 @@ class PromptBuilder:
 
         messages: list[Message] = [Message(role="system", content="\n\n".join(system_parts))]
 
-        # Layer 7: Sliding window rounds（面试官+候选人合并为一条 user 消息）
-        for round_ in context_data.window_rounds:
+        # Layer 7: Conversation history（面试官+候选人合并为一条 user 消息）
+        rounds_to_show = (
+            self._context_manager.all_rounds
+            if agent_config.full_history
+            else context_data.window_rounds
+        )
+        for round_ in rounds_to_show:
             messages.append(
                 Message(
                     role="user",
                     content=f"面试官：{round_.interviewer_text}\n候选人：{round_.candidate_text}",
                 )
             )
-            if round_.llm_suggestion:
+            if agent_config.include_suggestions and round_.llm_suggestion:
                 messages.append(
                     Message(role="assistant", content=f"[追问建议] {round_.llm_suggestion}")
                 )

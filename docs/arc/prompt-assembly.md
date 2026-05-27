@@ -168,7 +168,7 @@ messages = [
 **设计说明**：此层只注入技巧的"索引"（名称+简介+触发提示），不注入全文。Agent 需要详情时通过 `skill_view` 工具按需加载，避免 prompt 过大。
 
 **哪些 Agent 使用**：
-- ResumeAgent：`skill_names=["resume_anchor"]`
+- ResumeAgent：`skill_names=["question_generation"]`（出题方法论，通过 `skill_view('question_generation')` 按需加载）
 - InterviewAgent：`skill_names=["deep_dive", "dimension_switch", "behavioral_probe"]`
 
 ---

@@ -101,8 +101,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     interview_config = AgentConfig(
         name="interview",
         system_prompt=INTERVIEW_AGENT_SYSTEM_PROMPT,
-        skill_names=["deep_dive", "dimension_switch", "behavioral_probe"],
-        tool_names=["file_read"],
+        full_history=True,
+        include_suggestions=False,
     )
     eval_config = AgentConfig(
         name="eval",

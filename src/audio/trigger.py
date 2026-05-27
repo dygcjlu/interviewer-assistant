@@ -31,8 +31,15 @@ class SuggestionTrigger:
     # ── public interface ──────────────────────────────────────────────────────
 
     def on_candidate_segment(self, segment: TranscriptSegment) -> None:
-        """接收候选人 is_final segment，重置沉默定时器（仅 auto 模式）。"""
-        if self._mode != "auto" or not segment.is_final:
+        """接收候选人 segment，管理沉默计时器（仅 auto 模式）。
+
+        is_final=False：候选人正在说话，取消待触发计时器。
+        is_final=True ：候选人本句结束，重新开始沉默倒计时。
+        """
+        if self._mode != "auto":
+            return
+        if not segment.is_final:
+            self.cancel_pending()
             return
         self.cancel_pending()
         try:

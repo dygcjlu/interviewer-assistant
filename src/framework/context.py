@@ -34,6 +34,7 @@ _COMPRESSION_SYSTEM_PROMPT = """\
 
 @dataclass
 class ContextConfig:
+    # 压缩后 _all_rounds 保留的轮次数；同时用于 get_context() 的滑动窗口（非 full_history 模式）
     window_size: int = 6
     token_budget: int = 80000
     token_safety_margin: float = 0.2
@@ -112,12 +113,16 @@ class ContextManager:
         return self._summary
 
     @property
+    def all_rounds(self) -> list[ConversationRound]:
+        """返回所有轮次的快照（压缩前为完整历史，压缩后为最近 window_size 轮）。"""
+        return list(self._all_rounds)
+
+    @property
     def token_usage(self) -> TokenUsageInfo:
-        window = self._all_rounds[-self._config.window_size:]
         fixed_tokens = 1500  # rough estimate for fixed zone
         summary_tokens = len(self._summary) // 3
         window_tokens = sum(
-            (len(r.interviewer_text) + len(r.candidate_text)) // 3 for r in window
+            (len(r.interviewer_text) + len(r.candidate_text)) // 3 for r in self._all_rounds
         )
         total = fixed_tokens + summary_tokens + window_tokens
         budget = int(self._config.token_budget * (1.0 - self._config.token_safety_margin))
@@ -151,10 +156,11 @@ class ContextManager:
     # ── internals ─────────────────────────────────────────────────────────────
 
     def _estimate_tokens(self) -> int:
-        window = self._all_rounds[-self._config.window_size:]
         fixed = 1500
         summary = len(self._summary) // 3
-        window_t = sum((len(r.interviewer_text) + len(r.candidate_text)) // 3 for r in window)
+        window_t = sum(
+            (len(r.interviewer_text) + len(r.candidate_text)) // 3 for r in self._all_rounds
+        )
         return fixed + summary + window_t
 
     async def _compress_async(self) -> None:
@@ -232,8 +238,8 @@ class ContextManager:
             )
 
             # 抗抖动：若压缩后 token 利用率仍超阈值，视为无效（否则清零）。
-            # 注意：不用 before/after 差值，因为 _estimate_tokens() 只计算滑动窗口，
-            # 新增摘要会使估算值上升，导致差值永远为负——反而给出错误的"无效"结论。
+            # 此时 _all_rounds 已裁剪到 window_size 条，_estimate_tokens() 基于裁剪后的全量计算，
+            # 能正确反映压缩效果。
             tokens_after = self._estimate_tokens()
             budget = int(self._config.token_budget * (1 - self._config.token_safety_margin))
             still_over_budget = budget > 0 and tokens_after / budget > 0.65

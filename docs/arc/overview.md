@@ -104,11 +104,19 @@ src/
 │   └── protocol.py          # AudioFrame、TranscriptSegment 协议数据类
 ├── tools/
 │   ├── _context.py          # ToolContext 单例，持有运行时组件引用
+│   ├── _loader.py           # register_all 工具注册辅助
 │   ├── dispatch_to_agent.py # 通用 Agent 分发工具（委托 ResumeAgent）
 │   ├── manage_user_memory.py# 面试官记忆管理工具（add/replace/remove/list）
-│   ├── file_tools.py        # file_read / file_write 工具
-│   ├── skill_tools.py       # skill_view 工具
-│   └── __init__.py          # register_all：统一注册所有工具到 ToolRegistry
+│   ├── parse_resume_pdf.py  # PDF 简历解析工具（Strategy 模式，委托 pdf_parsers/）
+│   ├── file_read.py         # file_read 工具
+│   ├── file_write.py        # file_write 工具
+│   ├── skill_view.py        # skill_view 工具
+│   ├── pdf_parsers/         # PDF 解析引擎（Strategy 模式）
+│   │   ├── base.py          # BasePDFParser 抽象基类
+│   │   ├── pymupdf_parser.py# PymupdfParser：本地文本提取（快速，无图像理解）
+│   │   ├── qwen_vl_parser.py# QwenVLParser：Qwen-VL 多模态解析（支持复杂排版）
+│   │   └── mineru_parser.py # MineruParser：MinerU Cloud API 解析
+│   └── __init__.py          # 统一导出
 ├── storage/
 │   ├── memory_module.py     # MemoryModule：文件系统存储（candidates/ 目录）
 │   ├── user_memory.py       # UserMemoryStore：USER.md 条目化读写
@@ -121,6 +129,10 @@ src/
     └── exceptions.py        # 业务异常定义（SessionError、StorageError 等）
 
 skills/                      # SKILL.md 面试技巧文件，由 SkillLoader 读取
+├── question_generation/     # 出题方法论（ResumeAgent 通过 skill_view 调用）
+├── deep_dive/               # 技术深挖追问策略（InterviewAgent）
+├── dimension_switch/        # 考察维度切换引导（InterviewAgent）
+└── behavioral_probe/        # 行为追问策略（InterviewAgent）
 recordings/                  # 录音文件（按 session_id 分目录）
 candidates/                  # 候选人档案（profile.md / interviews/ 等）
 resumes/                     # 临时存放上传的简历 PDF（解析完成后 PDF 迁移至 candidates/{id}/）
@@ -143,7 +155,7 @@ conversations/               # Agent 对话日志 JSONL（调试用，已加入 
 | 文件存储 | 文件系统 + PyYAML | — | 候选人档案与面试数据，原子写入（mkstemp+os.replace） |
 | 音频采集 | Windows WASAPI | Windows 专属 | 双声道实时音频采集（生产） |
 | 语音识别 | 百度实时 ASR / 讯飞实时 | Windows 专属 | 候选人和面试官实时转写（生产，通过 `STT_ENGINE` 选择） |
-| PDF 解析 | pymupdf / pdfplumber | — | 简历 PDF 文本提取 |
+| PDF 解析 | Strategy 模式（pymupdf / qwen_vl / mineru） | — | 简历 PDF 解析，通过 `PDF_PARSER` 配置切换引擎：`pymupdf` 本地文本提取；`qwen_vl` 多模态（支持复杂排版）；`mineru` Cloud API |
 | HTTP 客户端 | httpx | — | UI Agent 工具调本地 REST 接口 |
 
 ---
@@ -162,7 +174,7 @@ lifespan(app) 启动时（FastAPI 生命周期钩子）：
 6. OpenAICompatibleClient(...)   → LLM 客户端
 7. SkillLoader(SKILLS_DIR)       → 加载 skills/ 下所有 SKILL.md
 8. ToolRegistry()                → 工具注册表
-9. register_all(tool_registry)   → 统一注册所有工具（dispatch_to_agent / manage_user_memory / file_read / file_write / skill_view 等）
+9. register_all(tool_registry)   → 统一注册所有工具（dispatch_to_agent / manage_user_memory / parse_resume_pdf / file_read / file_write / skill_view 等）
 10. ContextManager(...)          → 滑动窗口上下文管理器
 11. PromptBuilder(...)           → 组装 LLM Messages（注入 UserMemoryStore）
 12. ResumeAgent(...)             → 简历分析 Agent（ReAct 模式，最大 15 轮工具调用）
@@ -173,6 +185,7 @@ lifespan(app) 启动时（FastAPI 生命周期钩子）：
     - Windows + STT_ENGINE=xunfei → WasapiCapturer + XunfeiRealtimeSTT（生产）
     - Windows（默认）  → WasapiCapturer + BaiduRealtimeSTT（生产）
     - 其他平台         → MockAudioCapturer + MockSTTEngine（开发）
+    注：PDF 解析引擎由 PDF_PARSER 配置决定（pymupdf / qwen_vl / mineru），在 parse_resume_pdf 工具调用时动态选择，不影响启动流程
 16. AudioManager 或 MockAudioManager(...)  → 组装音频管道
 17. InterviewController(...)     → 面试状态机控制器
 18. MainAgent(...)               → 常驻对话入口，绑定 ResumeAgent 和 Controller

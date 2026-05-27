@@ -291,11 +291,19 @@ async def start_interview(request: Request, body: StartInterviewRequest):
         raise _session_err(exc)
 
     session.metadata.trigger_mode = body.trigger_mode
+    if body.trigger_mode != "auto":
+        trigger = controller.interview_agent.suggestion_trigger
+        if trigger is not None:
+            try:
+                trigger.set_mode(body.trigger_mode)
+            except ValueError:
+                logger.warning("start_interview: invalid trigger_mode %r, falling back to auto", body.trigger_mode)
+                session.metadata.trigger_mode = "auto"
     bind_session_id(session.id)
     logger.info(
         "start_interview done session_id=%s trigger_mode=%s stage=%s",
         session.id,
-        body.trigger_mode,
+        session.metadata.trigger_mode,
         session.stage.value,
     )
     return {"session_id": session.id, "stage": session.stage.value}

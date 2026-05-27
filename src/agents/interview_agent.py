@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from pathlib import Path
-from typing import AsyncIterator, TYPE_CHECKING
+from typing import AsyncIterator, Callable, TYPE_CHECKING
 
 from src.logging import bind_op, text_summary, truncate
 
@@ -52,18 +51,15 @@ class InterviewAgent(BaseAgent):
         self._request_counter: int = 0
         self._ws_sender = None
 
-        self._history: list[Message] = []
         self._logger: ConversationLogger | None = None
         self._system_logged: bool = False
-        self._consecutive_follow_ups: int = 0
+        self._current_round_getter: Callable[[], tuple[str, str]] | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     async def on_activate(self, session: InterviewSession) -> None:
         self._session = session
-        self._history = []
         self._system_logged = False
-        self._consecutive_follow_ups = 0
         self._logger = ConversationLogger(
             Path("conversations") / f"interview_agent_{session.id}.jsonl"
         )
@@ -90,10 +86,9 @@ class InterviewAgent(BaseAgent):
                 logger.exception("InterviewAgent: stream task ended with error")
         self._current_stream_task = None
         self._session = None
-        self._history = []
         self._system_logged = False
-        self._consecutive_follow_ups = 0
         self._logger = None
+        self.set_current_round_getter(None)
         logger.info("InterviewAgent deactivated")
 
     # ── public interface ──────────────────────────────────────────────────────
@@ -217,95 +212,57 @@ class InterviewAgent(BaseAgent):
             await self._logger.append_with_system(messages[0].content, [])
             self._system_logged = True
 
-        # 在 PromptBuilder 输出之后拼入本次面试的历史追问轮次（上下文记忆）
-        messages.extend(self._history)
+        pending_ivr, pending_cand = "", ""
+        if self._current_round_getter is not None:
+            pending_ivr, pending_cand = self._current_round_getter()
 
-        if self._session.rounds:
+        if pending_ivr or pending_cand:
+            current_text = (
+                f"面试官：{pending_ivr}\n"
+                f"候选人：{pending_cand}\n\n"
+                "请结合以上所有对话记录、候选人简历和题目清单，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。"
+            )
+        elif self._session.rounds:
             last_round = self._session.rounds[-1]
-            uncovered = [q for q in self._session.question_plan if not q.is_covered]
-            if uncovered:
-                uncovered_lines = "\n".join(
-                    f"- [{q.dimension}] {q.question}" for q in uncovered[:5]
-                )
-                uncovered_text = f"未覆盖题目（共 {len(uncovered)} 题）：\n{uncovered_lines}"
-            else:
-                uncovered_text = "所有题目已覆盖"
             current_text = (
                 f"面试官：{last_round.interviewer_text}\n"
-                f"候选人最新回答：{last_round.candidate_text}\n\n"
-                f"当前话题已连续追问次数：{self._consecutive_follow_ups}\n"
-                f"{uncovered_text}\n\n"
-                "请判断下一步行动并输出 JSON。"
+                f"候选人：{last_round.candidate_text}\n\n"
+                "请结合以上所有对话记录、候选人简历和题目清单，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。"
             )
         else:
-            current_text = "面试刚开始，请给出一个开场问题建议。输出 JSON，action 填 switch_topic。"
+            current_text = "面试还未开始，请根据题目清单给出第一个开场问题，直接输出话术。"
 
         user_msg = Message(role="user", content=current_text)
-        self._history.append(user_msg)
         if self._logger is not None:
             await self._logger.append([user_msg])
         messages.append(user_msg)
 
-        prompt_tokens = 0
-        completion_tokens = 0
-        reply_text = ""
         try:
             response = await self.llm_client.chat(messages)
-            reply_text = response.content or ""
+            reply_text = (response.content or "").strip()
             prompt_tokens = response.prompt_tokens
             completion_tokens = response.completion_tokens
 
-            # 解析 JSON 响应，提取 action 和 suggestion text
-            try:
-                result = json.loads(reply_text.strip())
-                action = result.get("action", "follow_up")
-                suggestion_text = result.get("text", "").strip()
-            except (json.JSONDecodeError, AttributeError, ValueError):
-                logger.warning(
-                    "InterviewAgent generate_suggestion: JSON parse failed, treating as follow_up. "
-                    "raw=%r",
-                    reply_text[:200],
-                )
-                action = "follow_up"
-                suggestion_text = reply_text.strip()
-
-            # 更新连续追问计数
-            if action == "follow_up":
-                self._consecutive_follow_ups += 1
-            elif action == "switch_topic":
-                self._consecutive_follow_ups = 0
-
-            # 持久化 assistant 消息，追加到 _history
             assistant_msg = Message(role="assistant", content=reply_text)
-            self._history.append(assistant_msg)
             if self._logger is not None:
                 await self._logger.append([assistant_msg])
 
-            # trim：保留最近 10 轮（20 条消息）
-            if len(self._history) > 20:
-                self._history = self._history[-20:]
-
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
-                "suggestion_generated request_id=%d action=%s output_chars=%d "
+                "suggestion_generated request_id=%d output_chars=%d "
                 "prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f text=%s",
                 request_id,
-                action,
-                len(suggestion_text),
+                len(reply_text),
                 prompt_tokens,
                 completion_tokens,
                 elapsed_ms,
-                truncate(suggestion_text),
+                truncate(reply_text),
             )
 
-            # skip 不产生任何输出
-            if action != "skip" and suggestion_text:
-                yield suggestion_text
+            if reply_text:
+                yield reply_text
 
         except asyncio.CancelledError:
-            # 请求被取消：撤销已追加的 user_msg，不写 logger
-            if self._history and self._history[-1] is user_msg:
-                self._history.pop()
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
                 "InterviewAgent generate_suggestion cancelled request_id=%d elapsed_ms=%.1f",
@@ -314,9 +271,6 @@ class InterviewAgent(BaseAgent):
             )
             raise
         except Exception:
-            # 异常：同样撤销 user_msg，避免污染历史
-            if self._history and self._history[-1] is user_msg:
-                self._history.pop()
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.exception(
                 "InterviewAgent generate_suggestion failed request_id=%d elapsed_ms=%.1f",
@@ -387,3 +341,9 @@ class InterviewAgent(BaseAgent):
     def attach_ws_sender(self, ws_sender) -> None:
         """由 InterviewController 注入 WebSocket 推送回调（在 on_activate 之后）。"""
         self._ws_sender = ws_sender
+
+    def set_current_round_getter(
+        self, getter: Callable[[], tuple[str, str]] | None
+    ) -> None:
+        """注入或清空当前轮次文本 getter，由 InterviewController 在 audio.start() 后调用。"""
+        self._current_round_getter = getter

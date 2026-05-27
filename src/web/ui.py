@@ -124,11 +124,15 @@ async def index() -> None:
                         )
                         _refresh_bar(stage_badge, candidate_label, round_label, state)
                         await _sync_candidate_panel()
-                    ui.upload(
-                        label="上传简历",
+                    _uploader = ui.upload(
                         on_upload=lambda e: asyncio.create_task(_do_upload_left(e)),
                         auto_upload=True,
-                    ).props("accept=.pdf unelevated dense color=primary no-caps").tooltip("上传 PDF 简历").classes("shrink-0")
+                    ).props("accept=.pdf").style("display:none")
+                    ui.button("上传简历", icon="upload_file").props(
+                        "unelevated dense color=primary no-caps"
+                    ).tooltip("上传 PDF 简历").classes("shrink-0").on(
+                        "click", lambda: _uploader.run_method("pickFiles")
+                    )
 
                 candidate_list_scroll = ui.scroll_area().classes("flex-1 w-full")
                 with candidate_list_scroll:
@@ -154,21 +158,10 @@ async def index() -> None:
                 with ui.tab_panels(tabs, value=tab_tx).classes(
                     "flex-1 w-full overflow-hidden"
                 ) as panels:
-                    with ui.tab_panel(tab_tx).classes("h-full flex flex-col gap-2 p-2"):
-                        tx_scroll = ui.scroll_area().classes("flex-1 w-full")
+                    with ui.tab_panel(tab_tx).classes("h-full p-2"):
+                        tx_scroll = ui.scroll_area().classes("w-full h-full")
                         with tx_scroll:
                             tx_col = ui.column().classes("w-full gap-1 p-1")
-                        with ui.row().classes("w-full gap-2 items-center shrink-0 py-1"):
-                            mode_btn = ui.button("⚡ 自动追问").props(
-                                "unelevated dense color=positive no-caps"
-                            )
-                            with mode_btn:
-                                mode_tooltip = ui.tooltip("点击切换为手动模式")
-                            ui.space()
-                            trigger_btn = ui.button("触发追问", icon="play_circle").props(
-                                "unelevated dense color=warning no-caps"
-                            ).tooltip("手动触发 AI 追问建议")
-                            trigger_btn.disable()
 
                     with ui.tab_panel(tab_q).classes("h-full p-2"):
                         q_scroll = ui.scroll_area().classes("w-full h-full")
@@ -184,6 +177,20 @@ async def index() -> None:
                         profile_scroll = ui.scroll_area().classes("w-full h-full")
                         with profile_scroll:
                             profile_col = ui.column().classes("w-full gap-2 p-1")
+
+                with ui.row().classes("w-full gap-2 items-center shrink-0 px-2 py-1").style(
+                    "border-top:1px solid #E5E7EB;"
+                ):
+                    mode_btn = ui.button("⚡ 自动追问").props(
+                        "unelevated dense color=positive no-caps"
+                    )
+                    with mode_btn:
+                        mode_tooltip = ui.tooltip("点击切换为手动模式")
+                    ui.space()
+                    trigger_btn = ui.button("触发追问", icon="play_circle").props(
+                        "unelevated dense color=warning no-caps"
+                    ).tooltip("手动触发 AI 追问建议")
+                    trigger_btn.disable()
 
         # Bottom input row
         with ui.row().classes(

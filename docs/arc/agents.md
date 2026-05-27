@@ -141,7 +141,7 @@ ResumeAgent 执行（ReAct 循环，调用 parse_resume_pdf / file_write / file_
     ↓
 再次 dispatch_to_agent(agent="resume", task="生成面试题目...")
     ↓
-ResumeAgent 执行（读取 profile.md，生成题目）
+ResumeAgent 执行（读取 profile.md + skill_view('question_generation')，生成题目）
     ↓
 返回 questions_done → dispatch_to_agent 触发副作用（更新 session + start_interview）
     ↓
