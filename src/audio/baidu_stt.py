@@ -33,7 +33,7 @@ _SEND_CHUNK_BYTES = 5120     # 百度建议每次发送 5120 字节（160ms）
 _FATAL_ERR_NOS = {4002, -3004}
 
 # 百度 ASR 会将上一句的末尾标点延迟到下一句结果的开头，需在接收层纠正
-_LEADING_PUNCT = frozenset("，。！？；：、…"'""''（）【】「」")
+_LEADING_PUNCT = frozenset('，。！？；：、…"\'""\'\'（）【】「」')
 
 
 class BaiduRealtimeSTT:

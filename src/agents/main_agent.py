@@ -182,14 +182,18 @@ class MainAgent:
 
     # ── Core conversation method ───────────────────────────────────────────────
 
-    async def handle_chat(self, user_message: str) -> AsyncIterator[str]:
-        """处理用户消息（用 `_chat_lock` 串行化，避免并发撞坏 `_history`），流式返回 LLM 回复。"""
+    async def handle_chat(self, user_message: str) -> AsyncIterator[str | dict]:
+        """处理用户消息（用 `_chat_lock` 串行化，避免并发撞坏 `_history`），流式返回 LLM 回复。
+
+        yield str  → 文字 delta，前端直接追加到气泡
+        yield dict → 结构化事件，目前支持 {"type": "tool_call", "name": ..., "args": ...}
+        """
         self._bind_log_context("chat")
         async with self._chat_lock:
             async for chunk in self._handle_chat_locked(user_message):
                 yield chunk
 
-    async def _handle_chat_locked(self, user_message: str) -> AsyncIterator[str]:
+    async def _handle_chat_locked(self, user_message: str) -> AsyncIterator[str | dict]:
         """实际对话逻辑，调用方必须已持有 `_chat_lock`。"""
         # Nudge 计数
         if _NUDGE_INTERVAL > 0:
@@ -202,16 +206,31 @@ class MainAgent:
         self._history.append(user_msg)
         new_messages: list[Message] = [user_msg]
 
+        tool_called_memory = False
+
         system_prompt = self._build_system_prompt()
         messages = [Message(role="system", content=system_prompt)]
         messages.extend(self._history)
 
         tool_schemas = self._tools.get_schemas(self.get_tool_names()) or None
 
+        # 第一次调用：用 chat_stream(with tools)
+        # - LLM 返回纯文字 → delta 逐字推送（路径①）
+        # - LLM 决定调用工具 → final chunk 携带 tool_calls，文字 delta 为空（路径②）
+        content_acc = ""
+        first_tool_calls = None
         try:
-            response = await self._llm.chat(messages=messages, tools=tool_schemas)
+            async for chunk in self._llm.chat_stream(messages=messages, tools=tool_schemas):
+                if chunk.is_final:
+                    first_tool_calls = chunk.tool_calls
+                    content_acc = chunk.accumulated_content
+                elif chunk.delta and not first_tool_calls:
+                    # 只有确认没有 tool_calls 时才推送文字 delta
+                    # 注意：tool_calls 出现时 delta 通常为空，此判断作为保险
+                    content_acc += chunk.delta
+                    yield chunk.delta
         except Exception as exc:
-            logger.exception("MainAgent: LLM call failed")
+            logger.exception("MainAgent: first LLM stream call failed")
             error_msg = f"抱歉，AI 服务暂时不可用：{exc}"
             error_assistant = Message(role="assistant", content=error_msg)
             self._history.append(error_assistant)
@@ -221,30 +240,48 @@ class MainAgent:
             self._trim_history()
             return
 
-        # Handle tool calls — 支持多轮工具链，最后一轮以流式输出最终回复
-        tool_called_memory = False
-        current_response = response
+        # 路径①：无工具调用，流式已完成，收尾
+        if not first_tool_calls:
+            reply_msg = Message(role="assistant", content=content_acc)
+            self._history.append(reply_msg)
+            new_messages.append(reply_msg)
+            await self._logger.append_with_system(system_prompt, new_messages)
+            self._trim_history()
+            if self._should_nudge and not tool_called_memory:
+                self._should_nudge = False
+                if self._nudge_task is None or self._nudge_task.done():
+                    self._nudge_task = asyncio.create_task(self._background_memory_review())
+            return
+
+        # 路径②：有工具调用，进入工具循环
+        assistant_msg = Message(
+            role="assistant",
+            content=content_acc or None,
+            tool_calls=first_tool_calls,
+        )
+        self._history.append(assistant_msg)
+        new_messages.append(assistant_msg)
+
+        current_tool_calls = first_tool_calls
         loop_rounds = 0
 
         user_facing_error: str | None = None
-        while current_response.tool_calls and loop_rounds < _TOOL_LOOP_MAX_ROUNDS:
+        while current_tool_calls and loop_rounds < _TOOL_LOOP_MAX_ROUNDS:
             loop_rounds += 1
-            assistant_msg = Message(
-                role="assistant",
-                content=current_response.content,
-                tool_calls=current_response.tool_calls,
-            )
-            self._history.append(assistant_msg)
-            new_messages.append(assistant_msg)
 
-            for tc in current_response.tool_calls:
+            for tc in current_tool_calls:
                 if tc.function.name == "manage_user_memory":
                     tool_called_memory = True
+                # 通知前端工具调用开始
+                yield {
+                    "type": "tool_call",
+                    "name": tc.function.name,
+                    "args": tc.function.arguments,
+                }
                 result_str = await self._tools.dispatch(tc.function.name, tc.function.arguments)
                 tool_msg = Message(role="tool", content=result_str, tool_call_id=tc.id)
                 self._history.append(tool_msg)
                 new_messages.append(tool_msg)
-                # L1-6: 工具返回 user_facing 错误时短路 ReAct，避免 LLM 把根因模糊化
                 if user_facing_error is None:
                     user_facing_error = _extract_user_facing_error(result_str)
 
@@ -255,11 +292,11 @@ class MainAgent:
                 )
                 break
 
-            # 下一轮：用最新 system prompt（工具可能已使 cache 失效）+ 完整 history
+            # 下一轮：检查是否还需继续调用工具（非流式）
             messages_next = [Message(role="system", content=self._build_system_prompt())]
             messages_next.extend(self._history)
             try:
-                current_response = await self._llm.chat(messages=messages_next, tools=tool_schemas)
+                next_resp = await self._llm.chat(messages=messages_next, tools=tool_schemas)
             except Exception as exc:
                 logger.exception("MainAgent: follow-up LLM call failed at round %d", loop_rounds)
                 err = f"工具调用完成，但继续生成回复时出错：{exc}"
@@ -267,7 +304,26 @@ class MainAgent:
                 self._history.append(err_msg)
                 new_messages.append(err_msg)
                 yield err
-                current_response = None
+                current_tool_calls = None
+                break
+
+            if next_resp.tool_calls:
+                # 还有工具调用，把 assistant 消息加入 history 继续循环
+                next_assistant = Message(
+                    role="assistant",
+                    content=next_resp.content or None,
+                    tool_calls=next_resp.tool_calls,
+                )
+                self._history.append(next_assistant)
+                new_messages.append(next_assistant)
+                current_tool_calls = next_resp.tool_calls
+            else:
+                current_tool_calls = None
+                # 无更多工具调用，把此次文本回复加入 history
+                if next_resp.content:
+                    next_msg = Message(role="assistant", content=next_resp.content)
+                    self._history.append(next_msg)
+                    new_messages.append(next_msg)
                 break
 
         if user_facing_error is not None:
@@ -276,11 +332,16 @@ class MainAgent:
             self._history.append(err_msg)
             new_messages.append(err_msg)
             yield user_facing_error
-        elif current_response is None:
-            # 错误已 yield，直接收尾
-            pass
-        elif current_response.tool_calls:
-            # 触达最大循环次数仍有未执行的 tool_calls，给出告警
+        elif current_tool_calls is None and loop_rounds > 0:
+            # 工具循环正常结束，检查 history 里最后一条 assistant 消息是否已有内容
+            last = self._history[-1] if self._history else None
+            if last and last.role == "assistant" and last.content:
+                # 下一轮 LLM 已返回文字（在循环内加入 history），直接流式输出
+                # 实际上此处 content 已存储，对用户 yield 即可
+                # （若要真流式可再调 chat_stream，但内容已生成，复用更经济）
+                pass  # already yielded nothing, fall through to final stream
+        elif current_tool_calls:
+            # 触达最大循环次数仍有未执行的 tool_calls
             logger.warning(
                 "MainAgent: tool loop reached max rounds (%d), dropping remaining tool_calls",
                 _TOOL_LOOP_MAX_ROUNDS,
@@ -290,34 +351,36 @@ class MainAgent:
             self._history.append(warn_msg)
             new_messages.append(warn_msg)
             yield warn
-        elif loop_rounds == 0:
-            # 第一次调用即无 tool_calls，按普通文本回复处理
-            reply = current_response.content or ""
-            reply_msg = Message(role="assistant", content=reply)
-            self._history.append(reply_msg)
-            new_messages.append(reply_msg)
-            yield reply
-        else:
-            # 工具循环结束、最终回复以流式输出
-            messages_final = [Message(role="system", content=self._build_system_prompt())]
-            messages_final.extend(self._history)
-            reply_text = ""
-            try:
-                async for chunk in self._llm.chat_stream(messages_final):
-                    if chunk.delta:
-                        reply_text += chunk.delta
-                        yield chunk.delta
-                    if chunk.is_final:
-                        break
-            except Exception as exc:
-                logger.exception("MainAgent: final stream call failed")
-                err = f"工具调用完成，但生成回复时出错：{exc}"
-                yield err
-                reply_text = reply_text or err
 
-            final_msg = Message(role="assistant", content=reply_text)
-            self._history.append(final_msg)
-            new_messages.append(final_msg)
+        # 工具循环结束后，流式输出最终回复（若上面没有提前 yield 完整回复）
+        if user_facing_error is None and loop_rounds > 0 and not current_tool_calls:
+            # 检查最后一条 assistant 消息是否已 yield 过
+            last = self._history[-1] if self._history else None
+            need_final_stream = not (last and last.role == "assistant" and last.content)
+            if need_final_stream:
+                messages_final = [Message(role="system", content=self._build_system_prompt())]
+                messages_final.extend(self._history)
+                reply_text = ""
+                try:
+                    async for chunk in self._llm.chat_stream(messages_final):
+                        if chunk.delta:
+                            reply_text += chunk.delta
+                            yield chunk.delta
+                        if chunk.is_final:
+                            break
+                except Exception as exc:
+                    logger.exception("MainAgent: final stream call failed")
+                    err = f"工具调用完成，但生成回复时出错：{exc}"
+                    yield err
+                    reply_text = reply_text or err
+
+                final_msg = Message(role="assistant", content=reply_text)
+                self._history.append(final_msg)
+                new_messages.append(final_msg)
+            else:
+                # 最后一条 assistant 已有内容，直接 yield
+                assert last is not None
+                yield last.content or ""
 
         # LLM 主动调用了记忆工具，重置 nudge 计数
         if tool_called_memory:

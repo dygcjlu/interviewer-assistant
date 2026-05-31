@@ -20,8 +20,10 @@ class ChatResponse:
 
 @dataclass
 class StreamChunk:
-    delta: str
+    delta: str = ""
     is_final: bool = False
+    tool_calls: list[ToolCallInfo] | None = None
+    accumulated_content: str = ""
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
 
@@ -55,10 +57,15 @@ class LLMClient(Protocol):
     async def chat_stream(
         self,
         messages: list[Message],
+        tools: list[ToolSchema] | None = None,
         temperature: float = 0.7,
         timeout_sec: float | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """流式请求（逐 token 返回），用于实时追问建议推送到前端。"""
+        """流式请求（逐 token 返回）。
+        
+        当传入 tools 时，若 LLM 决定调用工具，文字 delta 为空，最终 is_final chunk
+        会携带 accumulated_content 和 tool_calls；若 LLM 返回纯文本则逐 delta 推送。
+        """
         ...
 
     def count_tokens(self, messages: list[Message]) -> int:

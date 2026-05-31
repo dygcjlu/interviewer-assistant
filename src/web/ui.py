@@ -792,7 +792,12 @@ async def _trigger_parse(
 
 
 async def _chat_stream(text: str, chat_col, chat_scroll, on_complete=None) -> None:
-    """调用 /api/chat SSE 接口，流式展示回复。"""
+    """调用 /api/chat SSE 接口，流式展示回复。
+
+    SSE 事件类型：
+    - {"type": "delta", "delta": "..."}  → 追加到回复气泡
+    - {"type": "tool_call", "name": "...", "args": "..."}  → 工具调用行
+    """
     reply_text = ""
     reply_label = None
     try:
@@ -815,24 +820,33 @@ async def _chat_stream(text: str, chat_col, chat_scroll, on_complete=None) -> No
                         chunk = json.loads(payload)
                     except json.JSONDecodeError:
                         continue
-                    delta = chunk.get("delta", "")
-                    if not delta:
-                        continue
-                    reply_text += delta
-                    if reply_label is None:
-                        with chat_col:
-                            with ui.row().classes("w-full justify-start py-1 px-2"):
-                                with ui.column().classes("items-start gap-1").style("max-width:68%"):
-                                    ui.label("Agent").classes("text-xs text-grey-5")
-                                    reply_label = ui.label(reply_text).style(
-                                        "background:white; color:#111827; padding:10px 14px;"
-                                        "border-radius:16px 16px 16px 3px; font-size:13px;"
-                                        "white-space:pre-wrap; line-height:1.6; word-break:break-word;"
-                                        "border:1px solid #E5E7EB; box-shadow:0 1px 3px rgba(0,0,0,0.06);"
-                                    )
-                    else:
-                        reply_label.set_text(reply_text)
-                    await _scroll(chat_scroll)
+
+                    chunk_type = chunk.get("type", "")
+
+                    if chunk_type == "tool_call":
+                        _render_tool_call_row(chat_col, chunk.get("name", ""), chunk.get("args", ""))
+                        await _scroll(chat_scroll)
+
+                    elif chunk_type == "delta":
+                        delta = chunk.get("delta", "")
+                        if not delta:
+                            continue
+                        reply_text += delta
+                        if reply_label is None:
+                            with chat_col:
+                                with ui.row().classes("w-full justify-start py-1 px-2"):
+                                    with ui.column().classes("items-start gap-1").style("max-width:68%"):
+                                        ui.label("Agent").classes("text-xs text-grey-5")
+                                        reply_label = ui.label(reply_text).style(
+                                            "background:white; color:#111827; padding:10px 14px;"
+                                            "border-radius:16px 16px 16px 3px; font-size:13px;"
+                                            "white-space:pre-wrap; line-height:1.6; word-break:break-word;"
+                                            "border:1px solid #E5E7EB; box-shadow:0 1px 3px rgba(0,0,0,0.06);"
+                                        )
+                        else:
+                            reply_label.set_text(reply_text)
+                        await _scroll(chat_scroll)
+
     except Exception as exc:
         logger.exception("chat_stream_inner failed")
         _error(chat_col, f"AI 解析失败：{exc}")
@@ -843,6 +857,46 @@ async def _chat_stream(text: str, chat_col, chat_scroll, on_complete=None) -> No
             except Exception:
                 logger.exception("chat_stream on_complete failed")
     await _scroll(chat_scroll)
+
+
+def _render_tool_call_row(col, tool_name: str, args_str: str) -> None:
+    """在聊天流中渲染一行工具调用信息（小型系统行）。"""
+    # 解析 args_str，提取关键字段用于摘要显示
+    args_summary = _tool_args_summary(tool_name, args_str)
+    display = f"⚙ {tool_name}"
+    if args_summary:
+        display += f"  ·  {args_summary}"
+    with col:
+        with ui.row().classes("w-full justify-center py-1"):
+            ui.label(display).style(
+                "background:#F3F4F6; color:#6B7280; padding:3px 12px;"
+                "border-radius:999px; font-size:11px; max-width:85%;"
+                "white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+                "border:1px solid #E5E7EB;"
+            )
+
+
+def _tool_args_summary(tool_name: str, args_str: str) -> str:
+    """从工具调用参数中提取简短摘要文字。"""
+    try:
+        args = json.loads(args_str) if args_str else {}
+    except Exception:
+        return args_str[:40] if args_str else ""
+
+    if tool_name == "dispatch_to_agent":
+        agent = args.get("agent", "")
+        task = args.get("task", "")
+        task_short = task[:40] + "…" if len(task) > 40 else task
+        return f"agent={agent}  {task_short}" if agent else task_short
+
+    if tool_name == "manage_user_memory":
+        action = args.get("action", "")
+        key = args.get("key", "")
+        return f"{action}  {key}" if key else action
+
+    # 通用：显示前两个 key=val
+    parts = [f"{k}={str(v)[:20]}" for k, v in list(args.items())[:2]]
+    return "  ".join(parts)
 
 
 async def _confirm_overwrite_dialog(candidate_name: str) -> bool:

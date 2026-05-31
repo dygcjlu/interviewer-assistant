@@ -81,7 +81,10 @@ async def chat(request: Request, body: ChatRequest):
 
     async def _stream():
         async for chunk in main_agent.handle_chat(body.message):
-            yield f"data: {json.dumps({'delta': chunk}, ensure_ascii=False)}\n\n"
+            if isinstance(chunk, str):
+                yield f"data: {json.dumps({'type': 'delta', 'delta': chunk}, ensure_ascii=False)}\n\n"
+            else:
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream")

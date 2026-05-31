@@ -126,26 +126,40 @@ class OpenAICompatibleClient:
     async def chat_stream(
         self,
         messages: list[Message],
+        tools: list[ToolSchema] | None = None,
         temperature: float = 0.7,
         timeout_sec: float | None = None,
     ) -> AsyncIterator[StreamChunk]:
         payload_messages = [self._message_to_dict(m) for m in messages]
+        payload_tools = [self._tool_to_dict(t) for t in tools] if tools else None
         timeout = timeout_sec if timeout_sec is not None else self._config.timeout_sec
 
         bind_op("llm_chat_stream")
         prompt_tokens = 0
         completion_tokens = 0
         start = time.perf_counter()
-        logger.info("LLM chat_stream start model=%s messages=%d", self._config.model, len(payload_messages))
+        logger.info(
+            "LLM chat_stream start model=%s messages=%d tools=%s",
+            self._config.model, len(payload_messages), bool(payload_tools),
+        )
+
+        # Accumulate streaming tool_calls by index (OpenAI splits args across chunks)
+        # key = index, value = {"id", "type", "name", "arguments"}
+        _tc_acc: dict[int, dict[str, str]] = {}
+        content_acc = ""
+
         try:
-            stream = await self._client.chat.completions.create(
-                model=self._config.model,
-                messages=payload_messages,
-                temperature=temperature,
-                stream=True,
-                stream_options={"include_usage": True},
-                timeout=timeout,
-            )
+            kwargs: dict[str, Any] = {
+                "model": self._config.model,
+                "messages": payload_messages,
+                "temperature": temperature,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "timeout": timeout,
+            }
+            if payload_tools:
+                kwargs["tools"] = payload_tools
+            stream = await self._client.chat.completions.create(**kwargs)
             async for raw_chunk in stream:
                 usage = getattr(raw_chunk, "usage", None)
                 if usage is not None:
@@ -153,9 +167,33 @@ class OpenAICompatibleClient:
                     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
                 if not raw_chunk.choices:
                     continue
-                delta = raw_chunk.choices[0].delta.content or ""
-                if delta:
-                    yield StreamChunk(delta=delta)
+                delta_obj = raw_chunk.choices[0].delta
+
+                # Text delta
+                text = getattr(delta_obj, "content", None) or ""
+                if text:
+                    content_acc += text
+                    yield StreamChunk(delta=text)
+
+                # Tool call deltas — accumulate by index
+                raw_tcs = getattr(delta_obj, "tool_calls", None)
+                if raw_tcs:
+                    for tc_delta in raw_tcs:
+                        idx: int = tc_delta.index
+                        if idx not in _tc_acc:
+                            _tc_acc[idx] = {
+                                "id": getattr(tc_delta, "id", "") or "",
+                                "type": getattr(tc_delta, "type", "function") or "function",
+                                "name": "",
+                                "arguments": "",
+                            }
+                        fn = getattr(tc_delta, "function", None)
+                        if fn:
+                            if getattr(fn, "name", None):
+                                _tc_acc[idx]["name"] += fn.name
+                            if getattr(fn, "arguments", None):
+                                _tc_acc[idx]["arguments"] += fn.arguments
+
         except openai.RateLimitError as exc:
             logger.warning("LLM stream rate limit hit: %s", exc)
             raise LLMRateLimitError(str(exc)) from exc
@@ -168,15 +206,28 @@ class OpenAICompatibleClient:
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
-            "LLM chat_stream done model=%s prompt_tokens=%d completion_tokens=%d elapsed_ms=%.1f",
-            self._config.model,
-            prompt_tokens,
-            completion_tokens,
-            elapsed_ms,
+            "LLM chat_stream done model=%s tool_calls=%d prompt_tokens=%d "
+            "completion_tokens=%d elapsed_ms=%.1f",
+            self._config.model, len(_tc_acc), prompt_tokens, completion_tokens, elapsed_ms,
         )
+
+        # Build accumulated tool_calls list if any (sorted by index)
+        tool_calls: list[ToolCallInfo] | None = None
+        if _tc_acc:
+            tool_calls = [
+                ToolCallInfo(
+                    id=v["id"],
+                    type=v["type"],
+                    function=FunctionCallInfo(name=v["name"], arguments=v["arguments"]),
+                )
+                for _, v in sorted(_tc_acc.items())
+            ]
+
         yield StreamChunk(
             delta="",
             is_final=True,
+            tool_calls=tool_calls,
+            accumulated_content=content_acc,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
