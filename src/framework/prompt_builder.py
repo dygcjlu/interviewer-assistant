@@ -150,15 +150,8 @@ def _build_fixed_zone(session: InterviewSession, user_memory: str = "") -> str:
         lines.append(f"\n## 候选人简历\n\n{c.resume_content.strip()}")
     elif c.id:
         lines.append(f"简历档案：candidates/{c.id}/profile.md（可调用 file_read 工具查看完整内容）")
-    if session.question_plan:
-        lines.append("\n面试题目清单：")
-        for q in session.question_plan:
-            status = "✓" if q.is_covered else "○"
-            lines.append(f"{status} [{q.dimension}] {q.question}")
-            for fu in q.follow_ups:
-                lines.append(f"追问: {fu}")
-    if session.covered_dimensions:
-        lines.append(f"\n已覆盖维度：{', '.join(sorted(session.covered_dimensions))}")
+    if session.interview_brief:
+        lines.append(f"\n## 面试简报\n\n{session.interview_brief[:3000]}")
     if user_memory:
         lines.append(f"\n## 面试官岗位要求与偏好\n{user_memory.strip()}")
     return "\n".join(lines)

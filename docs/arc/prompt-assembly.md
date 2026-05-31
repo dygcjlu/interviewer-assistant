@@ -35,7 +35,8 @@ _build_system_prompt()
 - Agent 角色身份：专业面试助手
 - 能力描述：对话理解、简历解析（通过 `dispatch_to_agent`）、偏好记忆（通过 `manage_user_memory`）
 - 对话风格要求：简洁专业
-- 工具使用规则：解析简历必须调用 `dispatch_to_agent(agent="resume", ...)`，生成题目后用简短文字总结
+- 工具使用规则：解析简历、生成面试简报必须调用 `dispatch_to_agent(agent="resume", ...)`，简报生成后用简短文字总结
+- 引导式对话工作流：简历解析后两阶段（呈现分析 → 收集关注点），最终生成结构化面试简报
 - 主动行为指引：检测到岗位要求时自动调用 `manage_user_memory` 工具保存
 
 **更新时机**：永不变更
@@ -63,7 +64,7 @@ _build_system_prompt()
 
 ### Layer 3：当前候选人信息（动态替换）
 
-**来源**：`CandidateProfile` 对象 + 面试题目清单
+**来源**：`CandidateProfile` 对象 + 面试简报
 
 **内容**（由 `set_candidate_context()` 构建）：
 - 候选人姓名、ID
@@ -71,7 +72,7 @@ _build_system_prompt()
 - 工作年限
 - 技能列表（最多 15 项）
 - 简历内容（`profile.resume_content` 前 1500 字，即 profile.md 正文）
-- 面试题目清单（最多 12 题，含维度标签）
+- 面试简报预览（`interview_brief` 前 800 字）
 
 **注入格式**：
 ```
@@ -83,13 +84,12 @@ _build_system_prompt()
 技能：{skill1}, {skill2}, ...
 简历内容：
 {resume_content[:1500]}
-面试题目：
-  1. [系统设计] 请设计一个...
-  2. [技术深度] 解释一下...
+面试简报（前800字）：
+{interview_brief[:800]}
 ```
 
 **更新时机**：
-- 前端选中候选人时，API 层调用 `set_candidate_context(profile, questions)` 替换本层
+- 前端选中候选人时，API 层调用 `set_candidate_context(profile, interview_brief=brief)` 替换本层
 - 切换候选人时只替换本层，**对话历史不清空**（保持上下文连续）
 - 调用 `clear_candidate_context()` 清空本层
 

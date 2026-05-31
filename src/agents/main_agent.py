@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import AsyncIterator, Any, TYPE_CHECKING
+from typing import AsyncIterator, TYPE_CHECKING
 
 from ..models.message import Message
 from ..models.candidate import CandidateProfile
@@ -48,18 +48,34 @@ def _extract_user_facing_error(tool_result: str) -> str | None:
         return None
     return str(data.get("message") or data.get("error") or "")
 
-_LAYER1_ROLE = """你是一位专业的面试助手 Agent，帮助面试官管理候选人、准备面试问题、支持面试流程。
+_LAYER1_ROLE = """你是一位专业的面试助手 Agent，帮助面试官管理候选人、准备面试、支持面试流程。
 
 你的能力：
 - 与面试官自然对话，理解需求并提供建议
-- 通过 dispatch_to_agent 工具委托 ResumeAgent 解析简历、生成面试题目
+- 通过 dispatch_to_agent 工具委托 ResumeAgent 解析简历、生成面试简报
 - 记忆面试官的偏好和岗位要求
 
-工具使用规则：
-- 解析简历、生成面试题目必须调用 dispatch_to_agent(agent="resume", ...)，不要自行在对话中输出完整题目列表
-- 生成题目时，ResumeAgent 会返回结构化数据并同步到「题目」面板；你在工具完成后用简短文字总结即可
+## 简历解析后工作流
 
-对话风格：
+简历解析完成后，进入两阶段面试准备流程：
+
+**阶段一：候选人分析呈现**
+- 主动呈现候选人概况（背景、年限、职位）
+- 标注风险信号（如频繁跳槽、经历断层、技能与岗位不符等）并说明理由
+- 建议重点关注方向（基于简历内容和已知岗位要求）
+
+**阶段二：收集面试官关注点**
+- 通过 2-4 轮对话收集面试官的具体关注点（如"重点考察稳定性"、"关注系统设计能力"）
+- 面试官确认后，主动提议生成面试简报
+- 用户确认后调用：`dispatch_to_agent(agent="resume", task="为候选人[ID]生成面试简报，关注点：[整理后内容]...")`
+
+## 工具使用规则
+
+- 解析简历、生成面试简报必须调用 dispatch_to_agent(agent="resume", ...)，不要自行在对话中输出完整简报内容
+- 简报生成后同步到「简报」面板；工具完成后用简短文字总结即可
+
+## 对话风格
+
 - 简洁专业，避免冗长
 - 主动理解面试官意图，提供有价值的建议
 - 当面试官提供岗位要求或偏好信息时，主动调用 manage_user_memory 工具保存
@@ -124,7 +140,7 @@ class MainAgent:
         logger.info("MainAgent: reloaded user memory (%d chars)", len(self._layer2_user_memory))
 
     def set_candidate_context(
-        self, profile: CandidateProfile, questions: list[dict[str, Any]] | None = None
+        self, profile: CandidateProfile, interview_brief: str | None = None
     ) -> None:
         parts = [f"\n当前候选人：{profile.name}（ID: {profile.id}）"]
         if profile.current_position:
@@ -135,12 +151,8 @@ class MainAgent:
             parts.append(f"技能：{', '.join(profile.skills[:15])}")
         if profile.resume_content:
             parts.append(f"简历内容：\n{profile.resume_content[:1500]}")
-        if questions:
-            q_lines = "\n".join(
-                f"  {i+1}. [{q.get('dimension', '')}] {q.get('question', '')}"
-                for i, q in enumerate(questions[:12])
-            )
-            parts.append(f"面试题目：\n{q_lines}")
+        if interview_brief:
+            parts.append(f"面试简报（前800字）：\n{interview_brief[:800]}")
         self._layer3_candidate = "\n".join(parts)
         self._cached_system_prompt = None
         logger.info("MainAgent: candidate context updated for %s", profile.name)

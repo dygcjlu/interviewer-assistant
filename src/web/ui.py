@@ -176,7 +176,7 @@ async def index() -> None:
             with ui.column().classes("h-full overflow-hidden flex-shrink-0").style("width:38%"):
                 with ui.tabs().classes("w-full shrink-0") as tabs:
                     tab_tx = ui.tab("转写", icon="record_voice_over")
-                    tab_q = ui.tab("题目", icon="list_alt")
+                    tab_q = ui.tab("简报", icon="article")
                     tab_r = ui.tab("报告", icon="assessment")
                     tab_profile = ui.tab("简历", icon="person")
 
@@ -269,11 +269,10 @@ async def index() -> None:
         if profile.get("name"):
             state["candidate_name"] = profile["name"]
             _refresh_bar(stage_badge, candidate_label, round_label, state)
-        questions = data.get("questions", [])
+        brief = data.get("brief", "")
         resume_markdown = data.get("resume_markdown", "")
-        _render_profile_tab(profile_col, profile, questions, resume_markdown)
-        if questions:
-            _render_questions(q_col, questions, cid)
+        _render_profile_tab(profile_col, profile, brief, resume_markdown)
+        _render_brief(q_col, brief)
 
     asyncio.create_task(_load_candidates())
 
@@ -586,9 +585,9 @@ async def _dispatch(
             state["candidate_name"] = candidate_name
         _refresh_bar(stage_badge, candidate_label, round_label, state)
 
-        questions = msg.get("question_plan", [])
-        if questions:
-            _render_questions(q_col, questions, state.get("candidate_id"))
+        brief = msg.get("brief", "")
+        if brief:
+            _render_brief(q_col, brief)
 
     elif t == "status":
         stage = msg.get("stage", "")
@@ -665,33 +664,13 @@ def _refresh_bar(badge, cand_label, rnd_label, state: dict) -> None:
     rnd_label.set_text(f"轮次：{state.get('round_count', 0)}")
 
 
-def _render_questions(col, questions: list, candidate_id: str | None = None) -> None:
+def _render_brief(col, brief_text: str) -> None:
     col.clear()
-    q_list = [dict(q) for q in questions if isinstance(q, dict)]
-
-    def _make_toggle(idx: int):
-        async def toggle(e) -> None:
-            q_list[idx]["is_covered"] = e.value
-            if candidate_id:
-                try:
-                    async with httpx.AsyncClient(timeout=5) as client:
-                        await client.put(
-                            f"{_base_url}/api/interview/questions",
-                            json={"candidate_id": candidate_id, "questions": q_list},
-                        )
-                except Exception:
-                    pass
-        return toggle
-
     with col:
-        for i, q in enumerate(q_list):
-            text = q.get("question", "")
-            dim = q.get("dimension", "")
-            covered = q.get("is_covered", False)
-            cls = "text-sm text-grey-5 line-through flex-1" if covered else "text-sm flex-1"
-            with ui.row().classes("w-full items-start gap-1 py-1"):
-                ui.checkbox("", value=covered, on_change=_make_toggle(i)).props("dense")
-                ui.label(f"[{dim}] {text}").classes(cls)
+        if brief_text:
+            ui.markdown(brief_text).classes("w-full text-sm")
+        else:
+            ui.label("暂无面试简报，请先生成简报。").classes("text-grey-5 text-sm")
 
 
 def _render_report(col, report: dict) -> None:
@@ -1017,7 +996,7 @@ async def _on_candidate_select_inner(
         return
 
     profile = data.get("profile", {})
-    questions = data.get("questions", [])
+    brief = data.get("brief", "")
     resume_markdown = data.get("resume_markdown", "")
     eval_report = data.get("eval_report")
 
@@ -1045,22 +1024,20 @@ async def _on_candidate_select_inner(
         meta_parts.append(f"技能：{skills}")
     meta_str = "\n".join(meta_parts) if meta_parts else "—"
 
-    q_count = len(questions)
     reply = (
         f"已选择候选人：{profile.get('name', '—')}\n"
         f"{meta_str}\n\n"
         + (
-            f"历史题目 {q_count} 道，可在「题目」Tab 查看。"
-            if questions
-            else "暂无历史题目。"
+            "已有面试简报，可在「简报」Tab 查看。"
+            if brief
+            else "暂无面试简报。"
         )
     )
     _bubble(chat_col, reply, sent=False, name="Agent")
-    if questions:
-        _render_questions(q_col, questions, cid)
+    _render_brief(q_col, brief)
     if eval_report and r_col is not None:
         _render_report(r_col, eval_report)
-    _render_profile_tab(profile_col, profile, questions, resume_markdown)
+    _render_profile_tab(profile_col, profile, brief, resume_markdown)
     panels.set_value(tab_profile)
     await _scroll(chat_scroll)
 
@@ -1089,7 +1066,7 @@ async def _confirm_delete_dialog(candidate_name: str) -> bool:
     return await dialog_done
 
 
-def _render_profile_tab(col, profile: dict, questions: list, resume_markdown: str = "") -> None:
+def _render_profile_tab(col, profile: dict, brief: str = "", resume_markdown: str = "") -> None:
     col.clear()
     if not profile:
         with col:
@@ -1116,11 +1093,6 @@ def _render_profile_tab(col, profile: dict, questions: list, resume_markdown: st
             with ui.expansion("简历详情", icon="description", value=True).classes("w-full"):
                 ui.markdown(resume_markdown).classes("text-sm text-grey-8")
 
-        if questions:
-            with ui.expansion(f"面试题目（{len(questions)}）", icon="list_alt").classes("w-full"):
-                for i, q in enumerate(questions):
-                    if not isinstance(q, dict):
-                        continue
-                    dim = q.get("dimension", "")
-                    text = q.get("question", "")
-                    ui.label(f"{i+1}. [{dim}] {text}").classes("text-xs text-grey-8 py-1")
+        if brief:
+            with ui.expansion("面试简报", icon="article").classes("w-full"):
+                ui.markdown(brief).classes("text-sm text-grey-8")

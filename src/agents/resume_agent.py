@@ -8,7 +8,6 @@ import re
 from .base import AgentRequest, AgentResponse, BaseAgent
 from ..models.message import Message
 from ..models.session import InterviewSession
-from ..tools._helpers import normalize_questions
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ class ResumeAgent(BaseAgent):
                   "将 resumes/张三.pdf 解析为 Markdown 并保存为 resumes/张三.md"
 
         Returns:
-            {"type": "parse_done", ...} | {"type": "questions_done", ...} | {"type": "error", ...}
+            {"type": "parse_done", ...} | {"type": "brief_done", ...} | {"type": "error", ...}
         """
         self._bind_log_context("execute")
         from ..config import get_settings
@@ -75,7 +74,7 @@ class ResumeAgent(BaseAgent):
             return _extract_json(result_text)
         except json.JSONDecodeError as exc:
             # L2-4: LLM 最终输出非 JSON 时，回看 messages 中已成功的 file_write 副作用，
-            # 构造伪 parse_done / questions_done，避免"工作已落盘但被视为失败"。
+            # 构造伪 parse_done，避免"工作已落盘但被视为失败"。
             fallback = _fallback_from_messages(messages, task, result_text)
             if fallback is not None:
                 logger.warning(
@@ -105,11 +104,10 @@ class ResumeAgent(BaseAgent):
         dummy_session = InterviewSession(
             id=str(uuid.uuid4()),
             candidate=CandidateProfile(id=str(uuid.uuid4()), name=""),
-            question_plan=[],
             rounds=[],
             stage=InterviewStage.IDLE,
             context_summary="",
-            covered_dimensions=set(),
+            interview_brief="",
             metadata=SessionMetadata(candidate_id="", start_time=datetime.now()),
         )
         messages = self.prompt_builder.build(dummy_session, self.config)
@@ -123,9 +121,9 @@ def _fallback_from_messages(
     """L2-4: _extract_json 失败时回看 ReAct 历史，根据已成功的 file_write 构造伪结果。
 
     扫描逻辑：
-    - 从 messages 倒序找最近的 assistant.tool_calls 中的 file_write，参数含 path/content
-    - 根据 path 后缀判断 parse_done（.md） / questions_done（.json）
-    - 同时拼对应 tool message 的成功结果以确认副作用真发生
+    - 找最近成功的 file_write tool call
+    - 根据 path 后缀判断 parse_done（.md）
+    - 简报生成任务无 file_write 副作用，无法回退
     """
     file_writes: list[tuple[str, str]] = []  # (path, content)
     pending_calls: dict[str, tuple[str, str]] = {}  # tool_call_id -> (path, content)
@@ -143,40 +141,21 @@ def _fallback_from_messages(
                     if path:
                         pending_calls[tc.id] = (path, content)
         elif msg.role == "tool" and msg.tool_call_id in pending_calls:
-            # 简单认为非异常结果即"成功"（file_write 失败会 raise）
             path, content = pending_calls.pop(msg.tool_call_id)
             file_writes.append((path, content))
 
     if not file_writes:
         return None
 
-    # 取最后一次成功的 file_write
-    last_path, last_content = file_writes[-1]
-    lower_task = task.lower()
+    last_path, _ = file_writes[-1]
 
     if last_path.endswith(".md"):
-        # 解析任务：构造 parse_done
         return {
             "type": "parse_done",
             "markdown_path": last_path,
-            "profile": {},  # LLM 未提供结构化 profile，留空让上层用名字默认
+            "profile": {},
             "note": "fallback_from_file_write",
         }
-
-    if last_path.endswith(".json") or "question" in lower_task or "题目" in task:
-        # 出题任务：尝试解析 file_write 的 content
-        try:
-            questions_data = json.loads(last_content)
-            normalized = normalize_questions(questions_data)
-            if normalized:
-                return {
-                    "type": "questions_done",
-                    "questions_path": last_path,
-                    "questions": normalized,
-                    "note": "fallback_from_file_write",
-                }
-        except Exception:
-            pass
 
     return None
 

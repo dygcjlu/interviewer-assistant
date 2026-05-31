@@ -370,11 +370,8 @@ def _build_candidate_context(session: InterviewSession) -> str:
         parts.append(f"技能：{', '.join(candidate.skills[:20])}")
     if candidate.resume_content:
         parts.append(f"\n简历内容：\n{candidate.resume_content[:2000]}")
-    if session.question_plan:
-        parts.append("面试题目清单：")
-        for q in session.question_plan:
-            mark = "✓" if q.is_covered else "○"
-            parts.append(f"  {mark} [{q.dimension}] {q.question}")
+    if session.interview_brief:
+        parts.append(f"\n面试简报：\n{session.interview_brief[:2000]}")
     return "\n".join(parts)
 
 

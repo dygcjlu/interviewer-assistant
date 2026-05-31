@@ -16,9 +16,9 @@ Agent 层负责所有 AI 推理与对话逻辑。采用 **MainAgent 单入口** 
 
 | 层级 | 内容 | 加载时机 |
 |---|---|---|
-| 1 | 角色定义：面试助手，帮助面试官管理候选人、准备问题、支持面试 | 固定 |
+| 1 | 角色定义：面试助手，帮助面试官管理候选人、准备面试、支持面试；包含简历解析后引导式对话工作流 | 固定 |
 | 2 | USER.md 全文：面试官偏好、岗位要求（由 `UserMemoryStore.render()` 读取） | 服务启动时加载一次 |
-| 3 | 当前候选人信息：姓名、职位、工作年限、技能、简历内容（前 1500 字）、题目清单 | 选中候选人时注入，切换时替换 |
+| 3 | 当前候选人信息：姓名、职位、工作年限、技能、简历内容（前 1500 字）、面试简报预览（前 800 字） | 选中候选人时注入，切换时替换 |
 
 ### 对话历史管理
 
@@ -42,7 +42,7 @@ Agent 层负责所有 AI 推理与对话逻辑。采用 **MainAgent 单入口** 
 | 方法 | 说明 |
 |---|---|
 | `handle_chat(message: str) -> AsyncIterator[str]` | 处理用户消息，流式返回 |
-| `set_candidate_context(profile, questions)` | 切换候选人时由 API 层调用，替换系统提示第 3 层 |
+| `set_candidate_context(profile, interview_brief?)` | 切换候选人时由 API 层调用，替换系统提示第 3 层 |
 | `reload_user_memory()` | USER.md 更新后重新加载第 2 层（`UserMemoryStore` 已是最新，无需重读磁盘） |
 | `bind_resume_agent(agent)` | 启动后绑定 ResumeAgent 引用 |
 | `bind_controller(controller)` | 启动后绑定 InterviewController 引用 |
@@ -90,9 +90,10 @@ stateDiagram-v2
 **`create_session` 数据加载流程**：
 ```
 candidate_id 非空时：
-  memory.get_candidate(candidate_id)       → 基础 profile
+  memory.get_candidate(candidate_id)         → 基础 profile
   memory.get_candidate_history(candidate_id) → history_summary 注入 session.candidate
   memory.get_resume_markdown(candidate_id)   → resume_content 注入 session.candidate
+  memory.get_brief(candidate_id)             → interview_brief 注入 session
 ```
 
 ---
@@ -103,26 +104,26 @@ candidate_id 非空时：
 
 ### 职责
 
-解析候选人 PDF 简历，提取结构化信息（`CandidateProfile`），并基于该信息生成面试题目清单。采用 **ReAct 模式**（最大 `RESUME_AGENT_MAX_TOOL_ROUNDS` 轮工具调用，默认 15）。
+解析候选人 PDF 简历，提取结构化信息（`CandidateProfile`），并基于该信息和面试官关注点生成面试简报。采用 **ReAct 模式**（最大 `RESUME_AGENT_MAX_TOOL_ROUNDS` 轮工具调用，默认 15）。
 
 **工具**：`parse_resume_pdf`（读取 PDF）、`file_read`（读取文件）、`file_write`（写出 Markdown）、`skill_view`（查看技巧详情）
 
 ### 触发方式
 
-由 MainAgent 通过 `dispatch_to_agent(agent="resume", task=...)` 工具委托调用。`dispatch_to_agent` 工具会自动将当前 session 的文件路径信息注入到 task 上下文中（`candidates/{cid}/profile.md`、`resumes/{stem}.pdf` 等）。
+由 MainAgent 通过 `dispatch_to_agent(agent="resume", task=...)` 工具委托调用。`dispatch_to_agent` 工具会自动将当前 session 的文件路径信息注入到 task 上下文中（`candidates/{cid}/profile.md`、`candidates/{cid}/brief.md`、`resumes/{stem}.pdf` 等）。
 
 ### 结果类型
 
 | 结果类型 | 说明 |
 |---|---|
 | `parse_done` | 简历解析完成，包含 `profile` dict 和 `markdown_path` |
-| `questions_done` | 题目生成完成，包含 `questions` 数组 |
+| `brief_done` | 简报生成完成，包含 `candidate_id` 和 `brief`（Markdown 文本） |
 | `error` | 执行失败 |
 
 ### 副作用（由 `dispatch_to_agent` 处理）
 
 - `parse_done`：`update_candidate_from_data(session.candidate, profile_data)` → 读取临时 Markdown → `memory.save_candidate(profile, markdown)` → 更新 `session.candidate.resume_content`
-- `questions_done`：更新 `session.question_plan` → `main_agent.set_candidate_context()` → `memory.start_interview(session)`（写 session.json + questions.md）
+- `brief_done`：`memory.save_brief(cid, brief_text)` 落盘 → `session.interview_brief = brief_text` → `memory.start_interview(session)`（写 session.json）→ `main_agent.set_candidate_context()` 刷新第 3 层
 
 ### 调用流程
 
@@ -139,11 +140,13 @@ ResumeAgent 执行（ReAct 循环，调用 parse_resume_pdf / file_write / file_
     ↓
 返回 parse_done → dispatch_to_agent 触发副作用（save_candidate）
     ↓
-再次 dispatch_to_agent(agent="resume", task="生成面试题目...")
+MainAgent 进入引导式对话（阶段一：呈现分析；阶段二：收集关注点）
     ↓
-ResumeAgent 执行（读取 profile.md + skill_view('question_generation')，生成题目）
+用户确认后，MainAgent 调用 dispatch_to_agent(agent="resume", task="生成面试简报，关注点：...")
     ↓
-返回 questions_done → dispatch_to_agent 触发副作用（更新 session + start_interview）
+ResumeAgent 读取 candidates/{cid}/profile.md，生成结构化简报
+    ↓
+返回 brief_done → dispatch_to_agent 触发副作用（save_brief + start_interview + 刷新 Layer 3）
     ↓
 MainAgent 流式回复用户
 ```
@@ -279,12 +282,10 @@ reload_user_memory()：MainAgent + PromptBuilder 刷新内存中的 _user_memory
 |---|---|---|
 | `id` | `str` | 会话 UUID |
 | `candidate` | `CandidateProfile` | 候选人画像（含 `resume_content` 和 `history_summary` 运行时字段） |
-| `question_plan` | `list[InterviewQuestion]` | 题目清单 |
+| `interview_brief` | `str` | 面试简报 Markdown 文本（从 `candidates/{id}/brief.md` 加载，或由 `brief_done` 写入） |
 | `rounds` | `list[ConversationRound]` | 已归档的对话轮次 |
 | `stage` | `InterviewStage` | 当前阶段 |
 | `context_summary` | `str` | 上下文压缩摘要（由 ContextManager 异步更新） |
-| `covered_dimensions` | `set[str]` | 已覆盖的考察维度 |
-| `working_notes` | `str` | 面试中产生的工作笔记（预留字段） |
 | `metadata` | `SessionMetadata` | 时间戳、触发模式、录音路径 |
 
 **InterviewStage 枚举**：

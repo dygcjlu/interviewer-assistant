@@ -108,14 +108,17 @@ class InterviewController:
         else:
             candidate = CandidateProfile(id=str(uuid.uuid4()), name="")
 
+        interview_brief = ""
+        if candidate_id:
+            interview_brief = self._memory.get_brief(candidate_id)
+
         session = InterviewSession(
             id=str(uuid.uuid4()),
             candidate=candidate,
-            question_plan=[],
             rounds=[],
             stage=InterviewStage.IDLE,
             context_summary="",
-            covered_dimensions=set(),
+            interview_brief=interview_brief,
             metadata=SessionMetadata(
                 candidate_id=candidate.id,
                 start_time=datetime.now(),

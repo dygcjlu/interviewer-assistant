@@ -17,17 +17,6 @@ class InterviewStage(str, Enum):
 
 
 @dataclass
-class InterviewQuestion:
-    id: int
-    dimension: str                         # "系统设计" | "算法" | "项目经验" | ...
-    question: str
-    follow_ups: list[str]
-    difficulty: str = "medium"             # "easy" | "medium" | "hard"
-    source: str = "auto"                   # "auto" | "manual"
-    is_covered: bool = False
-
-
-@dataclass
 class ConversationRound:
     round_number: int
     interviewer_text: str
@@ -55,11 +44,10 @@ class SessionMetadata:
 class InterviewSession:
     id: str
     candidate: CandidateProfile
-    question_plan: list[InterviewQuestion]
     rounds: list[ConversationRound]
     stage: InterviewStage
     context_summary: str
-    covered_dimensions: set[str]
+    interview_brief: str
     metadata: SessionMetadata
 
 

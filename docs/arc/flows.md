@@ -6,7 +6,7 @@
 
 ## 1. PDF 简历上传与解析
 
-简历上传分两步：**① 文件保存**（REST API 直接处理）、**② 解析与题目生成**（面试官通过聊天触发 MainAgent）。
+简历上传分两步：**① 文件保存**（REST API 直接处理）、**② 解析与简报生成**（面试官通过与 MainAgent 对话触发）。
 
 ```mermaid
 sequenceDiagram
@@ -39,29 +39,45 @@ sequenceDiagram
     DA->>DA: session.candidate.resume_content = resume_markdown
     DA-->>MA: JSON result
 
-    MA->>LLM: chat(messages) — 再次触发 function calling
-    LLM-->>MA: tool_call: dispatch_to_agent(agent="resume", task="生成题目...")
+    MA->>LLM: chat_stream(messages) — 呈现候选人分析（阶段一）
+    LLM-->>REST: 流式 SSE delta（候选人概况 + 风险信号 + 建议关注方向）
+    REST-->>UI: SSE stream
+
+    Note over MA,UI: 阶段二：2-4 轮对话收集面试官关注点
+    UI->>REST: POST /api/chat {"message": "重点考察稳定性和系统设计..."}
+    REST->>MA: handle_chat(...)
+    MA->>LLM: chat_stream(messages) — 确认关注点，提议生成简报
+    LLM-->>REST: SSE delta
+
+    UI->>REST: POST /api/chat {"message": "好，生成简报"}
+    REST->>MA: handle_chat(...)
+    MA->>LLM: chat(messages) — 触发 function calling
+    LLM-->>MA: tool_call: dispatch_to_agent(agent="resume", task="生成面试简报，关注点：...")
     MA->>DA: dispatch_to_agent("resume", task)
     DA->>RA: resume_agent.execute(enriched_task)
-    Note over RA: 读取 candidates/{id}/profile.md，生成 8-12 道题
-    RA-->>DA: {"type": "questions_done", "questions": [...]}
-    DA->>DA: 更新 session.question_plan
-    DA->>MA: set_candidate_context(profile, questions)
+    Note over RA: 读取 candidates/{id}/profile.md，生成结构化简报
+    RA-->>DA: {"type": "brief_done", "candidate_id": "...", "brief": "<Markdown>"}
+    DA->>MM: save_brief(candidate_id, brief_text)
+    Note over MM: 写 candidates/{id}/brief.md
+    DA->>DA: session.interview_brief = brief_text
     DA->>MM: start_interview(session)
-    Note over MM: 写 session.json + questions.md
+    Note over MM: 写 session.json
+    DA->>MA: set_candidate_context(profile, interview_brief=brief_text)
     DA-->>MA: JSON result
 
-    MA->>LLM: chat_stream(messages) — 继续输出解析摘要
+    MA->>LLM: chat_stream(messages) — 简报生成完成提示
     LLM-->>REST: 流式 SSE delta
-    REST-->>UI: SSE stream（解析摘要 + 题目清单）
+    REST-->>UI: SSE stream（简报已生成，可在「简报」Tab 查看）
 ```
 
 **关键数据流转**：
 
-- 上传 API 通过 `get_candidate_by_name(safe_stem)` 检查同名候选人（文件名去扩展名 = 候选人姓名），存在则返回 409
-- 解析由面试官在聊天框告知 MainAgent，MainAgent 通过 `dispatch_to_agent` 工具委托 ResumeAgent 执行（两步：先解析，再生成题目）
-- `dispatch_to_agent` 自动注入 session 上下文（候选人 ID、profile.md 路径等），避免 ResumeAgent 猜测错误路径
-- `parse_done` 副作用：读取临时 Markdown 文件 → `save_candidate()` → 删除临时文件；`questions_done` 副作用：更新 session + `start_interview()`
+- 上传 API 通过 `get_candidate_by_name(safe_stem)` 检查同名候选人，存在则返回 409
+- 解析由面试官聊天触发 MainAgent，MainAgent 通过 `dispatch_to_agent` 工具委托 ResumeAgent 执行
+- 解析完成后 MainAgent 进入两阶段引导：① 呈现分析 + 风险信号；② 对话收集关注点后生成简报
+- `dispatch_to_agent` 自动注入 session 上下文（候选人 ID、profile.md 路径、brief.md 路径等）
+- `parse_done` 副作用：读取临时 Markdown → `save_candidate()` → 删除临时文件
+- `brief_done` 副作用：`save_brief()` 落盘 → 更新 `session.interview_brief` → `start_interview()` → 刷新 MainAgent Layer 3
 
 ---
 
@@ -98,7 +114,7 @@ sequenceDiagram
 - `on_activate()` 时 `InterviewAgent` 创建新的 `SuggestionTrigger` 实例和会话级 `ConversationLogger`
 - `context_manager._on_compress_done` 回调注册：压缩完成时自动将 summary 同步到 `session.context_summary`
 - 音频模式由 `MOCK_AUDIO` 和 `STT_ENGINE` 配置决定；音频启动失败不阻断面试，`stage` 仍切换为 `interviewing`
-- `memory.start_interview(session)` 写 `session.json`（stage=interviewing）；`questions.md` 在 `dispatch_to_agent` questions_done 时已写入
+- `memory.start_interview(session)` 写 `session.json`（stage=interviewing）；`brief.md` 在 `dispatch_to_agent` brief_done 时已写入
 
 ---
 

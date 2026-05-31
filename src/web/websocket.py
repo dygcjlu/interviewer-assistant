@@ -49,6 +49,7 @@ async def interview_ws_handler(websocket: WebSocket, controller) -> None:
             "trigger_mode": session.metadata.trigger_mode,
             "rounds_count": len(session.rounds),
             "candidate_name": session.candidate.name or "",
+            "brief": session.interview_brief,
         })
 
     try:

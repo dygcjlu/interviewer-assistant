@@ -3,7 +3,6 @@ from .session import (
     InterviewSession,
     ConversationRound,
     SessionMetadata,
-    InterviewQuestion,
     TokenUsageInfo,
 )
 from .candidate import (
@@ -27,7 +26,6 @@ __all__ = [
     "InterviewSession",
     "ConversationRound",
     "SessionMetadata",
-    "InterviewQuestion",
     "TokenUsageInfo",
     "CandidateProfile",
     "EvalReport",

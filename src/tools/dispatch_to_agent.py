@@ -8,7 +8,6 @@ from pathlib import Path
 
 from ..logging import truncate
 from ._context import ctx
-from ._helpers import normalize_questions
 
 logger = logging.getLogger(__name__)
 
@@ -76,15 +75,15 @@ async def _enrich_task_with_session_context(task: str) -> str:
     lines = [
         task,
         "",
-        "[系统上下文 — 生成题目时读取持久化简历，解析任务仍用 resumes/ 路径]",
+        "[系统上下文 — 生成简报时读取持久化简历，解析任务仍用 resumes/ 路径]",
         f"- 候选人 ID: {cid}",
         f"- 姓名: {name}",
         f"- 持久化简历（file_read 首选）: {profile_md}",
+        f"- 简报文件: candidates/{cid}/brief.md",
     ]
     if stem:
         lines.append(f"- PDF: resumes/{stem}.pdf")
         lines.append(f"- 临时 Markdown: resumes/{stem}.md")
-        lines.append(f"- 题目 JSON: resumes/{stem}_questions.json")
     return "\n".join(lines)
 
 
@@ -132,58 +131,24 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
             except Exception:
                 logger.exception("dispatch_to_agent: save_candidate failed")
 
-    elif result_type == "questions_done":
-        from ..models.session import InterviewQuestion
-        # L2-2: 前置守卫：若候选人档案尚未落盘（跳过解析直接出题的边界路径），
-        # 跳过 start_interview 并透传 warning，避免磁盘/内存不一致。
+    elif result_type == "brief_done":
         cid = session.candidate.id
-        profile_path = Path(f"candidates/{cid}/profile.md")
-        if not profile_path.exists():
-            logger.warning(
-                "dispatch_to_agent: questions_done but profile.md not found for candidate_id=%s, "
-                "skip start_interview",
-                cid,
-            )
-            result["warning"] = (
-                "未找到候选人档案，请先上传并解析简历后再生成面试题目；"
-                "题目已生成但面试会话尚未初始化。"
-            )
-            # 仍写入 question_plan，让 UI 能看到题目
-            normalized = normalize_questions(result.get("questions", []))
-            if normalized:
-                session.question_plan = [
-                    InterviewQuestion(
-                        id=i + 1,
-                        dimension=q["dimension"],
-                        question=q["question"],
-                        follow_ups=q["follow_ups"],
-                        difficulty=q["difficulty"],
-                    )
-                    for i, q in enumerate(normalized)
-                ]
-            if ctx.main_agent is not None:
-                ctx.main_agent.set_candidate_context(session.candidate, normalized)
-            return
-
-        # L2-3: 复用共享 normalize_questions，兼容中英文键 + LLM 漂移
-        normalized = normalize_questions(result.get("questions", []))
-        if normalized:
-            session.question_plan = [
-                InterviewQuestion(
-                    id=i + 1,
-                    dimension=q["dimension"],
-                    question=q["question"],
-                    follow_ups=q["follow_ups"],
-                    difficulty=q["difficulty"],
-                )
-                for i, q in enumerate(normalized)
-            ]
-        if ctx.main_agent is not None:
-            ctx.main_agent.set_candidate_context(session.candidate, normalized)
+        brief_text = str(result.get("brief", ""))
 
         if ctx.memory_module is not None:
             try:
-                if session.question_plan:
-                    await ctx.memory_module.start_interview(session)
+                ctx.memory_module.save_brief(cid, brief_text)
+            except Exception:
+                logger.exception("dispatch_to_agent: save_brief failed")
+
+        session.interview_brief = brief_text
+
+        profile_path = Path(f"candidates/{cid}/profile.md")
+        if ctx.memory_module is not None and profile_path.exists():
+            try:
+                await ctx.memory_module.start_interview(session)
             except Exception:
                 logger.exception("dispatch_to_agent: start_interview failed")
+
+        if ctx.main_agent is not None:
+            ctx.main_agent.set_candidate_context(session.candidate, interview_brief=brief_text)

@@ -26,7 +26,6 @@ from ..models.session import InterviewStage
 from .schemas import (
     ChatRequest,
     CandidateSelectRequest,
-    QuestionsUpdateRequest,
     StartInterviewRequest,
     SwitchAgentRequest,
 )
@@ -108,27 +107,18 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
         if session is None or session.candidate.id != body.candidate_id:
             session = await controller.create_session(body.candidate_id)
 
-    # Load question plan
-    questions: list[dict] = []
+    # Load interview brief
+    brief: str = ""
     if controller is not None:
         session = await controller.get_session()
-        if session and session.question_plan:
-            questions = [
-                {
-                    "id": q.id,
-                    "dimension": q.dimension,
-                    "question": q.question,
-                    "follow_ups": list(q.follow_ups),
-                    "difficulty": q.difficulty,
-                }
-                for q in session.question_plan
-            ]
-    if not questions:
-        questions = await memory.get_latest_question_plan(body.candidate_id)
+        if session and session.interview_brief:
+            brief = session.interview_brief
+    if not brief:
+        brief = memory.get_brief(body.candidate_id)
 
     # Update MainAgent context
     if main_agent is not None:
-        main_agent.set_candidate_context(candidate, questions)
+        main_agent.set_candidate_context(candidate, interview_brief=brief)
 
     resume_markdown = await memory.get_resume_markdown(body.candidate_id)
 
@@ -139,7 +129,7 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     return {
         "candidate_id": body.candidate_id,
         "profile": _to_dict(candidate),
-        "questions": questions,
+        "brief": brief,
         "resume_markdown": resume_markdown,
         "eval_report": eval_report,
     }
@@ -300,53 +290,34 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
         s = await controller.get_session()
         if s and s.candidate.id == candidate_id:
             session = s
-    questions: list[Any] = (
-        _to_dict(session.question_plan) if session and session.question_plan else []
-    )
-    if not questions:
-        questions = await memory.get_latest_question_plan(candidate_id)
+    brief: str = (session.interview_brief if session and session.interview_brief else "")
+    if not brief:
+        brief = memory.get_brief(candidate_id)
     resume_markdown = await memory.get_resume_markdown(candidate_id)
     return {
         "candidate_id": candidate_id,
         "profile": _to_dict(candidate),
-        "questions": questions,
+        "brief": brief,
         "resume_markdown": resume_markdown,
     }
 
 
-# ── questions ─────────────────────────────────────────────────────────────────
+# ── brief ─────────────────────────────────────────────────────────────────────
 
-@router.get("/interview/questions")
-async def get_questions(
+@router.get("/interview/brief")
+async def get_brief(
+    request: Request,
     candidate_id: str = Query(...),
     controller=Depends(_require_controller),
 ):
     session = await controller.get_session()
-    if session is None or session.candidate.id != candidate_id:
-        raise HTTPException(status_code=404, detail={"code": "no_session", "message": "无对应会话"})
-    return {"questions": _to_dict(session.question_plan)}
-
-
-@router.put("/interview/questions")
-async def update_questions(
-    body: QuestionsUpdateRequest,
-    controller=Depends(_require_controller),
-):
-    session = await controller.get_session()
-    if session is None or session.candidate.id != body.candidate_id:
-        raise HTTPException(status_code=404, detail={"code": "no_session", "message": "无对应会话"})
-    from ..models.session import InterviewQuestion
-    session.question_plan = [
-        InterviewQuestion(
-            id=q.get("id", i + 1),
-            dimension=q.get("dimension", "通用"),
-            question=q.get("question", ""),
-            follow_ups=q.get("follow_ups", []),
-            difficulty=q.get("difficulty", "medium"),
-        )
-        for i, q in enumerate(body.questions)
-    ]
-    return {"questions": _to_dict(session.question_plan)}
+    brief: str = ""
+    if session and session.candidate.id == candidate_id:
+        brief = session.interview_brief
+    if not brief:
+        memory = _memory(request)
+        brief = memory.get_brief(candidate_id)
+    return {"brief": brief}
 
 
 # ── interview lifecycle ───────────────────────────────────────────────────────

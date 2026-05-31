@@ -31,7 +31,7 @@ import yaml
 from ..models.candidate import CandidateProfile
 from ..models.evaluation import DimensionScore, EvalReport
 from ..models.exceptions import StorageError
-from ..models.session import ConversationRound, InterviewQuestion, InterviewSession
+from ..models.session import ConversationRound, InterviewSession
 from ..utils import write_atomic as _write_atomic
 
 logger = logging.getLogger(__name__)
@@ -161,35 +161,6 @@ def _build_interviews_index(candidate_name: str, interviews: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _build_questions_md(questions: list[InterviewQuestion]) -> str:
-    q_list = [
-        {
-            "id": q.id,
-            "dimension": q.dimension,
-            "difficulty": q.difficulty,
-            "question": q.question,
-            "follow_ups": list(q.follow_ups),
-            "is_covered": q.is_covered,
-        }
-        for q in questions
-    ]
-    meta = {"questions": q_list}
-    lines = [_render_frontmatter(meta), "# 面试问题清单\n"]
-    by_dim: dict[str, list[InterviewQuestion]] = {}
-    for q in questions:
-        by_dim.setdefault(q.dimension, []).append(q)
-    for dim, qs in by_dim.items():
-        diff = qs[0].difficulty if qs else "medium"
-        diff_map = {"easy": "简单", "medium": "中等", "hard": "困难"}
-        lines.append(f"\n## {dim}（{diff_map.get(diff, diff)}难度）\n")
-        for q in qs:
-            mark = "x" if q.is_covered else " "
-            lines.append(f"- [{mark}] {q.question}")
-            for fu in q.follow_ups:
-                lines.append(f"  - 追问：{fu}")
-    return "\n".join(lines) + "\n"
-
-
 def _normalize_inline(text: str) -> str:
     """将多行文本压缩为单行（换行符替换为空格），保证 transcript 逐行解析时不丢内容。"""
     return " ".join(text.splitlines()).strip() if text else ""
@@ -291,8 +262,8 @@ class MemoryModule:
     def _session_json_path(self, candidate_id: str, interview_id: str) -> Path:
         return self._interview_dir(candidate_id, interview_id) / "session.json"
 
-    def _questions_path(self, candidate_id: str, interview_id: str) -> Path:
-        return self._interview_dir(candidate_id, interview_id) / "questions.md"
+    def _brief_path(self, candidate_id: str) -> Path:
+        return self._candidate_dir(candidate_id) / "brief.md"
 
     def _transcript_path(self, candidate_id: str, interview_id: str) -> Path:
         return self._interview_dir(candidate_id, interview_id) / "transcript.md"
@@ -473,13 +444,12 @@ class MemoryModule:
     # ─── 面试生命周期 ─────────────────────────────────────────────────
 
     async def start_interview(self, session: InterviewSession) -> None:
-        """面试开始：写 session.json（stage=interviewing）+ questions.md。"""
+        """面试开始：写 session.json（stage=interviewing）。"""
         candidate_id = session.candidate.id
         interview_id = session.id
         iv_dir = self._interview_dir(candidate_id, interview_id)
         iv_dir.mkdir(parents=True, exist_ok=True)
 
-        # session.json
         session_data = {
             "interview_id": interview_id,
             "candidate_id": candidate_id,
@@ -495,13 +465,6 @@ class MemoryModule:
             self._session_json_path(candidate_id, interview_id),
             json.dumps(session_data, ensure_ascii=False, indent=2),
         )
-
-        # questions.md
-        if session.question_plan:
-            _write_atomic(
-                self._questions_path(candidate_id, interview_id),
-                _build_questions_md(session.question_plan),
-            )
 
         logger.info("start_interview written session_id=%s candidate_id=%s", interview_id, candidate_id)
 
@@ -680,11 +643,10 @@ class MemoryModule:
         recovered_session = InterviewSession(
             id=interview_id,
             candidate=candidate,
-            question_plan=[],
             rounds=rounds,
             stage=InterviewStage.COMPLETED,
             context_summary=str(existing.get("context_summary", "")) or "",
-            covered_dimensions=set(),
+            interview_brief="",
             metadata=meta,
         )
 
@@ -798,23 +760,25 @@ class MemoryModule:
 
         logger.info("finish_interview done session_id=%s candidate_id=%s", interview_id, candidate_id)
 
-    # ─── 问题清单 ─────────────────────────────────────────────────────
+    # ─── 面试简报 ─────────────────────────────────────────────────────
 
-    async def get_latest_question_plan(self, candidate_id: str) -> list[dict]:
-        interviews = self._read_interviews_index(candidate_id)
-        for iv in interviews:
-            path = self._questions_path(candidate_id, iv["interview_id"])
-            if not path.exists():
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-                meta, _ = _parse_frontmatter(text)
-                questions = meta.get("questions") or []
-                if questions:
-                    return questions
-            except Exception:
-                logger.exception("get_latest_question_plan failed for %s/%s", candidate_id, iv["interview_id"])
-        return []
+    def save_brief(self, candidate_id: str, content: str) -> None:
+        """原子写入候选人简报到 candidates/{id}/brief.md。"""
+        path = self._brief_path(candidate_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(path, content)
+        logger.info("save_brief done candidate_id=%s chars=%d", candidate_id, len(content))
+
+    def get_brief(self, candidate_id: str) -> str:
+        """读取候选人简报，文件不存在时返回空字符串。"""
+        path = self._brief_path(candidate_id)
+        if not path.exists():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8")
+        except Exception:
+            logger.exception("get_brief failed for %s", candidate_id)
+            return ""
 
     async def get_latest_eval_report(self, candidate_id: str) -> "EvalReport | None":
         interviews = self._read_interviews_index(candidate_id)
