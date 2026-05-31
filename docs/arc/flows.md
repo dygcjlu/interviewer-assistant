@@ -114,7 +114,7 @@ sequenceDiagram
 - `on_activate()` 时 `InterviewAgent` 创建新的 `SuggestionTrigger` 实例和会话级 `ConversationLogger`
 - `context_manager._on_compress_done` 回调注册：压缩完成时自动将 summary 同步到 `session.context_summary`
 - 音频模式由 `MOCK_AUDIO` 和 `STT_ENGINE` 配置决定；音频启动失败不阻断面试，`stage` 仍切换为 `interviewing`
-- `memory.start_interview(session)` 写 `session.json`（stage=interviewing）；`brief.md` 在 `dispatch_to_agent` brief_done 时已写入
+- **start_interview 的两步写入**：`brief_done` 副作用时 `dispatch_to_agent` 调用 `memory.start_interview(session)` 写 `session.json`（记录简报生成时间点）；用户点击「开始面试」后 `InterviewController.start_interview()` 负责激活 InterviewAgent 和启动音频，**不再重复调用** `memory.start_interview()`。两步职责分离：前者写存储，后者管运行时状态。
 
 ---
 
@@ -168,53 +168,7 @@ sequenceDiagram
 
 ---
 
-## 4. 手动输入 fallback
-
-```mermaid
-sequenceDiagram
-    participant Client as WebSocket 客户端
-    participant WS as websocket.py
-    participant IC as InterviewController
-    participant TM as TranscriptionManager
-    participant WS2 as WebSocket clients（广播）
-    participant Trig as SuggestionTrigger
-    participant IA as InterviewAgent
-    participant LLM as LLMClient
-
-    Client->>WS: {type:"manual_input", source:"interviewer", text:"请介绍一下你的项目经验"}
-    WS->>IC: controller.transcription_manager
-    WS->>TM: on_segment(TranscriptSegment(source="interviewer", text, is_final=True))
-    TM->>WS2: broadcast {type:"transcript", source:"interviewer", text, is_final:true}
-    TM->>TM: interviewer_text += text（无候选人文字则不触发 finalize）
-
-    Client->>WS: {type:"manual_input", source:"candidate", text:"我负责了..."}
-    WS->>TM: on_segment(TranscriptSegment(source="candidate", text, is_final=True))
-    TM->>WS2: broadcast {type:"transcript", source:"candidate", text, is_final:true}
-    TM->>TM: candidate_text += text
-    TM->>Trig: on_candidate_segment(segment)
-    WS->>TM: flush_pending_round() [source="candidate" 时主动触发]
-    TM->>TM: finalize_round() → session.rounds.append(round)
-    TM->>WS2: broadcast session_snapshot
-    alt trigger_mode == "auto"
-        Trig->>IA: _on_trigger_fired(request_id)
-        IA->>LLM: chat_stream(messages)
-        loop 流式 token
-            LLM-->>IA: StreamChunk(delta)
-            IA->>WS2: {type:"suggestion_delta", request_id, delta}
-        end
-        IA->>WS2: {type:"suggestion_final", request_id}
-    end
-```
-
-**关键数据流转**：
-
-- `websocket.py` 通过 `controller.transcription_manager` 获取 `TranscriptionManager`，构造 `TranscriptSegment(is_final=True)` 直接注入，与音频转写走相同路径
-- `source="candidate"` 时 `websocket.py` 主动调用 `flush_pending_round()`，确保轮次及时归档（音频路径依赖静默超时，手动路径不依赖）
-- 整个追问建议生成链路与音频路径完全相同
-
----
-
-## 5. 面试结束与评价生成
+## 4. 面试结束与评价生成
 
 ```mermaid
 sequenceDiagram

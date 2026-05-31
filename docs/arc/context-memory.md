@@ -267,27 +267,28 @@ PromptBuilder.build() 时注入到 Layer 4
 | 操作 | 时机 | 方法 |
 |---|---|---|
 | 保存候选人档案 | 简历解析完成后（dispatch_to_agent parse_done） | `save_candidate(profile, resume_markdown)` |
-| 面试开始记录 | dispatch_to_agent questions_done 时 | `start_interview(session)`（写 session.json + questions.md） |
-| 保存面试记录 | `close_session()` 时 | `finish_interview(session)`（写 transcript.md + 更新 index） |
+| 面试开始记录 | dispatch_to_agent brief_done 时 | `start_interview(session)`（写 session.json） |
+| 轮次 WAL 追加 | 每轮归档时（TranscriptionManager.finalize_round） | `append_round(session_id, candidate_id, round)` → 写 `rounds.jsonl` |
+| 保存面试记录 | `close_session()` 时 | `finish_interview(session)`（写 transcript.md + 归档 rounds.jsonl + 更新 index） |
 | 保存评价报告 | EvalAgent 生成后 | `save_eval_report(report)` |
 
 ---
 
-## 四、InterviewAgent 的追问对话历史
+## 四、rounds.jsonl WAL 与崩溃恢复
 
-除了 ContextManager 管理的面试对话轮次外，InterviewAgent 还维护了一份**自己的追问对话历史** `self._history`，记录 AI 追问建议的生成过程。
+**文件**：`src/storage/memory_module.py`
 
-**与 ContextManager 的区别**：
+面试过程中，每次 `finalize_round()` 归档时，`append_round()` 将对话轮次以 JSONL 格式追加写入 `candidates/{id}/interviews/{interview_id}/rounds.jsonl`（Write-Ahead Log）。
 
-| 维度 | ContextManager | InterviewAgent._history |
+`finish_interview()` 完成后 WAL 归档：轮次数据写入 `transcript.md`，WAL 文件重命名为 `rounds.jsonl.done` 归档。
+
+**崩溃恢复场景**：若进程在 `finish_interview()` 之前异常退出，WAL 文件保留在原路径（`rounds.jsonl`，无 `.done` 后缀），可通过 Recovery API 恢复：
+
+| 步骤 | 操作 | API |
 |---|---|---|
-| 内容 | 面试官 ↔ 候选人的对话（转写文本） | AI 追问建议的 user/assistant 消息 |
-| 用途 | 注入 PromptBuilder Layer 6/7 | 追加在 PromptBuilder 七层之后，为 LLM 提供追问上下文 |
-| 上限 | 配置的 window_size（默认 6 轮） | 20 条消息（约 10 轮追问） |
-| 压缩 | 有（三阶段 LLM 压缩） | 无（超出直接截断） |
-| 生命周期 | 整个面试会话 | `on_activate()` 初始化，`on_deactivate()` 清空 |
-
-**取消时的数据一致性保护**：当流式生成被取消（候选人继续说话导致旧建议作废）时，`generate_suggestion()` 会将已追加但未完成的 `user_msg` 从 `_history` 中撤销，避免污染历史。
+| 1. 扫描 | `scan_orphan_wal()` 找出所有未归档的 `rounds.jsonl` | `GET /api/recovery/scan` |
+| 2. 恢复 | `recover_interview_from_wal()` 重建 rounds → 写 `transcript.md` → 归档 WAL | `POST /api/recovery/finish` |
+| 3. 丢弃 | `discard_orphan_wal()` 删除不需要恢复的 WAL | `POST /api/recovery/discard` |
 
 ---
 
@@ -366,18 +367,17 @@ ConversationLogger 将 Agent 与 LLM 之间的完整消息列表以 JSONL 格式
 │ 候选人长期  │ 文件系统（candidates/ 目录）：历史面试记录、评价报告    │
 │ 记忆        │ → 注入到 PromptBuilder Layer 4（history_summary）       │
 ├─────────────┼───────────────────────────────────────────────────────┤
-│ 本次面试    │ InterviewSession（内存）：题目计划、维度覆盖状态         │
+│ 本次面试    │ InterviewSession（内存）：面试简报、阶段状态              │
 │ 固定信息    │ candidate.resume_content：简历 Markdown 正文            │
+│             │ interview_brief：面试简报 Markdown（brief.md）          │
 │             │ → 注入到 PromptBuilder Layer 5（fixed zone）            │
 ├─────────────┼───────────────────────────────────────────────────────┤
 │ 本次面试    │ ContextManager：_summary（LLM 压缩摘要）                │
 │ 历史上下文  │ → 注入到 PromptBuilder Layer 6                         │
 │             ├───────────────────────────────────────────────────────┤
-│             │ ContextManager：_all_rounds 滑动窗口（最新 6 轮原文）   │
-│             │ → 注入到 PromptBuilder Layer 7                         │
-├─────────────┼───────────────────────────────────────────────────────┤
-│ 追问上下文  │ InterviewAgent._history：最近 10 轮追问建议记录         │
-│             │ → 追加在 PromptBuilder 七层之后                        │
+│             │ ContextManager：_all_rounds 原文轮次                    │
+│             │ → Layer 7：ResumeAgent 滑动窗口（默认 6 轮）            │
+│             │           InterviewAgent 全量轮次（full_history=True）  │
 ├─────────────┼───────────────────────────────────────────────────────┤
 │ 调试持久化  │ ConversationLogger：Agent ↔ LLM 完整消息 JSONL          │
 │             │ conversations/main_agent.jsonl                         │

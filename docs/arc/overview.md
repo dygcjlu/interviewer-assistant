@@ -8,7 +8,7 @@
 
 面试助手是一个运行在本地的单用户技术面试辅助工具。它实时采集面试双方（面试官和候选人）的音频，通过语音识别转写为文字，再由 AI 自动生成追问建议，帮助面试官聚焦关键问题、减少遗漏。
 
-整个系统是一个 Python 单进程服务。无需联网（LLM API 除外），所有数据存储在本地文件系统（`candidates/` 目录）。当音频采集不可用时（如非 Windows 平台），可通过 WebSocket `manual_input` 手动输入文字走完完整面试流程。
+整个系统是一个 Python 单进程服务。无需联网（LLM API 除外），所有数据存储在本地文件系统（`candidates/` 目录）。当音频采集不可用时（如非 Windows 平台），可使用 MockAudioManager（脚本回放）进行调试。
 
 ---
 
@@ -188,7 +188,7 @@ lifespan(app) 启动时（FastAPI 生命周期钩子）：
     注：PDF 解析引擎由 PDF_PARSER 配置决定（pymupdf / qwen_vl / mineru），在 parse_resume_pdf 工具调用时动态选择，不影响启动流程
 16. AudioManager 或 MockAudioManager(...)  → 组装音频管道
 17. InterviewController(...)     → 面试状态机控制器
-18. MainAgent(...)               → 常驻对话入口，绑定 ResumeAgent 和 Controller
+18. MainAgent(...)               → 常驻对话入口（依赖通过 tool_ctx 注入，见步骤 19）
 19. tool_ctx.* = ...             → 注入工具依赖（main_agent / resume_agent / controller / memory_module / user_memory_store / prompt_builder / skill_loader）
 20. app.state.* = ...            → 注入依赖到 FastAPI app.state
 

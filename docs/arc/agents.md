@@ -41,11 +41,11 @@ Agent 层负责所有 AI 推理与对话逻辑。采用 **MainAgent 单入口** 
 
 | 方法 | 说明 |
 |---|---|
-| `handle_chat(message: str) -> AsyncIterator[str]` | 处理用户消息，流式返回 |
+| `handle_chat(message: str) -> AsyncIterator[str]` | 处理用户消息，流式返回（`delta` 文字 + `tool_call` 事件） |
 | `set_candidate_context(profile, interview_brief?)` | 切换候选人时由 API 层调用，替换系统提示第 3 层 |
 | `reload_user_memory()` | USER.md 更新后重新加载第 2 层（`UserMemoryStore` 已是最新，无需重读磁盘） |
-| `bind_resume_agent(agent)` | 启动后绑定 ResumeAgent 引用 |
-| `bind_controller(controller)` | 启动后绑定 InterviewController 引用 |
+
+> `bind_resume_agent` / `bind_controller` 方法已移除，依赖通过 `ToolContext`（`tools/_context.py`）单例注入。
 
 ### Memory Nudge（后台记忆审查）
 
@@ -159,9 +159,11 @@ MainAgent 流式回复用户
 
 ### 职责
 
-面试过程中，实时监听转写内容，流式生成追问建议并通过 WebSocket 推送给前端。核心机制为 `SuggestionTrigger`：候选人 final segment 后静默约 2 秒自动触发，或由前端 `request_suggestion` 手动触发。
+面试过程中，实时监听转写内容，生成追问建议并通过 WebSocket 推送给前端。核心机制为 `SuggestionTrigger`：候选人 final segment 后静默约 2 秒自动触发，或由前端 `request_suggestion` 手动触发。
 
-**工具**：`file_read`（可按需读取候选人完整简历）
+**AgentConfig**：`full_history=True`（使用 ContextManager 的全量 rounds），无 `skill_names`，无 `tool_names`。
+
+**追问输出格式**：`generate_suggestion()` 使用非流式 `chat()` 调用，要求 LLM 直接输出**一句中文追问话术**，不使用 JSON action 格式。内容通过 `suggestion_delta`/`suggestion_final` 推送至前端。
 
 ### SuggestionTrigger
 
@@ -181,8 +183,9 @@ MainAgent 流式回复用户
 | 方法 | 触发方式 | 说明 |
 |---|---|---|
 | `on_activate(session)` | `InterviewController.start_interview()` | 初始化 SuggestionTrigger 和 ConversationLogger |
-| `on_deactivate(session)` | `InterviewController.stop_interview()` | 停止 Trigger，取消进行中的流式 Task |
-| `generate_suggestion(request_id)` | SuggestionTrigger 回调 / 手动触发 | 取消上一次未完成的流 |
+| `on_deactivate(session)` | `InterviewController.stop_interview()` | 停止 Trigger，取消进行中的 LLM Task |
+| `generate_suggestion(request_id)` | SuggestionTrigger 回调 / 手动触发 | 非流式调用 LLM，yield 完整建议文本；超过 token 预算时截断历史或跳过 |
+| `cancel_current_stream()` | 切换到 manual 模式时 | 取消正在进行的 LLM 生成 task |
 
 **流式推送消息序列**：
 
