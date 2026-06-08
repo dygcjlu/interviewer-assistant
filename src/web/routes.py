@@ -485,11 +485,11 @@ async def list_candidates(
     offset: int = 0,
 ):
     memory = _memory(request)
-    candidates = await memory.search_candidates(keyword=keyword, limit=limit + offset)
-    paged = candidates[offset : offset + limit]
+    total = await memory.count_candidates(keyword=keyword)
+    candidates = await memory.search_candidates(keyword=keyword, limit=limit, offset=offset)
     return {
-        "candidates": [_to_dict(c) for c in paged],
-        "total": len(candidates),
+        "candidates": [_to_dict(c) for c in candidates],
+        "total": total,
     }
 
 

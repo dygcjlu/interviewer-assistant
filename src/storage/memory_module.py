@@ -401,6 +401,13 @@ class MemoryModule:
                 results.append(profile)
         return results
 
+    async def count_candidates(self, keyword: str = "") -> int:
+        """返回符合关键词筛选的候选人总数（不受 limit/offset 影响）。"""
+        candidates = self._read_candidates_index()
+        if keyword:
+            candidates = [c for c in candidates if keyword.lower() in (c.get("name") or "").lower()]
+        return len(candidates)
+
     async def delete_candidate(self, candidate_id: str) -> None:
         cand_dir = self._candidate_dir(candidate_id)
         if cand_dir.exists():
