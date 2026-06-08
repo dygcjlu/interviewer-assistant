@@ -429,36 +429,46 @@ async def get_eval(request: Request, interview_id: str | None = None):
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
 
-    resp = await controller.eval_agent.handle_request(
-        AgentRequest(type="generate_eval", payload={}, session=session)
-    )
-    if not resp.success:
-        raise HTTPException(status_code=500, detail={"code": "eval_error", "message": resp.error})
+    eval_resp: Any = None
+    eval_error: str | None = None
+    try:
+        resp = await controller.eval_agent.handle_request(
+            AgentRequest(type="generate_eval", payload={}, session=session)
+        )
+        if not resp.success:
+            eval_error = resp.error
+        else:
+            eval_resp = resp
+    except Exception as exc:
+        eval_error = str(exc)
+        logger.exception("get_eval: eval_agent.handle_request raised")
+    finally:
+        # L5-5: close_session 失败重试 3 次，仍失败时附带 warning（评价数据不重新生成）。
+        close_warning: str | None = None
+        for attempt in range(3):
+            try:
+                await controller.close_session()
+                close_warning = None
+                break
+            except Exception as exc:
+                logger.warning(
+                    "get_eval: close_session attempt %d/3 failed: %s",
+                    attempt + 1,
+                    exc,
+                    exc_info=(attempt == 2),
+                )
+                close_warning = (
+                    "评价已生成，但会话关闭失败（已重试3次）。请刷新页面或重启服务再开始下一次面试。"
+                )
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+
+    if eval_error is not None:
+        raise HTTPException(status_code=500, detail={"code": "eval_error", "message": eval_error})
 
     # M4-2: EvalAgent 在持久化降级到 eval_orphans 时会在 data.save_warning 里写说明。
-    save_warning: str | None = resp.data.get("save_warning")
-
-    # L5-5: close_session 失败重试 3 次，仍失败时附带 warning（评价数据不重新生成）。
-    close_warning: str | None = None
-    for attempt in range(3):
-        try:
-            await controller.close_session()
-            close_warning = None
-            break
-        except Exception as exc:
-            logger.warning(
-                "get_eval: close_session attempt %d/3 failed: %s",
-                attempt + 1,
-                exc,
-                exc_info=(attempt == 2),
-            )
-            close_warning = (
-                "评价已生成，但会话关闭失败（已重试3次）。请刷新页面或重启服务再开始下一次面试。"
-            )
-            if attempt < 2:
-                await asyncio.sleep(0.5 * (attempt + 1))
-
-    result: dict[str, Any] = {"report": _to_dict(resp.data["report"])}
+    save_warning: str | None = eval_resp.data.get("save_warning")
+    result: dict[str, Any] = {"report": _to_dict(eval_resp.data["report"])}
     warnings = [w for w in (save_warning, close_warning) if w]
     if warnings:
         result["warning"] = " | ".join(warnings)
