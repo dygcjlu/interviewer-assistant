@@ -76,7 +76,7 @@ class PromptBuilder:
         if session.candidate.history_summary:
             system_parts.append(session.candidate.history_summary)
 
-        # Layer 5: Interview fixed zone (候选人信息 + 题目清单 + 岗位要求)
+        # Layer 5: Interview fixed zone (候选人信息 + 面试简报 + 岗位要求)
         fixed_zone = _build_fixed_zone(session, self._user_memory)
         if fixed_zone:
             system_parts.append(fixed_zone)
