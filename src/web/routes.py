@@ -108,7 +108,10 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     if controller is not None:
         session = await controller.get_session()
         if session is None or session.candidate.id != body.candidate_id:
-            session = await controller.create_session(body.candidate_id)
+            try:
+                session = await controller.create_session(body.candidate_id)
+            except SessionError as exc:
+                raise _session_err(exc)
 
     # Load interview brief
     brief: str = ""
@@ -187,9 +190,15 @@ async def upload_resume(
         )
 
     if session is None and controller is not None:
-        session = await controller.create_session(candidate_id)
+        try:
+            session = await controller.create_session(candidate_id)
+        except SessionError as exc:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)})
     elif session is not None and candidate_id and session.candidate.id != candidate_id:
-        session = await controller.create_session(candidate_id)
+        try:
+            session = await controller.create_session(candidate_id)
+        except SessionError as exc:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)})
     elif session is not None and not candidate_id:
         # 仅当当前 session 已绑定其它候选人（有姓名或 PDF 路径）时才重建，
         # 否则复用现有空 session 避免清空已积累的对话上下文。

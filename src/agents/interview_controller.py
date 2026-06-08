@@ -104,7 +104,7 @@ class InterviewController:
                 resume_content = await self._memory.get_resume_markdown(candidate_id)
                 candidate.resume_content = resume_content
             else:
-                candidate = CandidateProfile(id=candidate_id, name="")
+                raise SessionError(f"候选人不存在：{candidate_id}")
         else:
             candidate = CandidateProfile(id=str(uuid.uuid4()), name="")
 
