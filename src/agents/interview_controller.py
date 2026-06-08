@@ -199,11 +199,11 @@ class InterviewController:
     async def _start_interview_impl(self) -> None:
         if self._session is None:
             raise SessionError("当前没有活跃会话")
-        if self._session.stage == InterviewStage.INTERVIEWING:
+        if self._session.stage != InterviewStage.IDLE:
             # L3-4 / S-13: 重入时 raise 而非静默 return，让 routes 层返回 409 给前端，
             # 前端应在收到 409 后禁用"开始面试"按钮（防抖）。
             raise SessionError(
-                f"面试已在进行中（session_id={self._session.id}），请勿重复开始"
+                f"当前会话状态为 {self._session.stage.value}，无法开始面试（仅 IDLE 状态允许）"
             )
         if not self._session.candidate.id:
             raise SessionError("切换到面试前需先确认候选人信息")

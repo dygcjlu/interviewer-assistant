@@ -184,7 +184,7 @@ class TestStartInterview:
         session = await ctrl.create_session(candidate_id="c-001")
         session.stage = InterviewStage.INTERVIEWING
         ctrl._memory.start_interview = AsyncMock()
-        with pytest.raises(SessionError, match="面试已在进行中"):
+        with pytest.raises(SessionError, match="无法开始面试"):
             await ctrl.start_interview()
 
     @pytest.mark.asyncio
