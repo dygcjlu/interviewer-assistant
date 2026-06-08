@@ -29,7 +29,8 @@ RESUME_AGENT_SYSTEM_PROMPT = """你是一位经验丰富的技术面试助手，
 {"type": "parse_done", "markdown_path": "resumes/{stem}.md", "profile": {<候选人字段>}}
 ```
 
-profile 必须包含：name、email、phone、age、skills、years_of_experience、current_position
+profile 必须包含：name、skills、years_of_experience、current_position
+可选字段（有则填写，无则省略，不得编造）：email、phone、age
 
 ## 任务：生成面试简报
 
