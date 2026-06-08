@@ -126,10 +126,13 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
         elif ctx.memory_module is not None:
             try:
                 await ctx.memory_module.save_candidate(session.candidate, resume_markdown)
-                # 更新 session 中的 resume_content 以便后续 Agent 直接使用
                 session.candidate.resume_content = resume_markdown
-            except Exception:
+            except Exception as exc:
                 logger.exception("dispatch_to_agent: save_candidate failed")
+                result["user_facing"] = f"候选人档案保存失败：{exc}。简历内容未持久化，请重试。"
+                return
+            if ctx.main_agent is not None:
+                ctx.main_agent.set_candidate_context(session.candidate, interview_brief="")
 
     elif result_type == "brief_done":
         cid = session.candidate.id
@@ -142,13 +145,6 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 logger.exception("dispatch_to_agent: save_brief failed")
 
         session.interview_brief = brief_text
-
-        profile_path = Path(f"candidates/{cid}/profile.md")
-        if ctx.memory_module is not None and profile_path.exists():
-            try:
-                await ctx.memory_module.start_interview(session)
-            except Exception:
-                logger.exception("dispatch_to_agent: start_interview failed")
 
         if ctx.main_agent is not None:
             ctx.main_agent.set_candidate_context(session.candidate, interview_brief=brief_text)
