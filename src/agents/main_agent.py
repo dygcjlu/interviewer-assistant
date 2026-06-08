@@ -399,8 +399,13 @@ class MainAgent:
                 )
 
     def _trim_history(self) -> None:
-        if len(self._history) > _HISTORY_LIMIT:
-            self._history = self._history[-_HISTORY_LIMIT:]
+        if len(self._history) <= _HISTORY_LIMIT:
+            return
+        trimmed = self._history[-_HISTORY_LIMIT:]
+        # 跳过截断后开头的孤儿 tool 消息（其对应的 assistant tool_call 已被截掉）
+        while trimmed and trimmed[0].role == "tool":
+            trimmed = trimmed[1:]
+        self._history = trimmed
 
     # ── Memory nudge ───────────────────────────────────────────────────────────
 
