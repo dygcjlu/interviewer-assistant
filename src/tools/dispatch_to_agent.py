@@ -131,6 +131,15 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 logger.exception("dispatch_to_agent: save_candidate failed")
                 result["user_facing"] = f"候选人档案保存失败：{exc}。简历内容未持久化，请重试。"
                 return
+            # 检查是否已存在同名候选人（解析出真实姓名后再去重）
+            real_name = session.candidate.name
+            if real_name:
+                existing = await ctx.memory_module.get_candidate_by_name(real_name)
+                if existing is not None and existing.id != session.candidate.id:
+                    result["duplicate_warning"] = (
+                        f"候选人「{real_name}」已存在（ID: {existing.id}），"
+                        f"当前解析结果已另存为新档案。如需覆盖，请手动删除旧档案。"
+                    )
             if ctx.main_agent is not None:
                 ctx.main_agent.set_candidate_context(
                     session.candidate, interview_brief=session.interview_brief
