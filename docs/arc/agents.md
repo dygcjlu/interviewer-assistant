@@ -26,6 +26,8 @@ Agent 层负责所有 AI 推理与对话逻辑。采用 **MainAgent 单入口** 
 - 切换候选人时**只替换系统提示第 3 层**，对话历史不清空（保留上下文连续性）
 - 服务重启时历史清空（不持久化对话历史，只持久化 USER.md 和候选人数据）
 
+> **有意设计**：切换候选人（通过 `/candidate/select` 或 `create_session`）时，不清空 MainAgent 的对话历史（`_history`）。理由：面试官通常在同一工作流中连续讨论多位候选人，保留历史维持对话连贯性；需要完全隔离时可刷新页面。
+
 ### 对话持久化
 
 使用 `ConversationLogger` 将每轮 `handle_chat()` 的完整消息列表以 JSONL 格式异步写入 `conversations/main_agent.jsonl`。system prompt 变更时才写入 system 行（去重），避免冗余。
