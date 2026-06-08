@@ -113,6 +113,11 @@ class AudioManager:
 
     async def _rollback_start(self) -> None:
         """回滚 start() 中已分配的资源（STT 任务、连接、TranscriptionManager）。"""
+        try:
+            await self._capturer.stop()
+        except Exception:
+            logger.warning("AudioManager rollback: capturer stop failed", exc_info=True)
+
         for task in (self._candidate_loop_task, self._interviewer_loop_task):
             if task is not None and not task.done():
                 task.cancel()
