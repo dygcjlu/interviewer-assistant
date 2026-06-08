@@ -132,7 +132,9 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 result["user_facing"] = f"候选人档案保存失败：{exc}。简历内容未持久化，请重试。"
                 return
             if ctx.main_agent is not None:
-                ctx.main_agent.set_candidate_context(session.candidate, interview_brief="")
+                ctx.main_agent.set_candidate_context(
+                    session.candidate, interview_brief=session.interview_brief
+                )
 
     elif result_type == "brief_done":
         cid = session.candidate.id
