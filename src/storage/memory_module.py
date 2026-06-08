@@ -892,12 +892,21 @@ class MemoryModule:
                 found = True
                 break
         if not found:
+            _start_time = report.generated_at.isoformat()
+            _trigger_mode = "auto"
+            try:
+                _sj = self._session_json_path(candidate_id, report.interview_id)
+                _sd = json.loads(_sj.read_text(encoding="utf-8"))
+                _start_time = _sd.get("start_time", _start_time)
+                _trigger_mode = _sd.get("trigger_mode", _trigger_mode)
+            except Exception:
+                pass
             interviews.insert(0, {
                 "interview_id": report.interview_id,
-                "start_time": report.generated_at.isoformat(),
+                "start_time": _start_time,
                 "end_time": None,
                 "stage": "completed",
-                "trigger_mode": "auto",
+                "trigger_mode": _trigger_mode,
                 "overall_score": report.overall_score,
                 "recommendation": report.recommendation,
                 "key_findings": key_findings,

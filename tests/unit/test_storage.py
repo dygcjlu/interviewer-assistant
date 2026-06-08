@@ -455,6 +455,26 @@ class TestMemoryModuleEvalReport:
         orphan_path = tmp_path / "candidates" / "eval_orphans" / "orphan-interview.md"
         assert orphan_path.exists()
 
+    @pytest.mark.asyncio
+    async def test_save_eval_report_upsert_without_finish(self, tmp_path):
+        """save_eval_report 在 finish_interview 未调用（如崩溃场景）时应 upsert interviews index。"""
+        module = _make_module(tmp_path)
+        profile = _make_profile()
+        await module.save_candidate(profile, "")
+        session = _make_session()
+        await module.start_interview(session)
+        # 故意不调用 finish_interview，模拟崩溃后直接生成评价的场景
+        report = _make_eval_report()
+        await module.save_eval_report(report)
+
+        interviews = module._read_interviews_index("c-001")
+        assert len(interviews) == 1
+        entry = interviews[0]
+        assert entry["interview_id"] == "s-001"
+        assert entry["overall_score"] == 8.0
+        assert entry["recommendation"] == "hire"
+        assert entry["stage"] == "completed"
+
 
 @pytest.mark.unit
 class TestMemoryModuleGetInterviewDetail:
