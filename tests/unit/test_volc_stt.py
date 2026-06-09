@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import struct
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -192,3 +193,97 @@ class TestParseServerResponse:
 
         assert result is not None
         assert result["utterances"][0]["text"] == "测试"
+
+    def test_returns_none_on_empty_utterances_list(self):
+        from src.audio.volc_stt import _parse_server_response
+
+        data = self._make_response({"result": {"utterances": []}})
+        result = _parse_server_response(data)
+
+        assert result is None
+
+
+@pytest.mark.unit
+class TestVolcRealtimeSTTCredentialCheck:
+    @pytest.mark.asyncio
+    async def test_connect_silent_when_no_credentials(self):
+        """connect() returns without connecting when credentials are absent."""
+        from src.audio.volc_stt import VolcRealtimeSTT
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        # No credentials set (defaults to empty strings in test environment)
+        with patch("src.audio.volc_stt.ws_connect") as mock_connect:
+            await stt.connect()
+            mock_connect.assert_not_called()
+        assert not stt._connected
+
+    @pytest.mark.asyncio
+    async def test_receive_yields_nothing_when_not_connected(self):
+        """receive() produces no segments when connection was never established."""
+        from src.audio.volc_stt import VolcRealtimeSTT
+
+        stt = VolcRealtimeSTT(channel="candidate")
+
+        # Put a sentinel None to unblock the iterator
+        await stt._recv_queue.put(None)  # type: ignore[arg-type]
+        segments = []
+        async for seg in stt.receive():
+            if seg is None:
+                break
+            segments.append(seg)
+        assert segments == []
+
+
+@pytest.mark.unit
+class TestVolcRealtimeSTTSendAudio:
+    @pytest.mark.asyncio
+    async def test_send_audio_buffers_below_threshold(self):
+        """Audio smaller than 6400 bytes is buffered, not sent."""
+        from src.audio.volc_stt import VolcRealtimeSTT, _SEND_CHUNK_BYTES
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        stt._connected = True
+        mock_ws = AsyncMock()
+        stt._ws = mock_ws
+
+        small_audio = b"\x00" * (_SEND_CHUNK_BYTES - 1)
+        await stt.send_audio(small_audio)
+
+        mock_ws.send.assert_not_called()
+        assert len(stt._audio_buf) == _SEND_CHUNK_BYTES - 1
+
+    @pytest.mark.asyncio
+    async def test_send_audio_flushes_at_threshold(self):
+        """Exactly 6400 bytes triggers a send."""
+        from src.audio.volc_stt import VolcRealtimeSTT, _SEND_CHUNK_BYTES
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        stt._connected = True
+        mock_ws = AsyncMock()
+        stt._ws = mock_ws
+
+        audio = b"\x01" * _SEND_CHUNK_BYTES
+        await stt.send_audio(audio)
+
+        mock_ws.send.assert_called_once()
+        sent_frame = mock_ws.send.call_args[0][0]
+        # verify it's a binary audio frame (starts with 0x11)
+        assert sent_frame[0] == 0x11
+        # buffer should be empty after exact flush
+        assert stt._audio_buf == b""
+
+    @pytest.mark.asyncio
+    async def test_send_audio_retains_remainder(self):
+        """Bytes beyond 6400 remain in the buffer."""
+        from src.audio.volc_stt import VolcRealtimeSTT, _SEND_CHUNK_BYTES
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        stt._connected = True
+        mock_ws = AsyncMock()
+        stt._ws = mock_ws
+
+        audio = b"\x02" * (_SEND_CHUNK_BYTES + 100)
+        await stt.send_audio(audio)
+
+        mock_ws.send.assert_called_once()
+        assert len(stt._audio_buf) == 100
