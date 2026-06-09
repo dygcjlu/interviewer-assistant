@@ -49,7 +49,12 @@ class Settings(BaseSettings):
     XUNFEI_ACCESS_KEY_ID: str = ""
     XUNFEI_ACCESS_KEY_SECRET: str = ""
 
-    # STT 引擎选择：baidu（默认）| xunfei
+    # 火山引擎实时 ASR（豆包 BigModel）
+    VOLC_APP_KEY: str = ""
+    VOLC_ACCESS_KEY: str = ""
+    VOLC_RESOURCE_ID: str = "volc.bigasr.sauc.duration"
+
+    # STT 引擎选择：baidu（默认）| xunfei | volc
     STT_ENGINE: str = "baidu"
 
     # 调试：用脚本模拟音频，跳过真实采集和 STT
