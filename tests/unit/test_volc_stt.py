@@ -8,6 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+async def aiter_from_list(items):
+    """Helper: async iterator that yields items from a list."""
+    for item in items:
+        yield item
+
+
 @pytest.mark.unit
 class TestBuildFullClientRequest:
     def test_header_bytes(self):
@@ -287,3 +293,119 @@ class TestVolcRealtimeSTTSendAudio:
 
         mock_ws.send.assert_called_once()
         assert len(stt._audio_buf) == 100
+
+
+@pytest.mark.unit
+class TestVolcRealtimeSTTClose:
+    @pytest.mark.asyncio
+    async def test_close_sends_last_frame_and_closes_ws(self):
+        """close() sends the last-packet frame with is_final=True before closing ws."""
+        from src.audio.volc_stt import VolcRealtimeSTT
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        stt._connected = True
+        stt._seq = 3
+        mock_ws = AsyncMock()
+        stt._ws = mock_ws
+        stt._recv_task = None
+
+        await stt.close()
+
+        assert mock_ws.send.called
+        sent_frame = mock_ws.send.call_args[0][0]
+        # Last packet: byte[1] must be 0x23 (audio only, last/negative seq)
+        assert sent_frame[1] == 0x23
+        mock_ws.close.assert_called_once()
+        assert not stt._connected
+        assert stt._ws is None
+
+    @pytest.mark.asyncio
+    async def test_close_when_not_connected_is_noop(self):
+        """close() on an unconnected instance does not raise."""
+        from src.audio.volc_stt import VolcRealtimeSTT
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        # Never connected
+        await stt.close()
+
+        assert stt._closed
+        assert not stt._connected
+
+
+@pytest.mark.unit
+class TestVolcRealtimeSTTRecvLoop:
+    @pytest.mark.asyncio
+    async def test_recv_loop_puts_segment_for_definite_utterance(self):
+        """_recv_loop parses a binary frame and puts a final TranscriptSegment in the queue."""
+        import json
+        import struct
+        from src.audio.volc_stt import VolcRealtimeSTT
+
+        payload = json.dumps({
+            "result": {"utterances": [{"text": "你好世界", "definite": True}]}
+        }).encode()
+        header = bytes([0x11, 0x90, 0x10, 0x00])
+        frame = header + struct.pack(">I", len(payload)) + payload
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        stt._connected = True
+
+        mock_ws = MagicMock()
+        mock_ws.__aiter__ = MagicMock(return_value=aiter_from_list([frame]))
+        stt._ws = mock_ws
+
+        await stt._recv_loop()
+
+        seg = stt._recv_queue.get_nowait()
+        assert seg.text == "你好世界"
+        assert seg.is_final is True
+        assert seg.source == "candidate"
+        assert not stt._connected  # set to False in finally
+
+    @pytest.mark.asyncio
+    async def test_recv_loop_puts_segment_for_non_definite_utterance(self):
+        """_recv_loop emits is_final=False for definite=False utterances."""
+        import json
+        import struct
+        from src.audio.volc_stt import VolcRealtimeSTT
+
+        payload = json.dumps({
+            "result": {"utterances": [{"text": "正在识别", "definite": False}]}
+        }).encode()
+        header = bytes([0x11, 0x90, 0x10, 0x00])
+        frame = header + struct.pack(">I", len(payload)) + payload
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        stt._connected = True
+        mock_ws = MagicMock()
+        mock_ws.__aiter__ = MagicMock(return_value=aiter_from_list([frame]))
+        stt._ws = mock_ws
+
+        await stt._recv_loop()
+
+        seg = stt._recv_queue.get_nowait()
+        assert seg.is_final is False
+        assert seg.text == "正在识别"
+
+    @pytest.mark.asyncio
+    async def test_recv_loop_skips_empty_text(self):
+        """_recv_loop ignores utterances with empty text."""
+        import json
+        import struct
+        from src.audio.volc_stt import VolcRealtimeSTT
+
+        payload = json.dumps({
+            "result": {"utterances": [{"text": "", "definite": True}]}
+        }).encode()
+        header = bytes([0x11, 0x90, 0x10, 0x00])
+        frame = header + struct.pack(">I", len(payload)) + payload
+
+        stt = VolcRealtimeSTT(channel="candidate")
+        stt._connected = True
+        mock_ws = MagicMock()
+        mock_ws.__aiter__ = MagicMock(return_value=aiter_from_list([frame]))
+        stt._ws = mock_ws
+
+        await stt._recv_loop()
+
+        assert stt._recv_queue.empty()

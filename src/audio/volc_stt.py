@@ -132,9 +132,9 @@ class VolcRealtimeSTT:
         self._audio_buf: bytes = b""
         self._seq: int = 0
         settings = get_settings()
-        self._app_key: str = getattr(settings, "VOLC_APP_KEY", "")
-        self._access_key: str = getattr(settings, "VOLC_ACCESS_KEY", "")
-        self._resource_id: str = getattr(settings, "VOLC_RESOURCE_ID", "volc.bigasr.sauc.duration")
+        self._app_key: str = settings.VOLC_APP_KEY
+        self._access_key: str = settings.VOLC_ACCESS_KEY
+        self._resource_id: str = settings.VOLC_RESOURCE_ID
 
     # ── STTEngine protocol ─────────────────────────────────────────────────────
 
