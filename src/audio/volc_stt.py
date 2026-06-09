@@ -46,8 +46,8 @@ def _build_full_client_request(payload_json: bytes) -> bytes:
 def _build_audio_frame(audio: bytes, seq: int, is_last: bool) -> bytes:
     """Build an Audio Only Request binary frame (no compression).
 
-    Normal frame  → flags=0x01 (positive sequence)
-    Last frame    → flags=0x03 (negative sequence)
+    Normal frame  → byte1=0x21 (msg_type=0010, flags=0001 positive seq)
+    Last frame    → byte1=0x23 (msg_type=0010, flags=0011 negative seq)
 
     Structure:
       [0x11, type_flags, 0x00, 0x00]  4-byte header
@@ -55,9 +55,9 @@ def _build_audio_frame(audio: bytes, seq: int, is_last: bool) -> bytes:
       [4B big-endian: payload size]
       [N bytes raw PCM]
     """
-    flags = 0x23 if is_last else 0x21
+    type_flags = 0x23 if is_last else 0x21
     signed_seq = -seq if is_last else seq
-    header = bytes([0x11, flags, 0x00, 0x00])
+    header = bytes([0x11, type_flags, 0x00, 0x00])
     return (
         header
         + struct.pack(">i", signed_seq)

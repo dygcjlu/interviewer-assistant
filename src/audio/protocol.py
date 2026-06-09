@@ -34,7 +34,7 @@ class TranscriptSegment:
 
 
 class STTEngine(Protocol):
-    """语音转文字抽象接口。当前实现：BaiduRealtimeSTT。"""
+    """语音转文字抽象接口。当前实现：BaiduRealtimeSTT | XunfeiRealtimeSTT | VolcRealtimeSTT。"""
 
     async def connect(self) -> None: ...
     async def send_audio(self, audio_data: bytes) -> None: ...
