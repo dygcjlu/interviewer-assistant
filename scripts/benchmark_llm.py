@@ -281,8 +281,8 @@ async def run_streaming_benchmark(
 
 
 def print_live_result(idx: int, total: int, result: BenchmarkResult) -> None:
-    """即时打印单条测试结果。"""
-    think_mark = "✓" if result.thinking else "✗"
+    """即时打印单条测试结果（ASCII-safe，兼容 Windows 控制台）。"""
+    think_mark = "Y" if result.thinking else "N"
     if result.error:
         status = f"ERROR: {result.error[:60]}"
         line = f"[{idx:3d}/{total}] {result.label:<32} | think={think_mark} | {status}"
@@ -337,7 +337,7 @@ def print_summary_table(results: list[BenchmarkResult]) -> None:
         for r in sorted_results:
             think = "Y" if r.thinking else "N"
             ttft = f"{r.ttft_ms / 1000:.2f}" if r.ttft_ms is not None else "     -"
-            total = f"{r.total_ms / 1000:.2f}" if r.total_ms is not None else "      -"
+            total = f"{r.total_ms / 1000:.2f}" if r.total_ms is not None else "     -"
             tps = f"{r.tokens_per_sec:.1f}" if r.tokens_per_sec is not None else "     -"
             status_str = "OK" if not r.error else f"ERR: {r.error[:30]}"
             print(f"{r.label:<32} {think:>6} {ttft:>9} {total:>10} {tps:>8}  {status_str}")
@@ -416,7 +416,7 @@ def main() -> None:
 
     prompt_size = len(BENCHMARK_PROMPT.encode("utf-8"))
     print(f"\nLLM Latency Benchmark")
-    print(f"Configs: {len(configs)} × {args.runs} runs = {len(configs) * args.runs} calls")
+    print(f"Configs: {len(configs)} x {args.runs} runs = {len(configs) * args.runs} calls")
     print(f"Prompt size: {prompt_size:,} bytes | Timeout: {args.timeout}s | Temperature: {args.temperature}")
     print("-" * 65)
 
