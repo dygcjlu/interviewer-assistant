@@ -9,12 +9,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # LLM (通义千问 / OpenAI 兼容)
-    QWEN_API_KEY: str = ""
-    QWEN_API_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    QWEN_MODEL: str = "qwen-plus"
-    LLM_TIMEOUT_SEC: float = 30.0
+    # ── LLM 通用配置（支持任意 OpenAI 兼容平台）────────────────────────────────
+    # LLM_PROVIDER 对应 src/llm/providers.py 中的注册表键值，决定平台能力判断
+    # 已知值：openai_compat | qwen | deepseek | qwen_thinking
+    # 接入新平台（vLLM/MiniMax/Moonshot 等无特殊能力）：直接用 openai_compat
+    LLM_PROVIDER: str = "qwen"
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    LLM_MODEL: str = "qwen-plus"
+    LLM_TIMEOUT_SEC: float = 60.0
     LLM_MAX_RETRIES: int = 2
+    LLM_ENABLE_THINKING: bool = False
+    LLM_REASONING_EFFORT: str = "high"  # "high" | "max"
 
     # HTTP 服务
     HOST: str = "127.0.0.1"
@@ -58,9 +64,28 @@ class Settings(BaseSettings):
     # PDF 解析引擎：pymupdf | qwen_vl | mineru
     PDF_PARSER: str = "qwen_vl"
 
-    # Qwen-VL 解析配置（PDF_PARSER=qwen_vl 时有效，复用 QWEN_API_KEY）
+    # Qwen-VL 解析配置（PDF_PARSER=qwen_vl 时有效）
+    # 已弃用：QWEN_VL_MODEL，建议迁移到 VL_LLM_MODEL；保留以向后兼容
     QWEN_VL_MODEL: str = "qwen-vl-max"
     QWEN_VL_CONCURRENCY: int = 8  # L1-5: 单份 PDF 多页并发上限，防限流
+
+    # 多模态 VL LLM 独立配置（可选；空字符串 = 跟随主 LLM）
+    # 当文本 LLM 与 VL LLM 使用不同提供商时填写（如 DeepSeek 文本 + Qwen VL）
+    VL_LLM_API_KEY: str = ""
+    VL_LLM_BASE_URL: str = ""
+    VL_LLM_MODEL: str = ""
+
+    @property
+    def effective_vl_api_key(self) -> str:
+        return self.VL_LLM_API_KEY or self.LLM_API_KEY
+
+    @property
+    def effective_vl_base_url(self) -> str:
+        return self.VL_LLM_BASE_URL or self.LLM_BASE_URL
+
+    @property
+    def effective_vl_model(self) -> str:
+        return self.VL_LLM_MODEL or self.QWEN_VL_MODEL or self.LLM_MODEL
 
     # MinerU Cloud API 配置（PDF_PARSER=mineru 时有效）
     MINERU_API_TOKEN: str = ""

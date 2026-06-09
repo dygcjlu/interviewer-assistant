@@ -26,8 +26,8 @@ class QwenVLParser(BasePDFParser):
     async def extract(self, file_path: str) -> str:
         settings = get_settings()
         client = openai.AsyncOpenAI(
-            api_key=settings.QWEN_API_KEY,
-            base_url=settings.QWEN_API_BASE_URL,
+            api_key=settings.effective_vl_api_key,
+            base_url=settings.effective_vl_base_url,
         )
 
         pages_b64 = await asyncio.get_running_loop().run_in_executor(
@@ -42,7 +42,7 @@ class QwenVLParser(BasePDFParser):
         async def _run_one(idx: int, b64: str) -> str:
             async with semaphore:
                 try:
-                    return await self._extract_page(client, settings.QWEN_VL_MODEL, b64)
+                    return await self._extract_page(client, settings.effective_vl_model, b64)
                 except Exception as exc:
                     logger.warning(
                         "QwenVLParser: page %d/%d failed: %s",
