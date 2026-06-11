@@ -524,7 +524,7 @@ class TestPromptBuilder:
         today = date.today().strftime("%Y-%m-%d")
         assert f"当前日期：{today}" in messages[0].content
 
-    def test_build_date_appears_before_agent_system_prompt(self, tmp_path):
+    def test_build_date_appears_after_agent_system_prompt(self, tmp_path):
         builder, _ = self._make_prompt_builder(tmp_path)
         session = _make_session()
         config = AgentConfig(name="test", system_prompt="AGENT_IDENTITY_MARKER")
@@ -532,7 +532,7 @@ class TestPromptBuilder:
         content = messages[0].content
         date_pos = content.index("当前日期：")
         agent_pos = content.index("AGENT_IDENTITY_MARKER")
-        assert date_pos < agent_pos
+        assert agent_pos < date_pos
 
 
 # ── _build_fixed_zone ─────────────────────────────────────────────────────────

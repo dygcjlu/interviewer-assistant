@@ -569,12 +569,12 @@ class TestMainAgentDateInjection:
         today = date.today().strftime("%Y-%m-%d")
         assert f"当前日期：{today}" in prompt
 
-    def test_build_system_prompt_date_appears_before_role(self, tmp_path):
+    def test_build_system_prompt_date_appears_after_role(self, tmp_path):
         agent = self._make_main_agent(tmp_path)
         prompt = agent._build_system_prompt()
         date_pos = prompt.index("当前日期：")
         role_pos = prompt.index("面试助手")
-        assert date_pos < role_pos
+        assert role_pos < date_pos
 
     def test_build_system_prompt_date_not_stored_in_cache(self, tmp_path):
         from datetime import date

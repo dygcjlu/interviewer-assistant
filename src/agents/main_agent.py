@@ -174,7 +174,8 @@ class MainAgent:
         from datetime import date
 
         today = date.today().strftime("%Y-%m-%d")
-        return f"当前日期：{today}\n\n{self._cached_system_prompt}"
+        # Append date at the end to preserve stable prefix for LLM prompt caching.
+        return f"{self._cached_system_prompt}\n\n当前日期：{today}"
 
     # ── Tool definitions ───────────────────────────────────────────────────────
 
