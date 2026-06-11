@@ -55,7 +55,10 @@ class PromptBuilder:
 
     def build(self, session: InterviewSession, agent_config: AgentConfig) -> list[Message]:
         """按七层顺序构建完整 messages 列表。所有 system 层合并为单条消息。"""
-        system_parts: list[str] = []
+        from datetime import date
+
+        today = date.today().strftime("%Y-%m-%d")
+        system_parts: list[str] = [f"当前日期：{today}"]
 
         # Layer 1: Agent identity
         system_parts.append(agent_config.system_prompt)

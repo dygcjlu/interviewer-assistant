@@ -532,3 +532,57 @@ class TestInterviewAgent:
         async for t in agent.handle_stream(req):
             tokens.append(t)
         assert any("流式" in t for t in tokens)
+
+
+# ── MainAgent._build_system_prompt date injection ─────────────────────────────
+
+
+@pytest.mark.unit
+class TestMainAgentDateInjection:
+    def _make_main_agent(self, tmp_path: Path):
+        from src.agents.main_agent import MainAgent
+        from src.framework.tool_registry import ToolRegistry
+        from src.storage.memory_module import MemoryModule
+        from src.storage.user_memory import UserMemoryStore
+
+        user_mem_path = tmp_path / "USER.md"
+        user_mem_path.write_text("")
+        user_memory_store = UserMemoryStore(user_mem_path)
+        user_memory_store.load()
+
+        llm = AsyncMock()
+        tool_registry = ToolRegistry()
+        memory_module = MagicMock(spec=MemoryModule)
+
+        return MainAgent(
+            llm_client=llm,
+            tool_registry=tool_registry,
+            memory_module=memory_module,
+            user_memory_store=user_memory_store,
+        )
+
+    def test_build_system_prompt_includes_current_date(self, tmp_path):
+        from datetime import date
+
+        agent = self._make_main_agent(tmp_path)
+        prompt = agent._build_system_prompt()
+        today = date.today().strftime("%Y-%m-%d")
+        assert f"当前日期：{today}" in prompt
+
+    def test_build_system_prompt_date_appears_before_role(self, tmp_path):
+        agent = self._make_main_agent(tmp_path)
+        prompt = agent._build_system_prompt()
+        date_pos = prompt.index("当前日期：")
+        role_pos = prompt.index("面试助手")
+        assert date_pos < role_pos
+
+    def test_build_system_prompt_date_not_stored_in_cache(self, tmp_path):
+        from datetime import date
+
+        agent = self._make_main_agent(tmp_path)
+        agent._build_system_prompt()  # warm up cache
+        today = date.today().strftime("%Y-%m-%d")
+        assert agent._cached_system_prompt is not None
+        # The cache itself should NOT start with the date prefix —
+        # the date is prepended dynamically at return time.
+        assert not agent._cached_system_prompt.startswith("当前日期：")

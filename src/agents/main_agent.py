@@ -164,15 +164,17 @@ class MainAgent:
         self._cached_system_prompt = None
 
     def _build_system_prompt(self) -> str:
-        if self._cached_system_prompt is not None:
-            return self._cached_system_prompt
-        sections = [_LAYER1_ROLE]
-        if self._layer2_user_memory:
-            sections.append(f"\n## 面试官偏好与岗位要求\n\n{self._layer2_user_memory}")
-        if self._layer3_candidate:
-            sections.append(f"\n## 当前候选人信息\n{self._layer3_candidate}")
-        self._cached_system_prompt = "\n".join(sections)
-        return self._cached_system_prompt
+        if self._cached_system_prompt is None:
+            sections = [_LAYER1_ROLE]
+            if self._layer2_user_memory:
+                sections.append(f"\n## 面试官偏好与岗位要求\n\n{self._layer2_user_memory}")
+            if self._layer3_candidate:
+                sections.append(f"\n## 当前候选人信息\n{self._layer3_candidate}")
+            self._cached_system_prompt = "\n".join(sections)
+        from datetime import date
+
+        today = date.today().strftime("%Y-%m-%d")
+        return f"当前日期：{today}\n\n{self._cached_system_prompt}"
 
     # ── Tool definitions ───────────────────────────────────────────────────────
 
