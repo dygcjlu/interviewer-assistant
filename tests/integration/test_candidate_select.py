@@ -109,3 +109,24 @@ async def test_select_candidate_no_history_does_not_break(client):
     assert r.status_code == 200
     prompt = main_agent._build_system_prompt()
     assert "历史面试记录" not in prompt
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_select_candidate_history_exception_does_not_break(client):
+    """get_candidate_history 抛出异常时，select 路由仍返回 200，不注入历史。"""
+    from unittest.mock import AsyncMock, patch
+
+    await _seed(client, "cid-hist-003", "异常候选人")
+
+    memory = client._transport.app.state.memory_module
+    main_agent = client._transport.app.state.main_agent
+
+    with patch.object(memory, "get_candidate_history", new=AsyncMock(side_effect=OSError("disk error"))):
+        r = await client.post(
+            "/api/candidate/select", json={"candidate_id": "cid-hist-003"}
+        )
+
+    assert r.status_code == 200
+    prompt = main_agent._build_system_prompt()
+    assert "历史面试记录" not in prompt

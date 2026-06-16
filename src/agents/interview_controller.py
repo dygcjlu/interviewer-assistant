@@ -98,9 +98,12 @@ class InterviewController:
             existing = await self._memory.get_candidate(candidate_id)
             if existing is not None:
                 candidate = existing
-                history = await self._memory.get_candidate_history(candidate_id)
-                if history is not None:
-                    candidate.history_summary = history.history_summary
+                try:
+                    history = await self._memory.get_candidate_history(candidate_id)
+                    if history is not None:
+                        candidate.history_summary = history.history_summary
+                except Exception:
+                    logger.exception("create_session: get_candidate_history failed, skipping")
                 resume_content = await self._memory.get_resume_markdown(candidate_id)
                 candidate.resume_content = resume_content
             else:

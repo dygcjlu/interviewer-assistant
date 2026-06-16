@@ -158,4 +158,16 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
         session.interview_brief = brief_text
 
         if ctx.main_agent is not None:
-            ctx.main_agent.set_candidate_context(session.candidate, interview_brief=brief_text)
+            history_summary: str | None = None
+            if ctx.memory_module is not None:
+                try:
+                    h = await ctx.memory_module.get_candidate_history(session.candidate.id)
+                    if h:
+                        history_summary = h.history_summary
+                except Exception:
+                    logger.exception("dispatch_to_agent: get_candidate_history failed in brief_done")
+            ctx.main_agent.set_candidate_context(
+                session.candidate,
+                interview_brief=brief_text,
+                history_summary=history_summary,
+            )

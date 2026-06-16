@@ -129,7 +129,7 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
         if candidate_history:
             history_summary = candidate_history.history_summary
     except Exception:
-        logger.warning("Failed to load candidate history for %s, skipping", body.candidate_id)
+        logger.warning("Failed to load candidate history for %s, skipping", body.candidate_id, exc_info=True)
 
     # Update MainAgent context
     if main_agent is not None:
