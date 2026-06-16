@@ -159,7 +159,7 @@ class MainAgent:
         if interview_brief:
             parts.append(f"面试简报（前800字）：\n{interview_brief[:800]}")
         if history_summary:
-            parts.append(f"历史面试记录：\n{history_summary}")
+            parts.append(f"历史面试记录：\n{history_summary[:1200]}")
         self._layer3_candidate = "\n".join(parts)
         self._cached_system_prompt = None
         logger.info("MainAgent: candidate context updated for %s", profile.name)
