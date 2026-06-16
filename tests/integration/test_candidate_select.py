@@ -50,3 +50,58 @@ async def test_select_nonexistent_candidate_returns_404(client):
     )
     assert r.status_code == 404
     assert r.json()["detail"]["code"] == "not_found"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_select_candidate_injects_history_into_main_agent(client):
+    """选中有历史记录的候选人后，MainAgent 的系统提示应包含历史面试摘要。"""
+    from unittest.mock import AsyncMock, patch
+    from src.storage.memory_module import CandidateHistory, InterviewSummary
+    from datetime import datetime
+
+    await _seed(client, "cid-hist-001", "历史候选人")
+
+    fake_history = CandidateHistory(
+        past_interviews=[
+            InterviewSummary(
+                interview_id="s-old",
+                date=datetime(2025, 1, 1, 10, 0),
+                overall_score=6.0,
+                recommendation="weak_hire",
+                key_findings="表现一般",
+            )
+        ],
+        history_summary="候选人 历史候选人 历史面试记录：\n第1次面试：2025-01-01，评分 6.0，结论 weak_hire",
+    )
+
+    memory = client._transport.app.state.memory_module
+    main_agent = client._transport.app.state.main_agent
+
+    with patch.object(memory, "get_candidate_history", new=AsyncMock(return_value=fake_history)):
+        r = await client.post(
+            "/api/candidate/select", json={"candidate_id": "cid-hist-001"}
+        )
+
+    assert r.status_code == 200
+    prompt = main_agent._build_system_prompt()
+    assert "历史面试记录" in prompt
+    assert "weak_hire" in prompt
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_select_candidate_no_history_does_not_break(client):
+    """候选人无历史记录时，select 路由正常完成，不注入历史字段。"""
+    from unittest.mock import AsyncMock, patch
+
+    await _seed(client, "cid-hist-002", "无历史候选人")
+
+    memory = client._transport.app.state.memory_module
+
+    with patch.object(memory, "get_candidate_history", new=AsyncMock(return_value=None)):
+        r = await client.post(
+            "/api/candidate/select", json={"candidate_id": "cid-hist-002"}
+        )
+
+    assert r.status_code == 200

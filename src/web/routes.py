@@ -122,9 +122,19 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     if not brief:
         brief = memory.get_brief(body.candidate_id)
 
+    # Load candidate history summary
+    history_summary: str | None = None
+    candidate_history = await memory.get_candidate_history(body.candidate_id)
+    if candidate_history:
+        history_summary = candidate_history.history_summary
+
     # Update MainAgent context
     if main_agent is not None:
-        main_agent.set_candidate_context(candidate, interview_brief=brief)
+        main_agent.set_candidate_context(
+            candidate,
+            interview_brief=brief,
+            history_summary=history_summary,
+        )
 
     resume_markdown = await memory.get_resume_markdown(body.candidate_id)
 
@@ -326,10 +336,10 @@ async def start_interview(
     controller=Depends(_require_controller),
 ):
     bind_op("start_interview")
-    session = await controller.get_session()
-    if session is None:
-        session = await controller.create_session(body.candidate_id)
     try:
+        session = await controller.get_session()
+        if session is None:
+            session = await controller.create_session(body.candidate_id)
         await controller.start_interview()
     except SessionError as exc:
         raise _session_err(exc)
