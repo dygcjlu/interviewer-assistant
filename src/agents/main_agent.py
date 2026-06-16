@@ -142,7 +142,10 @@ class MainAgent:
         logger.info("MainAgent: reloaded user memory (%d chars)", len(self._layer2_user_memory))
 
     def set_candidate_context(
-        self, profile: CandidateProfile, interview_brief: str | None = None
+        self,
+        profile: CandidateProfile,
+        interview_brief: str | None = None,
+        history_summary: str | None = None,
     ) -> None:
         parts = [f"\n当前候选人：{profile.name}（ID: {profile.id}）"]
         if profile.current_position:
@@ -155,6 +158,8 @@ class MainAgent:
             parts.append(f"简历内容：\n{profile.resume_content[:1500]}")
         if interview_brief:
             parts.append(f"面试简报（前800字）：\n{interview_brief[:800]}")
+        if history_summary:
+            parts.append(f"历史面试记录：\n{history_summary}")
         self._layer3_candidate = "\n".join(parts)
         self._cached_system_prompt = None
         logger.info("MainAgent: candidate context updated for %s", profile.name)

@@ -586,3 +586,55 @@ class TestMainAgentDateInjection:
         # The cache itself should NOT start with the date prefix —
         # the date is prepended dynamically at return time.
         assert not agent._cached_system_prompt.startswith("当前日期：")
+
+
+# ── MainAgent.set_candidate_context ─────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestMainAgentSetCandidateContext:
+    def _make_agent(self):
+        from src.agents.main_agent import MainAgent
+        from src.framework.tool_registry import ToolRegistry
+        from src.storage.memory_module import MemoryModule
+        from src.storage.user_memory import UserMemoryStore
+        from unittest.mock import MagicMock, AsyncMock
+
+        llm = AsyncMock()
+        tools = MagicMock(spec=ToolRegistry)
+        memory = MagicMock(spec=MemoryModule)
+        user_memory = MagicMock(spec=UserMemoryStore)
+        user_memory.render.return_value = ""
+        return MainAgent(llm, tools, memory, user_memory)
+
+    def test_set_candidate_context_includes_history_summary(self):
+        """传入 history_summary 后，_build_system_prompt() 应包含该内容。"""
+        agent = self._make_agent()
+        profile = CandidateProfile(id="c-001", name="王喜龙")
+        history = "候选人 王喜龙 历史面试记录：\n第1次面试：2025-01-01，评分 6.0，结论 weak_hire"
+
+        agent.set_candidate_context(profile, history_summary=history)
+        prompt = agent._build_system_prompt()
+
+        assert "历史面试记录" in prompt
+        assert "weak_hire" in prompt
+
+    def test_set_candidate_context_without_history_summary(self):
+        """不传 history_summary 时，系统提示不含"历史面试记录"字样（向后兼容）。"""
+        agent = self._make_agent()
+        profile = CandidateProfile(id="c-001", name="李四")
+
+        agent.set_candidate_context(profile)
+        prompt = agent._build_system_prompt()
+
+        assert "历史面试记录" not in prompt
+
+    def test_set_candidate_context_history_summary_none_is_ignored(self):
+        """显式传 history_summary=None 等同于不传，不影响提示词。"""
+        agent = self._make_agent()
+        profile = CandidateProfile(id="c-001", name="张三")
+
+        agent.set_candidate_context(profile, history_summary=None)
+        prompt = agent._build_system_prompt()
+
+        assert "历史面试记录" not in prompt
