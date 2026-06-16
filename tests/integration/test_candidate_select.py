@@ -99,9 +99,13 @@ async def test_select_candidate_no_history_does_not_break(client):
 
     memory = client._transport.app.state.memory_module
 
+    main_agent = client._transport.app.state.main_agent
+
     with patch.object(memory, "get_candidate_history", new=AsyncMock(return_value=None)):
         r = await client.post(
             "/api/candidate/select", json={"candidate_id": "cid-hist-002"}
         )
 
     assert r.status_code == 200
+    prompt = main_agent._build_system_prompt()
+    assert "历史面试记录" not in prompt

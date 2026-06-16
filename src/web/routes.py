@@ -122,11 +122,14 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     if not brief:
         brief = memory.get_brief(body.candidate_id)
 
-    # Load candidate history summary
+    # Load candidate history summary (best-effort: failure must not block candidate selection)
     history_summary: str | None = None
-    candidate_history = await memory.get_candidate_history(body.candidate_id)
-    if candidate_history:
-        history_summary = candidate_history.history_summary
+    try:
+        candidate_history = await memory.get_candidate_history(body.candidate_id)
+        if candidate_history:
+            history_summary = candidate_history.history_summary
+    except Exception:
+        logger.warning("Failed to load candidate history for %s, skipping", body.candidate_id)
 
     # Update MainAgent context
     if main_agent is not None:
