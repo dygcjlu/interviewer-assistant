@@ -16,6 +16,7 @@ class ChatResponse:
     tool_calls: list[ToolCallInfo] | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_content: str | None = None  # 思考模式下的推理链内容
 
 
 @dataclass

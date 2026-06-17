@@ -94,7 +94,7 @@ async def index() -> None:
     ui.query("body").style("margin:0; overflow:hidden; background:#F0F2F5;")
 
     with ui.column().classes("w-full h-screen gap-0"):
-        # S-15: 启动配置告警横幅（缺少 QWEN_API_KEY 等）
+        # S-15: 启动配置告警横幅（缺少 LLM_API_KEY 等）
         if _startup_warnings:
             with ui.column().classes("w-full flex-shrink-0").style(
                 "background:#FEF2F2; border-bottom:1px solid #FECACA;"
@@ -326,12 +326,9 @@ async def index() -> None:
         await _chat_stream(text, chat_col, chat_scroll, on_complete=_sync_candidate_panel)
 
     send_btn.on("click", lambda: asyncio.create_task(_do_send()))
-    user_in.on(
-        "keydown.enter",
-        lambda e: asyncio.create_task(_do_send())
-        if not (e.args.get("shiftKey") or e.args.get("ctrlKey"))
-        else None,
-    )
+    # keydown.enter.exact: 순수 Enter만 잡음 (Shift+Enter, Ctrl+Enter 제외)
+    # .prevent: 브라우저 기본 줄바꿈 삽입을 막아 textarea 모델 업데이트 경쟁 조건 방지
+    user_in.on("keydown.enter.exact.prevent", lambda: asyncio.create_task(_do_send()))
 
     # ── Button handlers ───────────────────────────────────────────────────────
 

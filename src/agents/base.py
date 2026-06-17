@@ -122,6 +122,7 @@ class BaseAgent(ABC):
                     role="assistant",
                     content=response.content,
                     tool_calls=response.tool_calls,
+                    reasoning_content=response.reasoning_content,
                 )
             )
             for tc in response.tool_calls:
