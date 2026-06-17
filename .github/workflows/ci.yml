@@ -8,12 +8,8 @@ on:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: Test (windows-latest)
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -26,26 +22,10 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
-      # Ubuntu 需要 PortAudio（sounddevice 依赖）
-      - name: Install system deps (Ubuntu)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y libportaudio2
-
       - name: Install Python dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run tests (Ubuntu — skip windows_only)
-        if: runner.os == 'Linux'
-        env:
-          MOCK_AUDIO: "true"
-          PDF_PARSER: "pymupdf"
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
-        run: pytest tests/unit tests/integration -m "not windows_only"
-
-      - name: Run tests (Windows)
-        if: runner.os == 'Windows'
+      - name: Run tests
         env:
           MOCK_AUDIO: "true"
           PDF_PARSER: "pymupdf"
