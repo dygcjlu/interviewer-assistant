@@ -38,7 +38,7 @@ Windows PowerShell:
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 Linux / macOS:
@@ -46,7 +46,7 @@ Linux / macOS:
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 ### 3. 配置环境变量
