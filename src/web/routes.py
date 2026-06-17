@@ -186,6 +186,19 @@ async def upload_resume(
 
     safe_stem = _safe_stem(filename)
 
+    if not candidate_id and not overwrite:
+        existing = await memory.get_candidate_by_name(safe_stem)
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "duplicate_candidate",
+                    "message": f"候选人「{safe_stem}」已存在，请确认是否覆盖",
+                    "existing_candidate_id": existing.id,
+                    "existing_candidate_name": existing.name,
+                },
+            )
+
     # Ensure session exists
     session = await controller.get_session() if controller else None
 
