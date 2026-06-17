@@ -239,3 +239,6 @@ USER.md
 USER.local.md
 openspec/
 .cursor/mcp.json
+
+# LLM benchmark output
+scripts/benchmark_results.csv

@@ -237,17 +237,17 @@ class InterviewAgent(BaseAgent):
             current_text = (
                 f"面试官：{pending_ivr}\n"
                 f"候选人：{pending_cand}\n\n"
-                "请结合以上所有对话记录、候选人简历和题目清单，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。"
+                "请结合以上所有对话记录、候选人简历和面试简报，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。"
             )
         elif self._session.rounds:
             last_round = self._session.rounds[-1]
             current_text = (
                 f"面试官：{last_round.interviewer_text}\n"
                 f"候选人：{last_round.candidate_text}\n\n"
-                "请结合以上所有对话记录、候选人简历和题目清单，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。"
+                "请结合以上所有对话记录、候选人简历和面试简报，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。"
             )
         else:
-            current_text = "面试还未开始，请根据题目清单给出第一个开场问题，直接输出话术。"
+            current_text = "面试还未开始，请根据面试简报给出第一个开场问题，直接输出话术。"
 
         user_msg = Message(role="user", content=current_text)
         if self._logger is not None:

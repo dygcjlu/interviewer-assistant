@@ -85,25 +85,60 @@ class AudioManager:
 
         self._capturer.set_on_frame(_sync_frame_callback)
 
-        # 4. Connect STT engines
-        await self._candidate_stt.connect()
-        await self._interviewer_stt.connect()
+        try:
+            # 4. Connect STT engines
+            await self._candidate_stt.connect()
+            await self._interviewer_stt.connect()
 
-        # 5. Start STT receive loops
-        self._candidate_loop_task = self._loop.create_task(
-            self._stt_receive_loop(self._candidate_stt)
-        )
-        self._interviewer_loop_task = self._loop.create_task(
-            self._stt_receive_loop(self._interviewer_stt)
-        )
+            # 5. Start STT receive loops
+            self._candidate_loop_task = self._loop.create_task(
+                self._stt_receive_loop(self._candidate_stt)
+            )
+            self._interviewer_loop_task = self._loop.create_task(
+                self._stt_receive_loop(self._interviewer_stt)
+            )
 
-        # 6. Start capturer
-        await self._capturer.start()
+            # 6. Start capturer
+            await self._capturer.start()
 
-        # 7. Start recording
-        await self._recorder.start_recording(session.id, self._recordings_dir)
+            # 7. Start recording
+            await self._recorder.start_recording(session.id, self._recordings_dir)
+
+        except Exception:
+            logger.exception("AudioManager: start failed, rolling back")
+            await self._rollback_start()
+            raise
 
         logger.info("AudioManager: started for session=%s", session.id)
+
+    async def _rollback_start(self) -> None:
+        """回滚 start() 中已分配的资源（STT 任务、连接、TranscriptionManager）。"""
+        try:
+            await self._capturer.stop()
+        except Exception:
+            logger.warning("AudioManager rollback: capturer stop failed", exc_info=True)
+
+        for task in (self._candidate_loop_task, self._interviewer_loop_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self._candidate_loop_task = None
+        self._interviewer_loop_task = None
+
+        try:
+            await self._candidate_stt.close()
+        except Exception:
+            logger.warning("AudioManager rollback: candidate_stt close failed", exc_info=True)
+        try:
+            await self._interviewer_stt.close()
+        except Exception:
+            logger.warning("AudioManager rollback: interviewer_stt close failed", exc_info=True)
+
+        self._transcription_manager = None
+        self._bridge = None
 
     async def stop(self) -> RecordingResult:
         """有序停止全部组件，返回录音结果。"""

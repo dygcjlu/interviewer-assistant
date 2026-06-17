@@ -114,10 +114,10 @@ class TestCreateSession:
 
     @pytest.mark.asyncio
     async def test_create_session_with_nonexistent_candidate_id(self, tmp_path):
+        from src.models.exceptions import SessionError
         ctrl = _make_controller(tmp_path)
-        session = await ctrl.create_session(candidate_id="nonexistent")
-        assert session.candidate.id == "nonexistent"
-        assert session.candidate.name == ""
+        with pytest.raises(SessionError, match="nonexistent"):
+            await ctrl.create_session(candidate_id="nonexistent")
 
     @pytest.mark.asyncio
     async def test_get_session_returns_created(self, tmp_path):
@@ -184,7 +184,7 @@ class TestStartInterview:
         session = await ctrl.create_session(candidate_id="c-001")
         session.stage = InterviewStage.INTERVIEWING
         ctrl._memory.start_interview = AsyncMock()
-        with pytest.raises(SessionError, match="面试已在进行中"):
+        with pytest.raises(SessionError, match="无法开始面试"):
             await ctrl.start_interview()
 
     @pytest.mark.asyncio

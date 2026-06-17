@@ -10,7 +10,7 @@
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 Windows PowerShell:
@@ -18,7 +18,7 @@ Windows PowerShell:
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 3. 复制 `.env.example` 为 `.env`，按需填写 LLM 和 STT 凭据。

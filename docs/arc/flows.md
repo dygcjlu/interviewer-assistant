@@ -20,7 +20,6 @@ sequenceDiagram
     participant MM as MemoryModule
 
     UI->>REST: POST /api/resume/upload (file, candidate_id?)
-    REST->>REST: 去重检查：memory.get_candidate_by_name(safe_stem)
     REST->>IC: get_session() / create_session() [确保会话存在]
     REST->>REST: 保存 PDF 到 resumes/{safe_stem}.pdf
     REST-->>UI: {file_path, safe_stem, session_id, candidate_id}
@@ -60,10 +59,9 @@ sequenceDiagram
     DA->>MM: save_brief(candidate_id, brief_text)
     Note over MM: 写 candidates/{id}/brief.md
     DA->>DA: session.interview_brief = brief_text
-    DA->>MM: start_interview(session)
-    Note over MM: 写 session.json
     DA->>MA: set_candidate_context(profile, interview_brief=brief_text)
     DA-->>MA: JSON result
+    Note over IC: session.stage 仍为 IDLE<br/>用户需点击「开始面试」触发 /interview/start
 
     MA->>LLM: chat_stream(messages) — 简报生成完成提示
     LLM-->>REST: 流式 SSE delta
@@ -72,12 +70,11 @@ sequenceDiagram
 
 **关键数据流转**：
 
-- 上传 API 通过 `get_candidate_by_name(safe_stem)` 检查同名候选人，存在则返回 409
 - 解析由面试官聊天触发 MainAgent，MainAgent 通过 `dispatch_to_agent` 工具委托 ResumeAgent 执行
 - 解析完成后 MainAgent 进入两阶段引导：① 呈现分析 + 风险信号；② 对话收集关注点后生成简报
 - `dispatch_to_agent` 自动注入 session 上下文（候选人 ID、profile.md 路径、brief.md 路径等）
-- `parse_done` 副作用：读取临时 Markdown → `save_candidate()` → 删除临时文件
-- `brief_done` 副作用：`save_brief()` 落盘 → 更新 `session.interview_brief` → `start_interview()` → 刷新 MainAgent Layer 3
+- `parse_done` 副作用：读取临时 Markdown → `save_candidate()` → 删除临时文件；若解析出的真实姓名与已有候选人重名，写入 `duplicate_warning` 字段（不阻断）
+- `brief_done` 副作用：`save_brief()` 落盘 → 更新 `session.interview_brief` → 刷新 MainAgent Layer 3；**`session.stage` 维持 IDLE**，不自动切换为 `interviewing`；用户需显式点击「开始面试」触发 `POST /api/interview/start` → `stage=INTERVIEWING`
 
 ---
 

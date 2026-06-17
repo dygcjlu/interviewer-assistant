@@ -25,6 +25,7 @@ from ..models.exceptions import (
 )
 from .config import LLMConfig
 from .protocol import ChatResponse, StreamChunk, ToolSchema
+from .providers import get_profile
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,57 @@ class OpenAICompatibleClient:
             logger.warning("tiktoken encoding load failed, fallback to char-based estimate: %s", exc)
             self._encoding = None
 
+    def _thinking_active(self) -> bool:
+        """当前请求是否需要激活思考模式。"""
+        profile = get_profile(self._config.provider)
+        return self._config.enable_thinking and profile.supports_thinking
+
+    def _include_reasoning_content(self) -> bool:
+        """是否需要在消息体中回传 reasoning_content（DeepSeek 工具调用强制要求）。"""
+        profile = get_profile(self._config.provider)
+        return (
+            self._config.enable_thinking
+            and profile.supports_thinking
+            and profile.thinking_requires_reasoning_content
+        )
+
+    def _build_kwargs(
+        self,
+        payload_messages: list[dict[str, Any]],
+        payload_tools: list[dict[str, Any]] | None,
+        temperature: float,
+        timeout: float,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        """根据 ProviderProfile 构建请求参数字典。"""
+        profile = get_profile(self._config.provider)
+        thinking_on = self._thinking_active()
+
+        kwargs: dict[str, Any] = {
+            "model": self._config.model,
+            "messages": payload_messages,
+            "timeout": timeout,
+        }
+
+        # temperature：thinking 模式且平台禁止时不发
+        if not (thinking_on and profile.thinking_disables_temperature):
+            kwargs["temperature"] = temperature
+
+        # 思考模式参数
+        if thinking_on:
+            kwargs["reasoning_effort"] = self._config.reasoning_effort
+            if profile.thinking_extra_body:
+                kwargs["extra_body"] = profile.thinking_extra_body
+
+        if payload_tools:
+            kwargs["tools"] = payload_tools
+
+        if stream:
+            kwargs["stream"] = True
+            kwargs["stream_options"] = {"include_usage": True}
+
+        return kwargs
+
     async def chat(
         self,
         messages: list[Message],
@@ -54,7 +106,8 @@ class OpenAICompatibleClient:
         temperature: float = 0.7,
         timeout_sec: float | None = None,
     ) -> ChatResponse:
-        payload_messages = [self._message_to_dict(m) for m in messages]
+        include_rc = self._include_reasoning_content()
+        payload_messages = [self._message_to_dict(m, include_rc) for m in messages]
         payload_tools = [self._tool_to_dict(t) for t in tools] if tools else None
         timeout = timeout_sec if timeout_sec is not None else self._config.timeout_sec
 
@@ -64,15 +117,11 @@ class OpenAICompatibleClient:
         for attempt in range(attempts):
             start = time.perf_counter()
             try:
-                kwargs: dict[str, Any] = {
-                    "model": self._config.model,
-                    "messages": payload_messages,
-                    "temperature": temperature,
-                    "timeout": timeout,
-                }
-                if payload_tools:
-                    kwargs["tools"] = payload_tools
+                kwargs = self._build_kwargs(
+                    payload_messages, payload_tools, temperature, timeout
+                )
                 messages_json = json.dumps(payload_messages, ensure_ascii=False, default=str)
+                logger.debug("llm_messages_full model=%s messages=%s", self._config.model, messages_json)
                 logger.info(
                     "llm_request model=%s messages=%d tools=%s attempt=%d/%d messages_body=%s",
                     self._config.model,
@@ -130,7 +179,8 @@ class OpenAICompatibleClient:
         temperature: float = 0.7,
         timeout_sec: float | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        payload_messages = [self._message_to_dict(m) for m in messages]
+        include_rc = self._include_reasoning_content()
+        payload_messages = [self._message_to_dict(m, include_rc) for m in messages]
         payload_tools = [self._tool_to_dict(t) for t in tools] if tools else None
         timeout = timeout_sec if timeout_sec is not None else self._config.timeout_sec
 
@@ -138,9 +188,11 @@ class OpenAICompatibleClient:
         prompt_tokens = 0
         completion_tokens = 0
         start = time.perf_counter()
+        messages_json = json.dumps(payload_messages, ensure_ascii=False, default=str)
+        logger.debug("llm_messages_full model=%s messages=%s", self._config.model, messages_json)
         logger.info(
-            "LLM chat_stream start model=%s messages=%d tools=%s",
-            self._config.model, len(payload_messages), bool(payload_tools),
+            "llm_stream_request model=%s messages=%d tools=%s messages_body=%s",
+            self._config.model, len(payload_messages), bool(payload_tools), truncate(messages_json),
         )
 
         # Accumulate streaming tool_calls by index (OpenAI splits args across chunks)
@@ -149,16 +201,9 @@ class OpenAICompatibleClient:
         content_acc = ""
 
         try:
-            kwargs: dict[str, Any] = {
-                "model": self._config.model,
-                "messages": payload_messages,
-                "temperature": temperature,
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "timeout": timeout,
-            }
-            if payload_tools:
-                kwargs["tools"] = payload_tools
+            kwargs = self._build_kwargs(
+                payload_messages, payload_tools, temperature, timeout, stream=True
+            )
             stream = await self._client.chat.completions.create(**kwargs)
             async for raw_chunk in stream:
                 usage = getattr(raw_chunk, "usage", None)
@@ -245,7 +290,7 @@ class OpenAICompatibleClient:
         return max(result, 1)
 
     @staticmethod
-    def _message_to_dict(m: Message) -> dict[str, Any]:
+    def _message_to_dict(m: Message, include_reasoning_content: bool = False) -> dict[str, Any]:
         payload: dict[str, Any] = {"role": m.role}
         if m.content is not None:
             payload["content"] = m.content
@@ -263,6 +308,9 @@ class OpenAICompatibleClient:
             ]
         if m.tool_call_id is not None:
             payload["tool_call_id"] = m.tool_call_id
+        # 仅当平台强制要求时才回传 reasoning_content（否则各平台可能报错或忽略）
+        if m.reasoning_content is not None and include_reasoning_content:
+            payload["reasoning_content"] = m.reasoning_content
         return payload
 
     @staticmethod
@@ -304,9 +352,13 @@ class OpenAICompatibleClient:
         prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
         completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
 
+        # 提取思考模式下的推理链内容（DeepSeek/Qwen3 思考版返回）
+        reasoning_content: str | None = getattr(message, "reasoning_content", None) or None
+
         return ChatResponse(
             content=content,
             tool_calls=tool_calls,
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,
+            reasoning_content=reasoning_content,
         )

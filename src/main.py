@@ -60,10 +60,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # S-15: 启动时校验关键配置，缺失时 ERROR 日志 + 暴露给 UI 显示红色横幅。
     # 不阻断启动：本地工具仍允许用 MOCK_AUDIO=true 等 mock 模式后补 key。
     startup_warnings: list[str] = []
-    if not settings.QWEN_API_KEY:
+    if not settings.LLM_API_KEY:
         msg = (
-            "QWEN_API_KEY 未配置：LLM 功能不可用（聊天、生成题目、追问建议、评价报告均会失败）。"
-            "请在 .env 中设置后重启服务。"
+            "LLM_API_KEY 未配置：LLM 功能不可用（聊天、生成题目、追问建议、评价报告均会失败）。"
+            "请在 .env 中设置 LLM_API_KEY 后重启服务。"
         )
         logger.error("S-15 config check failed: %s", msg)
         startup_warnings.append(msg)
@@ -79,11 +79,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     user_memory_store.load()
 
     llm_config = LLMConfig(
-        api_key=settings.QWEN_API_KEY,
-        base_url=settings.QWEN_API_BASE_URL,
-        model=settings.QWEN_MODEL,
+        api_key=settings.LLM_API_KEY,
+        base_url=settings.LLM_BASE_URL,
+        model=settings.LLM_MODEL,
         timeout_sec=settings.LLM_TIMEOUT_SEC,
         max_retries=settings.LLM_MAX_RETRIES,
+        provider=settings.LLM_PROVIDER,
+        enable_thinking=settings.LLM_ENABLE_THINKING,
+        reasoning_effort=settings.LLM_REASONING_EFFORT,
     )
     llm_client = OpenAICompatibleClient(llm_config)
 
@@ -151,6 +154,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 candidate_stt = XunfeiRealtimeSTT(channel="candidate")
                 interviewer_stt = XunfeiRealtimeSTT(channel="interviewer")
                 logger.info("Audio: using XunfeiRealtimeSTT")
+            elif settings.STT_ENGINE == "volc":
+                from src.audio.volc_stt import VolcRealtimeSTT
+                candidate_stt = VolcRealtimeSTT(channel="candidate")
+                interviewer_stt = VolcRealtimeSTT(channel="interviewer")
+                logger.info("Audio: using VolcRealtimeSTT")
             else:
                 from src.audio.baidu_stt import BaiduRealtimeSTT
                 candidate_stt = BaiduRealtimeSTT(channel="candidate")

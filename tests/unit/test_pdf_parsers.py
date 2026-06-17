@@ -163,8 +163,8 @@ class TestQwenVLParser:
         parser = QwenVLParser()
 
         mock_settings = MagicMock()
-        mock_settings.QWEN_API_KEY = "test-key"
-        mock_settings.QWEN_API_BASE_URL = "https://api.example.com/v1"
+        mock_settings.LLM_API_KEY = "test-key"
+        mock_settings.LLM_BASE_URL = "https://api.example.com/v1"
         mock_settings.QWEN_VL_MODEL = "qwen-vl-test"
 
         mock_doc = MagicMock()

@@ -76,7 +76,7 @@ class PromptBuilder:
         if session.candidate.history_summary:
             system_parts.append(session.candidate.history_summary)
 
-        # Layer 5: Interview fixed zone (候选人信息 + 题目清单 + 岗位要求)
+        # Layer 5: Interview fixed zone (候选人信息 + 面试简报 + 岗位要求)
         fixed_zone = _build_fixed_zone(session, self._user_memory)
         if fixed_zone:
             system_parts.append(fixed_zone)
@@ -87,6 +87,11 @@ class PromptBuilder:
         # Layer 6: Summary zone
         if context_data.summary:
             system_parts.append(context_data.summary)
+
+        # Layer 7 prelude: current date appended last to preserve stable prefix for caching
+        from datetime import date
+
+        system_parts.append(f"当前日期：{date.today().strftime('%Y-%m-%d')}")
 
         messages: list[Message] = [Message(role="system", content="\n\n".join(system_parts))]
 

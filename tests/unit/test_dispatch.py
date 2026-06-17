@@ -205,6 +205,7 @@ class TestApplySideEffects:
         mock_controller.get_session = AsyncMock(return_value=session)
         mock_memory = MagicMock()
         mock_memory.save_candidate = AsyncMock()
+        mock_memory.get_candidate_by_name = AsyncMock(return_value=None)
 
         # 创建临时 markdown 文件
         md_file = tmp_path / "test.md"

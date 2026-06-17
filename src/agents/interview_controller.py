@@ -98,13 +98,16 @@ class InterviewController:
             existing = await self._memory.get_candidate(candidate_id)
             if existing is not None:
                 candidate = existing
-                history = await self._memory.get_candidate_history(candidate_id)
-                if history is not None:
-                    candidate.history_summary = history.history_summary
+                try:
+                    history = await self._memory.get_candidate_history(candidate_id)
+                    if history is not None:
+                        candidate.history_summary = history.history_summary
+                except Exception:
+                    logger.exception("create_session: get_candidate_history failed, skipping")
                 resume_content = await self._memory.get_resume_markdown(candidate_id)
                 candidate.resume_content = resume_content
             else:
-                candidate = CandidateProfile(id=candidate_id, name="")
+                raise SessionError(f"候选人不存在：{candidate_id}")
         else:
             candidate = CandidateProfile(id=str(uuid.uuid4()), name="")
 
@@ -199,11 +202,11 @@ class InterviewController:
     async def _start_interview_impl(self) -> None:
         if self._session is None:
             raise SessionError("当前没有活跃会话")
-        if self._session.stage == InterviewStage.INTERVIEWING:
+        if self._session.stage != InterviewStage.IDLE:
             # L3-4 / S-13: 重入时 raise 而非静默 return，让 routes 层返回 409 给前端，
             # 前端应在收到 409 后禁用"开始面试"按钮（防抖）。
             raise SessionError(
-                f"面试已在进行中（session_id={self._session.id}），请勿重复开始"
+                f"当前会话状态为 {self._session.stage.value}，无法开始面试（仅 IDLE 状态允许）"
             )
         if not self._session.candidate.id:
             raise SessionError("切换到面试前需先确认候选人信息")

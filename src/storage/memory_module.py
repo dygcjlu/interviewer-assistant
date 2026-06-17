@@ -401,6 +401,13 @@ class MemoryModule:
                 results.append(profile)
         return results
 
+    async def count_candidates(self, keyword: str = "") -> int:
+        """返回符合关键词筛选的候选人总数（不受 limit/offset 影响）。"""
+        candidates = self._read_candidates_index()
+        if keyword:
+            candidates = [c for c in candidates if keyword.lower() in (c.get("name") or "").lower()]
+        return len(candidates)
+
     async def delete_candidate(self, candidate_id: str) -> None:
         cand_dir = self._candidate_dir(candidate_id)
         if cand_dir.exists():
@@ -883,12 +890,34 @@ class MemoryModule:
             key_findings_parts.append("不足: " + "; ".join(report.weaknesses[:2]))
         key_findings = "，".join(key_findings_parts) or report.summary[:100]
 
+        found = False
         for iv in interviews:
             if iv.get("interview_id") == report.interview_id:
                 iv["overall_score"] = report.overall_score
                 iv["recommendation"] = report.recommendation
                 iv["key_findings"] = key_findings
+                found = True
                 break
+        if not found:
+            _start_time = report.generated_at.isoformat()
+            _trigger_mode = "auto"
+            try:
+                _sj = self._session_json_path(candidate_id, report.interview_id)
+                _sd = json.loads(_sj.read_text(encoding="utf-8"))
+                _start_time = _sd.get("start_time", _start_time)
+                _trigger_mode = _sd.get("trigger_mode", _trigger_mode)
+            except Exception:
+                pass
+            interviews.insert(0, {
+                "interview_id": report.interview_id,
+                "start_time": _start_time,
+                "end_time": None,
+                "stage": "completed",
+                "trigger_mode": _trigger_mode,
+                "overall_score": report.overall_score,
+                "recommendation": report.recommendation,
+                "key_findings": key_findings,
+            })
         self._write_interviews_index(candidate_id, interviews)
 
         logger.info("save_eval_report done interview_id=%s", report.interview_id)

@@ -95,6 +95,22 @@ def setup_logging(
         error_handler.setFormatter(formatter)
         root.addHandler(error_handler)
 
+    if log_dir is not None:
+        log_path = Path(log_dir)
+        llm_log = log_path / "llm.log"
+        llm_handler = logging.handlers.RotatingFileHandler(
+            llm_log,
+            maxBytes=20 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
+        llm_handler.setLevel(logging.DEBUG)
+        llm_handler.addFilter(context_filter)
+        llm_handler.setFormatter(formatter)
+        llm_logger = logging.getLogger("src.llm.client")
+        llm_logger.setLevel(logging.DEBUG)
+        llm_logger.addHandler(llm_handler)
+
     for name, lvl in _THIRD_PARTY_LEVELS.items():
         logging.getLogger(name).setLevel(lvl)
 

@@ -108,7 +108,10 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     if controller is not None:
         session = await controller.get_session()
         if session is None or session.candidate.id != body.candidate_id:
-            session = await controller.create_session(body.candidate_id)
+            try:
+                session = await controller.create_session(body.candidate_id)
+            except SessionError as exc:
+                raise _session_err(exc)
 
     # Load interview brief
     brief: str = ""
@@ -119,9 +122,22 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     if not brief:
         brief = memory.get_brief(body.candidate_id)
 
+    # Load candidate history summary (best-effort: failure must not block candidate selection)
+    history_summary: str | None = None
+    try:
+        candidate_history = await memory.get_candidate_history(body.candidate_id)
+        if candidate_history:
+            history_summary = candidate_history.history_summary
+    except Exception:
+        logger.warning("Failed to load candidate history for %s, skipping", body.candidate_id, exc_info=True)
+
     # Update MainAgent context
     if main_agent is not None:
-        main_agent.set_candidate_context(candidate, interview_brief=brief)
+        main_agent.set_candidate_context(
+            candidate,
+            interview_brief=brief,
+            history_summary=history_summary,
+        )
 
     resume_markdown = await memory.get_resume_markdown(body.candidate_id)
 
@@ -170,7 +186,6 @@ async def upload_resume(
 
     safe_stem = _safe_stem(filename)
 
-    # 去重检查
     if not candidate_id and not overwrite:
         existing = await memory.get_candidate_by_name(safe_stem)
         if existing is not None:
@@ -201,9 +216,15 @@ async def upload_resume(
         )
 
     if session is None and controller is not None:
-        session = await controller.create_session(candidate_id)
+        try:
+            session = await controller.create_session(candidate_id)
+        except SessionError as exc:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)})
     elif session is not None and candidate_id and session.candidate.id != candidate_id:
-        session = await controller.create_session(candidate_id)
+        try:
+            session = await controller.create_session(candidate_id)
+        except SessionError as exc:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)})
     elif session is not None and not candidate_id:
         # 仅当当前 session 已绑定其它候选人（有姓名或 PDF 路径）时才重建，
         # 否则复用现有空 session 避免清空已积累的对话上下文。
@@ -331,10 +352,10 @@ async def start_interview(
     controller=Depends(_require_controller),
 ):
     bind_op("start_interview")
-    session = await controller.get_session()
-    if session is None:
-        session = await controller.create_session(body.candidate_id)
     try:
+        session = await controller.get_session()
+        if session is None:
+            session = await controller.create_session(body.candidate_id)
         await controller.start_interview()
     except SessionError as exc:
         raise _session_err(exc)
@@ -429,36 +450,46 @@ async def get_eval(request: Request, interview_id: str | None = None):
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
 
-    resp = await controller.eval_agent.handle_request(
-        AgentRequest(type="generate_eval", payload={}, session=session)
-    )
-    if not resp.success:
-        raise HTTPException(status_code=500, detail={"code": "eval_error", "message": resp.error})
+    eval_resp: Any = None
+    eval_error: str | None = None
+    try:
+        resp = await controller.eval_agent.handle_request(
+            AgentRequest(type="generate_eval", payload={}, session=session)
+        )
+        if not resp.success:
+            eval_error = resp.error
+        else:
+            eval_resp = resp
+    except Exception as exc:
+        eval_error = str(exc)
+        logger.exception("get_eval: eval_agent.handle_request raised")
+    finally:
+        # L5-5: close_session 失败重试 3 次，仍失败时附带 warning（评价数据不重新生成）。
+        close_warning: str | None = None
+        for attempt in range(3):
+            try:
+                await controller.close_session()
+                close_warning = None
+                break
+            except Exception as exc:
+                logger.warning(
+                    "get_eval: close_session attempt %d/3 failed: %s",
+                    attempt + 1,
+                    exc,
+                    exc_info=(attempt == 2),
+                )
+                close_warning = (
+                    "评价已生成，但会话关闭失败（已重试3次）。请刷新页面或重启服务再开始下一次面试。"
+                )
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+
+    if eval_error is not None:
+        raise HTTPException(status_code=500, detail={"code": "eval_error", "message": eval_error})
 
     # M4-2: EvalAgent 在持久化降级到 eval_orphans 时会在 data.save_warning 里写说明。
-    save_warning: str | None = resp.data.get("save_warning")
-
-    # L5-5: close_session 失败重试 3 次，仍失败时附带 warning（评价数据不重新生成）。
-    close_warning: str | None = None
-    for attempt in range(3):
-        try:
-            await controller.close_session()
-            close_warning = None
-            break
-        except Exception as exc:
-            logger.warning(
-                "get_eval: close_session attempt %d/3 failed: %s",
-                attempt + 1,
-                exc,
-                exc_info=(attempt == 2),
-            )
-            close_warning = (
-                "评价已生成，但会话关闭失败（已重试3次）。请刷新页面或重启服务再开始下一次面试。"
-            )
-            if attempt < 2:
-                await asyncio.sleep(0.5 * (attempt + 1))
-
-    result: dict[str, Any] = {"report": _to_dict(resp.data["report"])}
+    save_warning: str | None = eval_resp.data.get("save_warning")
+    result: dict[str, Any] = {"report": _to_dict(eval_resp.data["report"])}
     warnings = [w for w in (save_warning, close_warning) if w]
     if warnings:
         result["warning"] = " | ".join(warnings)
@@ -475,11 +506,11 @@ async def list_candidates(
     offset: int = 0,
 ):
     memory = _memory(request)
-    candidates = await memory.search_candidates(keyword=keyword, limit=limit + offset)
-    paged = candidates[offset : offset + limit]
+    total = await memory.count_candidates(keyword=keyword)
+    candidates = await memory.search_candidates(keyword=keyword, limit=limit, offset=offset)
     return {
-        "candidates": [_to_dict(c) for c in paged],
-        "total": len(candidates),
+        "candidates": [_to_dict(c) for c in candidates],
+        "total": total,
     }
 
 
