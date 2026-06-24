@@ -170,3 +170,51 @@ class TestMetrics:
         time.sleep(0.01)
         d = m.to_dict()
         assert d["uptime_sec"] >= 0.0
+
+    def test_record_asr_latency_stored(self):
+        m = Metrics.get()
+        m.record_asr_latency(120.0)
+        m.record_asr_latency(80.0)
+        assert len(m._asr_latency_samples) == 2
+
+    def test_asr_latency_p50_p99_in_to_dict(self):
+        m = Metrics.get()
+        for v in [100.0, 200.0, 300.0]:
+            m.record_asr_latency(v)
+        d = m.to_dict()
+        assert d["asr_latency_p50_ms"] is not None
+        assert d["asr_latency_p99_ms"] is not None
+
+    def test_asr_latency_none_when_no_samples(self):
+        m = Metrics.get()
+        d = m.to_dict()
+        assert d["asr_latency_p50_ms"] is None
+        assert d["asr_latency_p99_ms"] is None
+
+    def test_record_suggestion_trigger_auto(self):
+        m = Metrics.get()
+        m.record_suggestion_trigger("auto")
+        m.record_suggestion_trigger("auto")
+        assert m.suggestion_trigger_auto_count == 2
+        assert m.suggestion_trigger_manual_count == 0
+
+    def test_record_suggestion_trigger_manual(self):
+        m = Metrics.get()
+        m.record_suggestion_trigger("manual")
+        assert m.suggestion_trigger_manual_count == 1
+        assert m.suggestion_trigger_auto_count == 0
+
+    def test_suggestion_trigger_counts_in_to_dict(self):
+        m = Metrics.get()
+        m.record_suggestion_trigger("auto")
+        m.record_suggestion_trigger("manual")
+        d = m.to_dict()
+        assert d["suggestion_trigger_auto_count"] == 1
+        assert d["suggestion_trigger_manual_count"] == 1
+
+    def test_to_dict_contains_all_new_keys(self):
+        m = Metrics.get()
+        d = m.to_dict()
+        for key in ["asr_latency_p50_ms", "asr_latency_p99_ms",
+                    "suggestion_trigger_auto_count", "suggestion_trigger_manual_count"]:
+            assert key in d

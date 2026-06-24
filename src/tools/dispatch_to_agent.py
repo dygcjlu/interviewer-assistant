@@ -155,6 +155,10 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
             except Exception:
                 logger.exception("dispatch_to_agent: save_brief failed")
 
+        # 异步生成结构化问题清单（不阻塞主流程）
+        import asyncio
+        asyncio.create_task(_generate_questions_from_brief(cid, brief_text))
+
         session.interview_brief = brief_text
 
         if ctx.main_agent is not None:
@@ -171,3 +175,56 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 interview_brief=brief_text,
                 history_summary=history_summary,
             )
+
+
+async def _generate_questions_from_brief(candidate_id: str, brief_text: str) -> None:
+    """从面试简报生成结构化问题清单，异步执行，不影响主流程。"""
+    if ctx.memory_module is None:
+        return
+    try:
+        from ..config import get_settings
+        from ..llm.client import OpenAICompatibleClient
+        from ..models.message import Message
+        import json, uuid
+
+        settings = get_settings()
+        llm = OpenAICompatibleClient(settings)
+
+        prompt = (
+            "根据以下面试简报，生成结构化面试问题清单。\n"
+            "要求：\n"
+            "1. 提取 5–10 个关键面试问题\n"
+            "2. 每个问题包含：问题文本（question）和预期考察点（focus）\n"
+            "3. 以 JSON 数组输出，格式如下：\n"
+            '[{"question": "...", "focus": "..."}, ...]\n\n'
+            f"面试简报：\n{brief_text}"
+        )
+
+        resp = await llm.chat(
+            [Message(role="user", content=prompt)],
+            temperature=0.3,
+        )
+        raw = resp.content or ""
+
+        # 提取 JSON
+        start = raw.find("[")
+        end = raw.rfind("]")
+        if start == -1 or end == -1:
+            raise ValueError("no JSON array in response")
+        items = json.loads(raw[start:end + 1])
+
+        questions = [
+            {
+                "id": str(uuid.uuid4())[:8],
+                "question": str(item.get("question", "")),
+                "focus": str(item.get("focus", "")),
+                "covered": False,
+                "covered_by": "",
+            }
+            for item in items
+            if item.get("question")
+        ]
+        ctx.memory_module.save_questions(candidate_id, questions)
+        logger.info("_generate_questions_from_brief done candidate_id=%s count=%d", candidate_id, len(questions))
+    except Exception:
+        logger.exception("_generate_questions_from_brief failed candidate_id=%s", candidate_id)

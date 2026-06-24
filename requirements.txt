@@ -20,6 +20,9 @@ aiofiles>=23.2.1
 pymupdf>=1.24.0
 pymupdf4llm>=1.27.2
 
+# PDF export
+reportlab>=4.0.0
+
 # Configuration
 pydantic-settings>=2.3.0
 pyyaml>=6.0.1

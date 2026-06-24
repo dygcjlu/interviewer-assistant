@@ -787,6 +787,42 @@ class MemoryModule:
             logger.exception("get_brief failed for %s", candidate_id)
             return ""
 
+    # ─── 结构化问题清单 ────────────────────────────────────────────────
+
+    def _questions_path(self, candidate_id: str) -> Path:
+        return self._candidate_dir(candidate_id) / "questions.json"
+
+    def save_questions(self, candidate_id: str, questions: list) -> None:
+        """原子写入结构化问题清单（list[dict]）。"""
+        import json
+        path = self._questions_path(candidate_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(path, json.dumps(questions, ensure_ascii=False, indent=2))
+        logger.info("save_questions done candidate_id=%s count=%d", candidate_id, len(questions))
+
+    def get_questions(self, candidate_id: str) -> list:
+        """读取问题清单，不存在时返回空列表。"""
+        import json
+        path = self._questions_path(candidate_id)
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("get_questions failed for %s", candidate_id)
+            return []
+
+    def update_question_coverage(self, candidate_id: str, question_id: str, covered: bool, covered_by: str = "manual") -> bool:
+        """更新单个问题的覆盖状态。返回是否找到该问题。"""
+        questions = self.get_questions(candidate_id)
+        for q in questions:
+            if q.get("id") == question_id:
+                q["covered"] = covered
+                q["covered_by"] = covered_by if covered else ""
+                self.save_questions(candidate_id, questions)
+                return True
+        return False
+
     async def get_latest_eval_report(self, candidate_id: str) -> "EvalReport | None":
         interviews = self._read_interviews_index(candidate_id)
         for iv in interviews:

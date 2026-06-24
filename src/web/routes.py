@@ -425,6 +425,8 @@ async def trigger_suggest(controller=Depends(_require_controller)):
     session = await controller.get_session()
     if session is None:
         raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
+    from ..utils.metrics import Metrics
+    Metrics.get().record_suggestion_trigger("manual")
     resp = await controller.interview_agent.handle_request(
         AgentRequest(type="trigger_suggestion", payload={}, session=session)
     )
@@ -496,6 +498,101 @@ async def get_eval(request: Request, interview_id: str | None = None):
     return result
 
 
+@router.get("/interview/{interview_id}/report/export")
+async def export_report_pdf(interview_id: str, request: Request):
+    """将指定面试的评价报告导出为 PDF 文件供浏览器下载。"""
+    from fastapi.responses import Response
+    from ..utils.pdf_export import build_report_pdf
+
+    memory = _memory(request)
+    report = await memory.get_eval_report(interview_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "评价报告不存在"})
+
+    candidate_name = ""
+    try:
+        candidate = await memory.get_candidate(report.interview_id.split("-")[0] if "-" in report.interview_id else "")
+        if candidate:
+            candidate_name = candidate.name or ""
+    except Exception:
+        pass
+
+    pdf_bytes = build_report_pdf(report, candidate_name)
+    filename = f"eval_report_{interview_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── structured questions ──────────────────────────────────────────────────────
+
+@router.get("/interview/questions")
+async def get_questions(request: Request, candidate_id: str = Query(...)):
+    memory = _memory(request)
+    questions = memory.get_questions(candidate_id)
+    return {"questions": questions}
+
+
+@router.patch("/interview/questions/{question_id}")
+async def update_question(request: Request, question_id: str, candidate_id: str = Query(...)):
+    body = await request.json()
+    covered = bool(body.get("covered", False))
+    memory = _memory(request)
+    found = memory.update_question_coverage(candidate_id, question_id, covered, covered_by="manual")
+    if not found:
+        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "问题不存在"})
+    return {"updated": True, "question_id": question_id, "covered": covered}
+
+
+@router.post("/interview/questions/check-coverage")
+async def check_question_coverage(request: Request):
+    """用 LLM 分析一轮对话，自动标记已覆盖问题。"""
+    body = await request.json()
+    candidate_id: str = body.get("candidate_id", "")
+    round_text: str = body.get("round_text", "")
+    if not candidate_id or not round_text:
+        raise HTTPException(status_code=422, detail={"code": "missing_fields", "message": "candidate_id 和 round_text 为必填项"})
+
+    memory = _memory(request)
+    questions = memory.get_questions(candidate_id)
+    uncovered = [q for q in questions if not q.get("covered")]
+    if not uncovered:
+        return {"updated": [], "questions": questions}
+
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        return {"updated": [], "questions": questions}
+
+    updated_ids: list[str] = []
+    try:
+        from ..llm.client import OpenAICompatibleClient
+        from ..models.message import Message
+        import json as _json
+
+        llm = OpenAICompatibleClient(settings)
+        q_list = "\n".join(f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）' for i, q in enumerate(uncovered))
+        prompt = (
+            f"以下是本轮对话记录：\n{round_text}\n\n"
+            f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
+            "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
+            "以 JSON 数组返回已覆盖问题的 ID 列表，格式：[\"id1\", \"id2\"]，未覆盖任何问题则返回 []。"
+        )
+        resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.1)
+        raw = resp.content or ""
+        start, end = raw.find("["), raw.rfind("]")
+        if start != -1 and end != -1:
+            covered_ids = _json.loads(raw[start:end + 1])
+            for qid in covered_ids:
+                if memory.update_question_coverage(candidate_id, str(qid), True, covered_by="auto"):
+                    updated_ids.append(str(qid))
+    except Exception:
+        logger.exception("check_question_coverage: LLM call failed")
+
+    return {"updated": updated_ids, "questions": memory.get_questions(candidate_id)}
+
+
 # ── candidates ────────────────────────────────────────────────────────────────
 
 @router.get("/candidates")
@@ -524,6 +621,108 @@ async def get_candidate_history(request: Request, candidate_id: str):
     return {
         "candidate": _to_dict(candidate),
         "interviews": _to_dict(history.past_interviews) if history else [],
+    }
+
+
+@router.get("/candidates/compare")
+async def compare_candidates(request: Request, ids: str = ""):
+    """横向对比多名候选人的 EvalReport，返回评分表格和 LLM 生成的对比摘要。
+
+    ids: 逗号分隔的候选人 ID，2–5 个。
+    """
+    bind_op("compare_candidates")
+    if not ids:
+        raise HTTPException(status_code=422, detail={"code": "missing_ids", "message": "请提供候选人 ID（ids 参数）"})
+
+    id_list = [i.strip() for i in ids.split(",") if i.strip()]
+    if len(id_list) < 2:
+        raise HTTPException(status_code=422, detail={"code": "too_few", "message": "至少选择 2 名候选人进行对比"})
+    if len(id_list) > 5:
+        raise HTTPException(status_code=422, detail={"code": "too_many", "message": "最多对比 5 名候选人"})
+
+    memory = _memory(request)
+    settings = getattr(request.app.state, "settings", None)
+
+    rows: list[dict] = []
+    missing_report: list[str] = []
+
+    for cid in id_list:
+        candidate = await memory.get_candidate(cid)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "message": f"候选人 {cid} 不存在"})
+        report = await memory.get_latest_eval_report(cid)
+        rows.append({
+            "id": cid,
+            "name": candidate.name or cid,
+            "report": _to_dict(report) if report else None,
+        })
+        if report is None:
+            missing_report.append(candidate.name or cid)
+
+    # 构造评分对比表格
+    all_dims: list[str] = []
+    for row in rows:
+        if row["report"]:
+            for d in row["report"].get("dimensions", []):
+                dim_name = d.get("dimension", "")
+                if dim_name and dim_name not in all_dims:
+                    all_dims.append(dim_name)
+
+    score_table: list[dict] = []
+    for row in rows:
+        entry: dict = {"name": row["name"], "overall_score": None, "dimensions": {}}
+        if row["report"]:
+            entry["overall_score"] = row["report"].get("overall_score")
+            for d in row["report"].get("dimensions", []):
+                entry["dimensions"][d.get("dimension", "")] = d.get("score")
+        score_table.append(entry)
+
+    # LLM 生成对比摘要
+    llm_summary = ""
+    try:
+        from ..llm.client import OpenAICompatibleClient
+        from ..models.message import Message
+
+        if settings is None:
+            raise RuntimeError("settings not available")
+
+        report_texts = []
+        for row in rows:
+            if row["report"]:
+                r = row["report"]
+                dims_text = "; ".join(
+                    f"{d.get('dimension')}={d.get('score')}" for d in r.get("dimensions", [])
+                )
+                report_texts.append(
+                    f"【{row['name']}】综合={r.get('overall_score')} | {dims_text} | "
+                    f"优势：{', '.join(r.get('strengths', [])[:2])} | "
+                    f"劣势：{', '.join(r.get('weaknesses', [])[:2])} | "
+                    f"建议：{r.get('recommendation', '')}"
+                )
+            else:
+                report_texts.append(f"【{row['name']}】暂无评价报告")
+
+        prompt = (
+            "以下是多名候选人的面试评价摘要，请生成横向对比分析，包括：\n"
+            "1. 各候选人综合能力排序（附简短理由）\n"
+            "2. 各自核心优势与短板对比\n"
+            "3. 岗位匹配度建议（谁最适合录用）\n\n"
+            + "\n".join(report_texts)
+        )
+
+        llm = OpenAICompatibleClient(settings)
+        resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.3)
+        llm_summary = resp.content or ""
+    except Exception:
+        logger.exception("compare_candidates: LLM summary failed")
+        llm_summary = "（对比摘要生成失败，请查看评分表格）"
+
+    return {
+        "candidates": [{"id": r["id"], "name": r["name"], "has_report": r["report"] is not None} for r in rows],
+        "missing_report": missing_report,
+        "dimensions": all_dims,
+        "score_table": score_table,
+        "llm_summary": llm_summary,
     }
 
 
@@ -688,3 +887,14 @@ async def get_current_session(request: Request):
             ),
         }
     }
+
+
+@router.get("/interview/last-round")
+async def get_last_round(controller=Depends(_require_controller)):
+    """返回当前会话最近一轮对话的文本（用于覆盖检测）。"""
+    session = await controller.get_session()
+    if session is None or not session.rounds:
+        return {"round_text": ""}
+    last = session.rounds[-1]
+    text = f"面试官：{last.interviewer_text}\n候选人：{last.candidate_text}"
+    return {"round_text": text}

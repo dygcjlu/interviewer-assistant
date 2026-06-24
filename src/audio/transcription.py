@@ -37,6 +37,7 @@ class TranscriptionManager:
         self._candidate_text: str = ""
 
         self._silence_task: asyncio.Task | None = None
+        self._candidate_utterance_start: float | None = None
 
     # ── public interface ──────────────────────────────────────────────────────
 
@@ -63,6 +64,14 @@ class TranscriptionManager:
 
         # 3. Accumulate text + trigger logic
         if segment.source == "candidate":
+            if self._candidate_utterance_start is None:
+                self._candidate_utterance_start = segment.timestamp.timestamp() if not segment.is_final else None
+            if segment.is_final:
+                if self._candidate_utterance_start is not None:
+                    elapsed_ms = (segment.timestamp.timestamp() - self._candidate_utterance_start) * 1000
+                    from ..utils.metrics import Metrics
+                    Metrics.get().record_asr_latency(elapsed_ms)
+                self._candidate_utterance_start = None
             self._candidate_text += (" " if self._candidate_text else "") + segment.text
             self._suggestion_trigger.on_candidate_segment(segment)
 

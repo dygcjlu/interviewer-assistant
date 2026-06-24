@@ -1,8 +1,53 @@
 # Interviewer Assistant
 
+[![CI](https://github.com/dygcjlu/interviewer-assistant/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/dygcjlu/interviewer-assistant/actions/workflows/ci.yml)
+
 本地运行的 AI 面试辅助工具，面向单个面试官管理多名候选人。它可以解析简历、生成面试问题、实时展示双声道转写、给出追问建议，并在面试结束后生成评价报告。
 
+> **平台限制**：生产音频采集依赖 Windows WASAPI，**当前仅支持 Windows**。非 Windows 用户可通过 `MOCK_AUDIO=true` 使用脚本回放模式体验完整流程。
+
 > 当前项目主要面向中文技术面试场景。真实候选人简历、录音、数据库、日志和面试官偏好记忆都默认保存在本地，不应提交到 Git。
+
+## 演示
+
+> GIF 演示（上传简历 → 生成面试题 → 实时转写 → 追问建议 → 生成评价报告）待录制。
+
+## 系统架构
+
+```mermaid
+graph TD
+    User["用户 (面试官)"]
+    UI["前端 NiceGUI\n(src/web/ui.py)"]
+    REST["REST API\n(src/web/routes.py)"]
+    WS["WebSocket\n(src/web/websocket.py)"]
+    MA["MainAgent"]
+    IC["InterviewController\n面试状态机"]
+    RA["ResumeAgent"]
+    IA["InterviewAgent"]
+    EA["EvalAgent"]
+    Audio["AudioManager\n(WASAPI + 百度/讯飞 ASR)"]
+    TM["TranscriptionManager"]
+    LLM["LLMClient\n(OpenAI 兼容)"]
+    Mem["MemoryModule\n(candidates/ 目录)"]
+
+    User --> UI
+    UI -->|POST /api/chat| REST
+    UI --> WS
+    REST -->|对话| MA
+    REST -->|面试控制| IC
+    MA --> RA
+    IC --> IA
+    IC --> EA
+    IC --> Audio
+    Audio --> TM
+    TM --> IA
+    RA --> LLM
+    IA --> LLM
+    EA --> LLM
+    MA --> LLM
+    IC --> Mem
+    EA --> Mem
+```
 
 ## 核心功能
 
