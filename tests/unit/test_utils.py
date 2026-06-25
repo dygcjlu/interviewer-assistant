@@ -97,8 +97,8 @@ class TestWriteAtomic:
 @pytest.mark.unit
 class TestMetrics:
     def setup_method(self):
-        # 每次测试重置单例
-        Metrics._instance = None
+        """每个测试前重置 Metrics 单例"""
+        Metrics.reset()
 
     def test_get_returns_same_instance(self):
         m1 = Metrics.get()
@@ -218,3 +218,15 @@ class TestMetrics:
         for key in ["asr_latency_p50_ms", "asr_latency_p99_ms",
                     "suggestion_trigger_auto_count", "suggestion_trigger_manual_count"]:
             assert key in d
+
+    def test_metrics_reset(self):
+        """验证 reset() 方法清空单例状态"""
+        metrics = Metrics.get()
+        metrics.record_asr_latency(1.5)
+
+        Metrics.reset()
+
+        new_metrics = Metrics.get()
+        assert new_metrics is not metrics  # 新实例
+        d = new_metrics.to_dict()
+        assert d["asr_latency_p50_ms"] is None  # 无样本

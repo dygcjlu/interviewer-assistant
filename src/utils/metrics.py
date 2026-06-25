@@ -36,6 +36,14 @@ class Metrics:
             cls._instance = cls()
         return cls._instance
 
+    @classmethod
+    def reset(cls) -> None:
+        """重置单例实例（仅用于测试隔离）
+
+        警告：此方法仅供测试使用，生产代码不应调用。
+        """
+        cls._instance = None
+
     def record_asr_latency(self, elapsed_ms: float) -> None:
         if elapsed_ms > 0:
             self._asr_latency_samples.append(elapsed_ms)
