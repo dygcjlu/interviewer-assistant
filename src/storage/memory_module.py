@@ -991,6 +991,8 @@ class MemoryModule:
                 recommendation=meta.get("recommendation") or "",
                 summary=body.strip(),
                 generated_at=_parse_dt(meta.get("generated_at")) or datetime.now(),
+                candidate_id=meta.get("candidate_id", ""),
+                question_coverage=meta.get("question_coverage", ""),
             )
         except Exception:
             logger.exception("get_eval_report failed for %s", interview_id)
