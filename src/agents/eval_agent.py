@@ -166,6 +166,7 @@ class EvalAgent(BaseAgent):
         report = EvalReport(
             id=str(uuid.uuid4()),
             interview_id=session.id,
+            candidate_id=session.candidate.id,
             dimensions=[
                 DimensionScore(
                     dimension=str(d.get("dimension", "综合")),

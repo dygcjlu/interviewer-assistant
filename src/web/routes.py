@@ -510,12 +510,10 @@ async def export_report_pdf(interview_id: str, request: Request):
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "评价报告不存在"})
 
     candidate_name = ""
-    try:
-        candidate = await memory.get_candidate(report.interview_id.split("-")[0] if "-" in report.interview_id else "")
+    if report.candidate_id:
+        candidate = await memory.get_candidate(report.candidate_id)
         if candidate:
             candidate_name = candidate.name or ""
-    except Exception:
-        pass
 
     pdf_bytes = build_report_pdf(report, candidate_name)
     filename = f"eval_report_{interview_id}.pdf"
