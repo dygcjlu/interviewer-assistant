@@ -544,6 +544,60 @@ async def update_question(request: Request, question_id: str, candidate_id: str 
     return {"updated": True, "question_id": question_id, "covered": covered}
 
 
+async def _auto_check_coverage(
+    memory,
+    llm_client,
+    candidate_id: str,
+    session,
+):
+    """自动检测问题覆盖情况（后端触发）。"""
+    try:
+        questions = memory.get_questions(candidate_id)
+        if not questions:
+            return
+
+        uncovered = [q for q in questions if not q.get("covered")]
+        if not uncovered:
+            return
+
+        # 获取完整对话历史
+        rounds = session.rounds
+        if not rounds:
+            return
+
+        # 构建对话文本
+        from ..models.message import Message
+        import json as _json
+
+        round_text = "\n\n".join(
+            f"面试官: {r.interviewer_text}\n候选人: {r.candidate_text}"
+            for r in rounds
+        )
+
+        q_list = "\n".join(
+            f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）'
+            for i, q in enumerate(uncovered)
+        )
+        prompt = (
+            f"以下是本轮对话记录：\n{round_text}\n\n"
+            f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
+            "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
+            "以 JSON 数组返回已覆盖问题的 ID 列表，格式：[\"id1\", \"id2\"]，未覆盖任何问题则返回 []。"
+        )
+
+        resp = await llm_client.chat([Message(role="user", content=prompt)], temperature=0.1)
+        raw = resp.content or ""
+        start, end = raw.find("["), raw.rfind("]")
+        if start != -1 and end != -1:
+            covered_ids = _json.loads(raw[start:end + 1])
+            for qid in covered_ids:
+                memory.update_question_coverage(candidate_id, str(qid), True, covered_by="auto")
+
+    except Exception as e:
+        # 静默失败，不影响主流程
+        logger.warning(f"Auto coverage check failed: {e}")
+
+
 @router.post("/interview/questions/check-coverage")
 async def check_question_coverage(request: Request):
     """用 LLM 分析一轮对话，自动标记已覆盖问题。"""

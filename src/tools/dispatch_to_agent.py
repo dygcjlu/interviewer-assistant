@@ -1,6 +1,7 @@
 """dispatch_to_agent — 通用 Agent 分发工具，将任务委托给指定 Agent 执行。"""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -96,6 +97,19 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
         logger.warning("dispatch_to_agent: no active session, skipping side effects")
         return
 
+    # 追问建议生成后触发覆盖检测
+    if result_type == "suggestion":
+        if ctx.memory_module is not None and ctx.main_agent is not None:
+            from ..web.routes import _auto_check_coverage
+            asyncio.create_task(
+                _auto_check_coverage(
+                    memory=ctx.memory_module,
+                    llm_client=ctx.main_agent._llm,
+                    candidate_id=session.candidate.id,
+                    session=session
+                )
+            )
+
     if result_type == "parse_done":
         profile_data = result.get("profile") or {}
         if profile_data:
@@ -156,7 +170,6 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 logger.exception("dispatch_to_agent: save_brief failed")
 
         # 异步生成结构化问题清单（不阻塞主流程）
-        import asyncio
         asyncio.create_task(_generate_questions_from_brief(cid, brief_text))
 
         session.interview_brief = brief_text
