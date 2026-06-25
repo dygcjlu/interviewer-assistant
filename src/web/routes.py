@@ -569,7 +569,11 @@ async def check_question_coverage(request: Request):
         from ..models.message import Message
         import json as _json
 
-        llm = OpenAICompatibleClient(settings)
+        # 使用注入的 llm_client，fallback 到直接实例化
+        llm = getattr(request.app.state, "llm_client", None)
+        if not llm:
+            llm = OpenAICompatibleClient(settings)
+
         q_list = "\n".join(f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）' for i, q in enumerate(uncovered))
         prompt = (
             f"以下是本轮对话记录：\n{round_text}\n\n"
@@ -684,6 +688,11 @@ async def compare_candidates(request: Request, ids: str = ""):
         if settings is None:
             raise RuntimeError("settings not available")
 
+        # 使用注入的 llm_client，fallback 到直接实例化
+        llm = getattr(request.app.state, "llm_client", None)
+        if not llm:
+            llm = OpenAICompatibleClient(settings)
+
         report_texts = []
         for row in rows:
             if row["report"]:
@@ -708,7 +717,6 @@ async def compare_candidates(request: Request, ids: str = ""):
             + "\n".join(report_texts)
         )
 
-        llm = OpenAICompatibleClient(settings)
         resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.3)
         llm_summary = resp.content or ""
     except Exception:

@@ -187,8 +187,13 @@ async def _generate_questions_from_brief(candidate_id: str, brief_text: str) -> 
         from ..models.message import Message
         import json, uuid
 
-        settings = get_settings()
-        llm = OpenAICompatibleClient(settings)
+        # 使用 ctx.main_agent 的 llm_client，fallback 到直接实例化
+        llm = None
+        if ctx.main_agent is not None:
+            llm = ctx.main_agent._llm
+        if not llm:
+            settings = get_settings()
+            llm = OpenAICompatibleClient(settings)
 
         prompt = (
             "根据以下面试简报，生成结构化面试问题清单。\n"

@@ -217,6 +217,7 @@ def _build_test_app(tmp_path: Path, mock_llm: MockLLMClient):
             "candidates/",
         ]
 
+        app.state.llm_client = mock_llm
         app.state.controller = controller
         app.state.main_agent = main_agent
         app.state.memory_module = memory_module

@@ -214,6 +214,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Inject dependencies into NiceGUI UI module and FastAPI app state
     _web_ui.set_dependencies(settings)
     _web_ui.set_startup_warnings(startup_warnings)
+    app.state.llm_client = llm_client
     app.state.controller = controller
     app.state.main_agent = main_agent
     app.state.memory_module = memory_module
