@@ -2,6 +2,8 @@
 comet_change: add-volc-asr
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-09-add-volc-asr
+status: final
 ---
 
 # Design Doc: 火山引擎大模型实时语音识别（Volc ASR）

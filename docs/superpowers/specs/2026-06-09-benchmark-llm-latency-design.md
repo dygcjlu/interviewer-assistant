@@ -2,6 +2,8 @@
 comet_change: benchmark-llm-latency
 role: technical-design
 canonical_spec: openspec
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 # LLM 延迟基准测试脚本设计
@@ -10,6 +12,8 @@ canonical_spec: openspec
 
 追问建议（InterviewAgent）当前使用 `qwen3.7-plus` 单次 LLM 调用耗时 25s+，需要一个基准测试脚本对多平台、多模型、多参数配置进行客观的延迟对比，支撑模型选型决策。
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## 核心数据结构
@@ -42,6 +46,8 @@ class BenchmarkResult:
     error: str | None                # 异常信息；成功时为 None
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## 测试矩阵（18 个配置）
@@ -74,6 +80,8 @@ class BenchmarkResult:
 | ds-v4-flash (官方) | `deepseek-v4-flash` | 无 |
 | ds-v4-flash+think (官方) | `deepseek-v4-flash` | `extra_body={"thinking":{"type":"enabled"}}` + 不传 temperature + `reasoning_effort="high"` |
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## 核心实现逻辑
@@ -154,6 +162,8 @@ async def run_streaming_benchmark(
 | 百炼 Qwen / DeepSeek / 万擎 / Kimi | `{"enable_thinking": True}` | False | None |
 | DeepSeek 官方（思考） | `{"thinking": {"type": "enabled"}}` | True | "high" |
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## 并发策略：完全串行
@@ -163,6 +173,8 @@ async def run_streaming_benchmark(
 2. 避免触发速率限制（尤其是 DeepSeek 官方 API）
 3. 支持"即时打印当前结果"的观察体验
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## Prompt 构造
@@ -175,6 +187,8 @@ Prompt 内嵌于脚本，构成：
 
 总计约 5.3KB，接近真实追问场景。
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## 输出设计
@@ -197,6 +211,8 @@ Prompt 内嵌于脚本，构成：
 └─────────────────────────────┴─────────┴──────────┴──────────┴───────────┴──────────────────┘
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## CLI 参数
@@ -210,6 +226,8 @@ python scripts/benchmark_llm.py
   [--timeout SEC]        # 单次超时（默认 60）
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## 错误处理
@@ -219,6 +237,8 @@ python scripts/benchmark_llm.py
 - 不中断后续测试
 - 终端输出中错误行以红色显示
 
+archived-with: 2026-06-09-benchmark-llm-latency
+status: final
 ---
 
 ## 文件清单

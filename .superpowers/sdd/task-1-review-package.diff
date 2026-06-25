@@ -1,0 +1,89 @@
+a9765a5 fix: add Metrics.reset() for test isolation
+ src/utils/metrics.py     |  8 ++++++++
+ tests/unit/test_utils.py | 16 ++++++++++++++--
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+diff --git a/src/utils/metrics.py b/src/utils/metrics.py
+index a270a61..5de2fdf 100644
+--- a/src/utils/metrics.py
++++ b/src/utils/metrics.py
+@@ -29,20 +29,28 @@ class Metrics:
+     suggestion_trigger_manual_count: int = 0
+ 
+     _started_at: float = field(default_factory=time.time)
+ 
+     @classmethod
+     def get(cls) -> "Metrics":
+         if cls._instance is None:
+             cls._instance = cls()
+         return cls._instance
+ 
++    @classmethod
++    def reset(cls) -> None:
++        """重置单例实例（仅用于测试隔离）
++
++        警告：此方法仅供测试使用，生产代码不应调用。
++        """
++        cls._instance = None
++
+     def record_asr_latency(self, elapsed_ms: float) -> None:
+         if elapsed_ms > 0:
+             self._asr_latency_samples.append(elapsed_ms)
+             if len(self._asr_latency_samples) > self._MAX_SAMPLES:
+                 self._asr_latency_samples = self._asr_latency_samples[-self._MAX_SAMPLES:]
+ 
+     def record_suggestion_trigger(self, mode: str) -> None:
+         if mode == "auto":
+             self.suggestion_trigger_auto_count += 1
+         else:
+diff --git a/tests/unit/test_utils.py b/tests/unit/test_utils.py
+index 47697a9..659ec93 100644
+--- a/tests/unit/test_utils.py
++++ b/tests/unit/test_utils.py
+@@ -90,22 +90,22 @@ class TestWriteAtomic:
+         write_atomic(target, "")
+         assert target.read_text(encoding="utf-8") == ""
+ 
+ 
+ # ── Metrics ───────────────────────────────────────────────────────────────────
+ 
+ 
+ @pytest.mark.unit
+ class TestMetrics:
+     def setup_method(self):
+-        # 每次测试重置单例
+-        Metrics._instance = None
++        """每个测试前重置 Metrics 单例"""
++        Metrics.reset()
+ 
+     def test_get_returns_same_instance(self):
+         m1 = Metrics.get()
+         m2 = Metrics.get()
+         assert m1 is m2
+ 
+     def test_initial_counters_are_zero(self):
+         m = Metrics.get()
+         assert m.requests_total == 0
+         assert m.errors_total == 0
+@@ -211,10 +211,22 @@ class TestMetrics:
+         d = m.to_dict()
+         assert d["suggestion_trigger_auto_count"] == 1
+         assert d["suggestion_trigger_manual_count"] == 1
+ 
+     def test_to_dict_contains_all_new_keys(self):
+         m = Metrics.get()
+         d = m.to_dict()
+         for key in ["asr_latency_p50_ms", "asr_latency_p99_ms",
+                     "suggestion_trigger_auto_count", "suggestion_trigger_manual_count"]:
+             assert key in d
++
++    def test_metrics_reset(self):
++        """验证 reset() 方法清空单例状态"""
++        metrics = Metrics.get()
++        metrics.record_asr_latency(1.5)
++
++        Metrics.reset()
++
++        new_metrics = Metrics.get()
++        assert new_metrics is not metrics  # 新实例
++        d = new_metrics.to_dict()
++        assert d["asr_latency_p50_ms"] is None  # 无样本

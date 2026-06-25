@@ -98,6 +98,12 @@ class EvalAgent(BaseAgent):
             len(session.rounds),
         )
 
+        # 计算问题覆盖率
+        questions = self._memory_module.get_questions(session.candidate.id)
+        total_questions = len(questions) if questions else 0
+        covered_count = sum(1 for q in questions if q.get("covered")) if questions else 0
+        coverage_text = f"已覆盖 {covered_count}/{total_questions}" if total_questions > 0 else ""
+
         user_memory = self._read_user_memory()
         base_messages = self._build_base_messages(session, user_memory)
 
@@ -116,7 +122,7 @@ class EvalAgent(BaseAgent):
                 estimated_tokens,
             )
             try:
-                result_text = await self._eval_single(base_messages, session.rounds)
+                result_text = await self._eval_single(base_messages, session.rounds, coverage_text)
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 logger.exception(
@@ -131,7 +137,7 @@ class EvalAgent(BaseAgent):
                 estimated_tokens,
             )
             try:
-                result_text = await self._eval_chunked(base_messages, session.rounds)
+                result_text = await self._eval_chunked(base_messages, session.rounds, coverage_text)
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 logger.exception(
@@ -182,6 +188,7 @@ class EvalAgent(BaseAgent):
             weaknesses=list(data.get("weaknesses", [])),
             recommendation=str(data.get("recommendation", "hire")),
             summary=str(data.get("summary", result_text[:500])),
+            question_coverage=coverage_text,
             generated_at=datetime.now(),
         )
 
@@ -265,23 +272,25 @@ class EvalAgent(BaseAgent):
         self,
         base_messages: list[Message],
         rounds: list[ConversationRound],
+        coverage_text: str = "",
     ) -> str:
         """单次 LLM 调用路径：全量对话直接放入 user message。"""
         conversation = _format_rounds(rounds)
         messages = list(base_messages)
-        messages.append(Message(
-            role="user",
-            content=(
-                f"以下是完整的面试对话记录（共 {len(rounds)} 轮）：\n\n{conversation}\n\n"
-                + _EVAL_OUTPUT_INSTRUCTIONS
-            ),
-        ))
+
+        content = f"以下是完整的面试对话记录（共 {len(rounds)} 轮）：\n\n{conversation}\n\n"
+        if coverage_text:
+            content += f"问题覆盖情况：{coverage_text}\n\n"
+        content += _EVAL_OUTPUT_INSTRUCTIONS
+
+        messages.append(Message(role="user", content=content))
         return await self._run_with_tools(messages)
 
     async def _eval_chunked(
         self,
         base_messages: list[Message],
         rounds: list[ConversationRound],
+        coverage_text: str = "",
     ) -> str:
         """分块 map-reduce 路径：先对每块局部分析，再汇总生成完整报告。"""
         total = len(rounds)
@@ -334,15 +343,16 @@ class EvalAgent(BaseAgent):
         # Reduce 阶段：汇总生成最终报告
         all_analyses = "\n\n".join(partial_analyses)
         messages = list(base_messages)
-        messages.append(Message(
-            role="user",
-            content=(
-                f"以下是对候选人面试各阶段的逐段分析结果（共 {total} 轮，分 {chunk_count} 段）：\n\n"
-                f"{all_analyses}\n\n"
-                "请综合以上所有分析，生成完整面试评价报告。\n"
-                + _EVAL_OUTPUT_INSTRUCTIONS
-            ),
-        ))
+
+        content = (
+            f"以下是对候选人面试各阶段的逐段分析结果（共 {total} 轮，分 {chunk_count} 段）：\n\n"
+            f"{all_analyses}\n\n"
+        )
+        if coverage_text:
+            content += f"问题覆盖情况：{coverage_text}\n\n"
+        content += "请综合以上所有分析，生成完整面试评价报告。\n" + _EVAL_OUTPUT_INSTRUCTIONS
+
+        messages.append(Message(role="user", content=content))
         logger.info("EvalAgent chunked reduce phase start chunks=%d", chunk_count)
         return await self._run_with_tools(messages)
 

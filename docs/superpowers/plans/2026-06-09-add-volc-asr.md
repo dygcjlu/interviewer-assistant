@@ -2,6 +2,7 @@
 change: add-volc-asr
 design-doc: docs/superpowers/specs/2026-06-09-add-volc-asr-design.md
 base-ref: 6824645f2057fa684c91ff009c2f8053e38323ce
+archived-with: 2026-06-09-add-volc-asr
 ---
 
 # Add Volc (ByteDance) Realtime ASR Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 6824645f2057fa684c91ff009c2f8053e38323ce
 
 **Tech Stack:** Python 3.12, `websockets` (already in requirements), `struct`/`json`/`uuid`/`gzip` stdlib — no new PyPI dependencies.
 
+archived-with: 2026-06-09-add-volc-asr
 ---
 
 ### Task 1: Config — Add Volc credentials to Settings
@@ -65,6 +67,7 @@ base-ref: 6824645f2057fa684c91ff009c2f8053e38323ce
   git commit -m "feat(config): add VOLC_APP_KEY / VOLC_ACCESS_KEY / VOLC_RESOURCE_ID settings"
   ```
 
+archived-with: 2026-06-09-add-volc-asr
 ---
 
 ### Task 2: Binary helpers — TDD for frame encoding/decoding
@@ -416,6 +419,7 @@ This task creates the three pure functions that implement the Volc binary protoc
   git commit -m "feat(volc-stt): add binary frame helpers with unit tests"
   ```
 
+archived-with: 2026-06-09-add-volc-asr
 ---
 
 ### Task 3: VolcRealtimeSTT class — TDD for class behavior
@@ -736,6 +740,7 @@ This task creates the three pure functions that implement the Volc binary protoc
   git commit -m "feat(volc-stt): implement VolcRealtimeSTT class with unit tests"
   ```
 
+archived-with: 2026-06-09-add-volc-asr
 ---
 
 ### Task 4: Factory wiring — Add volc branch to main.py
@@ -801,6 +806,7 @@ This task creates the three pure functions that implement the Volc binary protoc
   git commit -m "feat(main): add STT_ENGINE=volc factory branch for VolcRealtimeSTT"
   ```
 
+archived-with: 2026-06-09-add-volc-asr
 ---
 
 ## Verification Checklist

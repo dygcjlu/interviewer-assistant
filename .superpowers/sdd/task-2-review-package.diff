@@ -1,0 +1,309 @@
+ea60088 feat: add candidate_id and question_coverage to EvalReport
+ src/models/evaluation.py                |   2 +
+ src/storage/memory_module.py            |   2 +
+ tests/unit/test_eval_report_model.py    |  99 +++++++++++++++++++++
+ tests/unit/test_memory_module_compat.py | 148 ++++++++++++++++++++++++++++++++
+ 4 files changed, 251 insertions(+)
+diff --git a/src/models/evaluation.py b/src/models/evaluation.py
+index 9b84b94..65939dd 100644
+--- a/src/models/evaluation.py
++++ b/src/models/evaluation.py
+@@ -16,10 +16,12 @@ class DimensionScore:
+ class EvalReport:
+     id: str
+     interview_id: str
+     dimensions: list[DimensionScore]
+     overall_score: float                   # 1-10
+     strengths: list[str]
+     weaknesses: list[str]
+     recommendation: str                    # "strong_hire" | "hire" | "weak_hire" | "no_hire"
+     summary: str
+     generated_at: datetime
++    candidate_id: str = ""
++    question_coverage: str = ""
+diff --git a/src/storage/memory_module.py b/src/storage/memory_module.py
+index d532bcb..08ad3c2 100644
+--- a/src/storage/memory_module.py
++++ b/src/storage/memory_module.py
+@@ -984,20 +984,22 @@ class MemoryModule:
+             return EvalReport(
+                 id=f"er-{interview_id}",
+                 interview_id=interview_id,
+                 dimensions=dimensions,
+                 overall_score=float(meta.get("overall_score") or 0),
+                 strengths=list(meta.get("strengths") or []),
+                 weaknesses=list(meta.get("weaknesses") or []),
+                 recommendation=meta.get("recommendation") or "",
+                 summary=body.strip(),
+                 generated_at=_parse_dt(meta.get("generated_at")) or datetime.now(),
++                candidate_id=meta.get("candidate_id", ""),
++                question_coverage=meta.get("question_coverage", ""),
+             )
+         except Exception:
+             logger.exception("get_eval_report failed for %s", interview_id)
+             return None
+ 
+     # ─── 内部工具 ─────────────────────────────────────────────────────
+ 
+     async def _find_candidate_for_interview(self, interview_id: str) -> str | None:
+         """扫描 candidates/*/interviews/{interview_id} 找到对应的 candidate_id。"""
+         matches = list(self._root.glob(f"*/interviews/{interview_id}"))
+diff --git a/tests/unit/test_eval_report_model.py b/tests/unit/test_eval_report_model.py
+new file mode 100644
+index 0000000..86e4906
+--- /dev/null
++++ b/tests/unit/test_eval_report_model.py
+@@ -0,0 +1,99 @@
++"""Unit tests for EvalReport model extensions - candidate_id and question_coverage fields."""
++from __future__ import annotations
++
++from datetime import datetime
++
++import pytest
++
++from src.models.evaluation import EvalReport, DimensionScore
++
++
++@pytest.mark.unit
++class TestEvalReportNewFields:
++    """Test that EvalReport supports candidate_id and question_coverage fields."""
++
++    def test_eval_report_has_candidate_id_field(self):
++        """EvalReport should have a candidate_id field with default empty string."""
++        report = EvalReport(
++            id="er-001",
++            interview_id="iv-001",
++            dimensions=[],
++            overall_score=8.0,
++            strengths=["Good communication"],
++            weaknesses=[],
++            recommendation="hire",
++            summary="Strong candidate",
++            generated_at=datetime.now(),
++        )
++        # Should have candidate_id attribute
++        assert hasattr(report, "candidate_id")
++        # Default should be empty string
++        assert report.candidate_id == ""
++
++    def test_eval_report_has_question_coverage_field(self):
++        """EvalReport should have a question_coverage field with default empty string."""
++        report = EvalReport(
++            id="er-001",
++            interview_id="iv-001",
++            dimensions=[],
++            overall_score=8.0,
++            strengths=["Good communication"],
++            weaknesses=[],
++            recommendation="hire",
++            summary="Strong candidate",
++            generated_at=datetime.now(),
++        )
++        # Should have question_coverage attribute
++        assert hasattr(report, "question_coverage")
++        # Default should be empty string
++        assert report.question_coverage == ""
++
++    def test_eval_report_can_set_candidate_id(self):
++        """EvalReport should accept candidate_id in constructor."""
++        report = EvalReport(
++            id="er-001",
++            interview_id="iv-001",
++            candidate_id="c-123",
++            dimensions=[],
++            overall_score=8.0,
++            strengths=["Good communication"],
++            weaknesses=[],
++            recommendation="hire",
++            summary="Strong candidate",
++            generated_at=datetime.now(),
++        )
++        assert report.candidate_id == "c-123"
++
++    def test_eval_report_can_set_question_coverage(self):
++        """EvalReport should accept question_coverage in constructor."""
++        report = EvalReport(
++            id="er-001",
++            interview_id="iv-001",
++            question_coverage="已覆盖 4/7",
++            dimensions=[],
++            overall_score=8.0,
++            strengths=["Good communication"],
++            weaknesses=[],
++            recommendation="hire",
++            summary="Strong candidate",
++            generated_at=datetime.now(),
++        )
++        assert report.question_coverage == "已覆盖 4/7"
++
++    def test_eval_report_with_both_new_fields(self):
++        """EvalReport should accept both new fields simultaneously."""
++        report = EvalReport(
++            id="er-001",
++            interview_id="iv-001",
++            candidate_id="c-456",
++            question_coverage="已覆盖 5/10",
++            dimensions=[],
++            overall_score=7.5,
++            strengths=["Technical depth"],
++            weaknesses=["Communication"],
++            recommendation="weak_hire",
++            summary="Decent technical skills",
++            generated_at=datetime.now(),
++        )
++        assert report.candidate_id == "c-456"
++        assert report.question_coverage == "已覆盖 5/10"
+diff --git a/tests/unit/test_memory_module_compat.py b/tests/unit/test_memory_module_compat.py
+new file mode 100644
+index 0000000..fa695f4
+--- /dev/null
++++ b/tests/unit/test_memory_module_compat.py
+@@ -0,0 +1,148 @@
++"""Unit tests for MemoryModule backward compatibility with EvalReport."""
++from __future__ import annotations
++
++import json
++from datetime import datetime
++from pathlib import Path
++
++import pytest
++
++from src.storage.memory_module import MemoryModule
++
++
++@pytest.mark.unit
++class TestMemoryModuleEvalReportCompatibility:
++    """Test that MemoryModule handles old EvalReport data without new fields."""
++
++    @pytest.mark.asyncio
++    async def test_get_eval_report_old_data_missing_candidate_id(self, tmp_path):
++        """get_eval_report should handle old data without candidate_id field."""
++        # Setup: create old-format eval_report.md
++        candidates_dir = tmp_path / "candidates"
++        candidate_id = "c-001"
++        interview_id = "iv-001"
++
++        eval_path = candidates_dir / candidate_id / "interviews" / interview_id / "eval_report.md"
++        eval_path.parent.mkdir(parents=True, exist_ok=True)
++
++        # Old format: no candidate_id or question_coverage
++        old_format = """---
++interview_id: iv-001
++overall_score: 8.0
++recommendation: hire
++generated_at: '2026-06-25T10:00:00'
++strengths:
++- Good communication
++weaknesses:
++- Needs more experience
++dimensions: []
++---
++# 面试评价报告 · 张三
++
++## 综合评分：8.0 / 10
++
++## 推荐结论
++hire
++
++Strong candidate overall.
++"""
++        eval_path.write_text(old_format, encoding="utf-8")
++
++        # Test: should load without error
++        memory = MemoryModule(candidates_dir=str(candidates_dir))
++        report = await memory.get_eval_report(interview_id, candidate_id=candidate_id)
++
++        assert report is not None
++        assert report.interview_id == interview_id
++        assert report.candidate_id == ""  # Default value
++        assert report.question_coverage == ""  # Default value
++        assert report.overall_score == 8.0
++
++    @pytest.mark.asyncio
++    async def test_get_eval_report_old_data_missing_question_coverage(self, tmp_path):
++        """get_eval_report should handle data with candidate_id but no question_coverage."""
++        # Setup: create intermediate-format eval_report.md
++        candidates_dir = tmp_path / "candidates"
++        candidate_id = "c-002"
++        interview_id = "iv-002"
++
++        eval_path = candidates_dir / candidate_id / "interviews" / interview_id / "eval_report.md"
++        eval_path.parent.mkdir(parents=True, exist_ok=True)
++
++        # Has candidate_id but no question_coverage
++        intermediate_format = """---
++interview_id: iv-002
++candidate_id: c-002
++overall_score: 7.5
++recommendation: weak_hire
++generated_at: '2026-06-25T11:00:00'
++strengths:
++- Technical skills
++weaknesses: []
++dimensions: []
++---
++# 面试评价报告 · 李四
++
++## 综合评分：7.5 / 10
++
++## 推荐结论
++weak_hire
++
++Decent candidate.
++"""
++        eval_path.write_text(intermediate_format, encoding="utf-8")
++
++        # Test: should load without error
++        memory = MemoryModule(candidates_dir=str(candidates_dir))
++        report = await memory.get_eval_report(interview_id, candidate_id=candidate_id)
++
++        assert report is not None
++        assert report.interview_id == interview_id
++        assert report.candidate_id == "c-002"  # Preserved from file
++        assert report.question_coverage == ""  # Default value
++        assert report.overall_score == 7.5
++
++    @pytest.mark.asyncio
++    async def test_get_eval_report_new_data_with_both_fields(self, tmp_path):
++        """get_eval_report should handle new data with all fields."""
++        # Setup: create new-format eval_report.md
++        candidates_dir = tmp_path / "candidates"
++        candidate_id = "c-003"
++        interview_id = "iv-003"
++
++        eval_path = candidates_dir / candidate_id / "interviews" / interview_id / "eval_report.md"
++        eval_path.parent.mkdir(parents=True, exist_ok=True)
++
++        # New format: has both fields
++        new_format = """---
++interview_id: iv-003
++candidate_id: c-003
++overall_score: 9.0
++recommendation: strong_hire
++generated_at: '2026-06-25T12:00:00'
++strengths:
++- Excellent problem solving
++weaknesses: []
++dimensions: []
++question_coverage: 已覆盖 6/8
++---
++# 面试评价报告 · 王五
++
++## 综合评分：9.0 / 10
++
++## 推荐结论
++strong_hire
++
++Outstanding candidate.
++"""
++        eval_path.write_text(new_format, encoding="utf-8")
++
++        # Test: should load all fields correctly
++        memory = MemoryModule(candidates_dir=str(candidates_dir))
++        report = await memory.get_eval_report(interview_id, candidate_id=candidate_id)
++
++        assert report is not None
++        assert report.interview_id == interview_id
++        assert report.candidate_id == "c-003"
++        assert report.question_coverage == "已覆盖 6/8"
++        assert report.overall_score == 9.0
