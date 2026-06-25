@@ -173,7 +173,7 @@ class VolcRealtimeSTT:
             }).encode()
             await self._ws.send(_build_full_client_request(req_payload))
             self._connected = True
-            self._seq = 0
+            self._seq = 1  # FCR implicitly occupies seq=1; audio frames start at seq=2
             self._recv_task = asyncio.create_task(self._recv_loop())
             logger.info("VolcRealtimeSTT [%s]: connected", self._channel)
         except Exception:

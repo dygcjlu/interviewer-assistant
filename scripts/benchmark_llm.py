@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import openai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 try:
     from rich.console import Console
@@ -241,7 +244,11 @@ async def run_streaming_benchmark(
 
     client = openai.AsyncOpenAI(api_key=api_key, base_url=config.base_url)
     kwargs = build_request_kwargs(config, thinking_cfg, temperature=temperature, timeout=timeout)
-    kwargs["messages"] = [{"role": "user", "content": prompt}]
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+    kwargs["messages"] = [
+        {"role": "system", "content": f"[timestamp: {ts}]"},
+        {"role": "user", "content": prompt},
+    ]
 
     start = time.perf_counter()
     ttft: float | None = None

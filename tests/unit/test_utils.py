@@ -97,8 +97,8 @@ class TestWriteAtomic:
 @pytest.mark.unit
 class TestMetrics:
     def setup_method(self):
-        # 每次测试重置单例
-        Metrics._instance = None
+        """每个测试前重置 Metrics 单例"""
+        Metrics.reset()
 
     def test_get_returns_same_instance(self):
         m1 = Metrics.get()
@@ -170,3 +170,63 @@ class TestMetrics:
         time.sleep(0.01)
         d = m.to_dict()
         assert d["uptime_sec"] >= 0.0
+
+    def test_record_asr_latency_stored(self):
+        m = Metrics.get()
+        m.record_asr_latency(120.0)
+        m.record_asr_latency(80.0)
+        assert len(m._asr_latency_samples) == 2
+
+    def test_asr_latency_p50_p99_in_to_dict(self):
+        m = Metrics.get()
+        for v in [100.0, 200.0, 300.0]:
+            m.record_asr_latency(v)
+        d = m.to_dict()
+        assert d["asr_latency_p50_ms"] is not None
+        assert d["asr_latency_p99_ms"] is not None
+
+    def test_asr_latency_none_when_no_samples(self):
+        m = Metrics.get()
+        d = m.to_dict()
+        assert d["asr_latency_p50_ms"] is None
+        assert d["asr_latency_p99_ms"] is None
+
+    def test_record_suggestion_trigger_auto(self):
+        m = Metrics.get()
+        m.record_suggestion_trigger("auto")
+        m.record_suggestion_trigger("auto")
+        assert m.suggestion_trigger_auto_count == 2
+        assert m.suggestion_trigger_manual_count == 0
+
+    def test_record_suggestion_trigger_manual(self):
+        m = Metrics.get()
+        m.record_suggestion_trigger("manual")
+        assert m.suggestion_trigger_manual_count == 1
+        assert m.suggestion_trigger_auto_count == 0
+
+    def test_suggestion_trigger_counts_in_to_dict(self):
+        m = Metrics.get()
+        m.record_suggestion_trigger("auto")
+        m.record_suggestion_trigger("manual")
+        d = m.to_dict()
+        assert d["suggestion_trigger_auto_count"] == 1
+        assert d["suggestion_trigger_manual_count"] == 1
+
+    def test_to_dict_contains_all_new_keys(self):
+        m = Metrics.get()
+        d = m.to_dict()
+        for key in ["asr_latency_p50_ms", "asr_latency_p99_ms",
+                    "suggestion_trigger_auto_count", "suggestion_trigger_manual_count"]:
+            assert key in d
+
+    def test_metrics_reset(self):
+        """验证 reset() 方法清空单例状态"""
+        metrics = Metrics.get()
+        metrics.record_asr_latency(1.5)
+
+        Metrics.reset()
+
+        new_metrics = Metrics.get()
+        assert new_metrics is not metrics  # 新实例
+        d = new_metrics.to_dict()
+        assert d["asr_latency_p50_ms"] is None  # 无样本

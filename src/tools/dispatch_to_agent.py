@@ -1,6 +1,7 @@
 """dispatch_to_agent — 通用 Agent 分发工具，将任务委托给指定 Agent 执行。"""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -96,6 +97,19 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
         logger.warning("dispatch_to_agent: no active session, skipping side effects")
         return
 
+    # 追问建议生成后触发覆盖检测
+    if result_type == "suggestion":
+        if ctx.memory_module is not None and ctx.main_agent is not None:
+            from ..web.routes import _auto_check_coverage
+            asyncio.create_task(
+                _auto_check_coverage(
+                    memory=ctx.memory_module,
+                    llm_client=ctx.main_agent._llm,
+                    candidate_id=session.candidate.id,
+                    session=session
+                )
+            )
+
     if result_type == "parse_done":
         profile_data = result.get("profile") or {}
         if profile_data:
@@ -155,6 +169,9 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
             except Exception:
                 logger.exception("dispatch_to_agent: save_brief failed")
 
+        # 异步生成结构化问题清单（不阻塞主流程）
+        asyncio.create_task(_generate_questions_from_brief(cid, brief_text))
+
         session.interview_brief = brief_text
 
         if ctx.main_agent is not None:
@@ -171,3 +188,61 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 interview_brief=brief_text,
                 history_summary=history_summary,
             )
+
+
+async def _generate_questions_from_brief(candidate_id: str, brief_text: str) -> None:
+    """从面试简报生成结构化问题清单，异步执行，不影响主流程。"""
+    if ctx.memory_module is None:
+        return
+    try:
+        from ..config import get_settings
+        from ..llm.client import OpenAICompatibleClient
+        from ..models.message import Message
+        import json, uuid
+
+        # 使用 ctx.main_agent 的 llm_client，fallback 到直接实例化
+        llm = None
+        if ctx.main_agent is not None:
+            llm = ctx.main_agent._llm
+        if not llm:
+            settings = get_settings()
+            llm = OpenAICompatibleClient(settings)
+
+        prompt = (
+            "根据以下面试简报，生成结构化面试问题清单。\n"
+            "要求：\n"
+            "1. 提取 5–10 个关键面试问题\n"
+            "2. 每个问题包含：问题文本（question）和预期考察点（focus）\n"
+            "3. 以 JSON 数组输出，格式如下：\n"
+            '[{"question": "...", "focus": "..."}, ...]\n\n'
+            f"面试简报：\n{brief_text}"
+        )
+
+        resp = await llm.chat(
+            [Message(role="user", content=prompt)],
+            temperature=0.3,
+        )
+        raw = resp.content or ""
+
+        # 提取 JSON
+        start = raw.find("[")
+        end = raw.rfind("]")
+        if start == -1 or end == -1:
+            raise ValueError("no JSON array in response")
+        items = json.loads(raw[start:end + 1])
+
+        questions = [
+            {
+                "id": str(uuid.uuid4())[:8],
+                "question": str(item.get("question", "")),
+                "focus": str(item.get("focus", "")),
+                "covered": False,
+                "covered_by": "",
+            }
+            for item in items
+            if item.get("question")
+        ]
+        ctx.memory_module.save_questions(candidate_id, questions)
+        logger.info("_generate_questions_from_brief done candidate_id=%s count=%d", candidate_id, len(questions))
+    except Exception:
+        logger.exception("_generate_questions_from_brief failed candidate_id=%s", candidate_id)

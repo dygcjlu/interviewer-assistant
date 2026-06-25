@@ -8,6 +8,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "unit: 纯逻辑单元测试，无 I/O")
     config.addinivalue_line("markers", "integration: API 契约集成测试，Mock LLM")
     config.addinivalue_line("markers", "e2e: 端到端测试，真实服务器 + 真实 LLM")
+    config.addinivalue_line(
+        "markers",
+        "windows_only: 依赖 Windows WASAPI/pyaudiowpatch，只在 windows runner 运行",
+    )
 
 
 @pytest.fixture

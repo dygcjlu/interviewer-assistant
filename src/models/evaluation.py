@@ -23,3 +23,5 @@ class EvalReport:
     recommendation: str                    # "strong_hire" | "hire" | "weak_hire" | "no_hire"
     summary: str
     generated_at: datetime
+    candidate_id: str = ""
+    question_coverage: str = ""

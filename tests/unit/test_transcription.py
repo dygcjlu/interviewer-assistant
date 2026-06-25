@@ -181,3 +181,24 @@ class TestTranscriptionManager:
         _, cand = mgr.get_current_round_text()
         assert "第一句" in cand
         assert "第二句" in cand
+
+    @pytest.mark.asyncio
+    async def test_single_final_segment_records_asr_latency(self):
+        """单句直接 is_final=True 时应记录 ASR 延迟（修复 bug）"""
+        from src.utils.metrics import Metrics
+        Metrics.reset()  # 隔离测试
+        metrics = Metrics.get()
+
+        mgr, _, _ = _make_manager()
+        # 模拟单句直接 final 的场景
+        seg = TranscriptSegment(
+            text="完整的一句话",
+            is_final=True,
+            source="candidate",
+            timestamp=datetime.now(),
+            start_time=100.0  # 设置起始时间
+        )
+        await mgr.on_segment(seg)
+
+        # 验证延迟已记录
+        assert len(metrics._asr_latency_samples) > 0, "单句 final 场景应记录 ASR 延迟"

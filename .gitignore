@@ -242,3 +242,4 @@ openspec/
 
 # LLM benchmark output
 scripts/benchmark_results.csv
+.claude/

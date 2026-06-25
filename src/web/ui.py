@@ -94,7 +94,7 @@ async def index() -> None:
     ui.query("body").style("margin:0; overflow:hidden; background:#F0F2F5;")
 
     with ui.column().classes("w-full h-screen gap-0"):
-        # S-15: 启动配置告警横幅（缺少 QWEN_API_KEY 等）
+        # S-15: 启动配置告警横幅（缺少 LLM_API_KEY 等）
         if _startup_warnings:
             with ui.column().classes("w-full flex-shrink-0").style(
                 "background:#FEF2F2; border-bottom:1px solid #FECACA;"
@@ -177,6 +177,7 @@ async def index() -> None:
                 with ui.tabs().classes("w-full shrink-0") as tabs:
                     tab_tx = ui.tab("转写", icon="record_voice_over")
                     tab_q = ui.tab("简报", icon="article")
+                    tab_qs = ui.tab("问题", icon="checklist")
                     tab_r = ui.tab("报告", icon="assessment")
                     tab_profile = ui.tab("简历", icon="person")
 
@@ -192,6 +193,11 @@ async def index() -> None:
                         q_scroll = ui.scroll_area().classes("w-full h-full")
                         with q_scroll:
                             q_col = ui.column().classes("w-full gap-1 p-1")
+
+                    with ui.tab_panel(tab_qs).classes("h-full p-2"):
+                        qs_scroll = ui.scroll_area().classes("w-full h-full")
+                        with qs_scroll:
+                            qs_col = ui.column().classes("w-full gap-1 p-1")
 
                     with ui.tab_panel(tab_r).classes("h-full p-2"):
                         r_scroll = ui.scroll_area().classes("w-full h-full")
@@ -273,6 +279,18 @@ async def index() -> None:
         resume_markdown = data.get("resume_markdown", "")
         _render_profile_tab(profile_col, profile, brief, resume_markdown)
         _render_brief(q_col, brief)
+        # 同步结构化问题清单
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                rq = await client.get(
+                    f"{_base_url}/api/interview/questions",
+                    params={"candidate_id": cid},
+                )
+                if rq.status_code == 200:
+                    questions = rq.json().get("questions", [])
+                    _render_questions(qs_col, questions, cid)
+        except Exception:
+            pass
 
     asyncio.create_task(_load_candidates())
 
@@ -326,12 +344,9 @@ async def index() -> None:
         await _chat_stream(text, chat_col, chat_scroll, on_complete=_sync_candidate_panel)
 
     send_btn.on("click", lambda: asyncio.create_task(_do_send()))
-    user_in.on(
-        "keydown.enter",
-        lambda e: asyncio.create_task(_do_send())
-        if not (e.args.get("shiftKey") or e.args.get("ctrlKey"))
-        else None,
-    )
+    # keydown.enter.exact: 순수 Enter만 잡음 (Shift+Enter, Ctrl+Enter 제외)
+    # .prevent: 브라우저 기본 줄바꿈 삽입을 막아 textarea 모델 업데이트 경쟁 조건 방지
+    user_in.on("keydown.enter.exact.prevent", lambda: asyncio.create_task(_do_send()))
 
     # ── Button handlers ───────────────────────────────────────────────────────
 
@@ -589,6 +604,13 @@ async def _dispatch(
         if brief:
             _render_brief(q_col, brief)
 
+        # 每轮结束后自动触发覆盖检查
+        cid = state.get("candidate_id")
+        prev_rounds = state.get("round_count_prev", 0)
+        if cid and rounds_count > prev_rounds and rounds_count > 0:
+            state["round_count_prev"] = rounds_count
+            asyncio.create_task(_check_question_coverage(cid, rounds_count, qs_col))
+
     elif t == "status":
         stage = msg.get("stage", "")
         if stage and stage != state.get("stage"):
@@ -654,6 +676,27 @@ async def _scroll(area) -> None:
     area.scroll_to(percent=1.0)
 
 
+async def _check_question_coverage(candidate_id: str, round_number: int, qs_col) -> None:
+    """调用后端 LLM 检查最新一轮对话覆盖了哪些问题，更新 qs_col。"""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            lr = await client.get(f"{_base_url}/api/interview/last-round")
+            if lr.status_code != 200:
+                return
+            round_text = lr.json().get("round_text", "")
+            if not round_text.strip():
+                return
+            r = await client.post(
+                f"{_base_url}/api/interview/questions/check-coverage",
+                json={"candidate_id": candidate_id, "round_text": round_text},
+            )
+            if r.status_code == 200:
+                questions = r.json().get("questions", [])
+                _render_questions(qs_col, questions, candidate_id)
+    except Exception:
+        pass
+
+
 def _refresh_bar(badge, cand_label, rnd_label, state: dict) -> None:
     stage = state.get("stage", "idle")
     color = _STAGE_COLORS.get(stage, "grey")
@@ -673,6 +716,53 @@ def _render_brief(col, brief_text: str) -> None:
             ui.label("暂无面试简报，请先生成简报。").classes("text-grey-5 text-sm")
 
 
+def _render_questions(col, questions: list, candidate_id: str) -> None:
+    col.clear()
+    with col:
+        if not questions:
+            ui.label("暂无问题清单，生成面试简报后自动创建。").classes("text-grey-5 text-sm")
+            return
+
+        covered = sum(1 for q in questions if q.get("covered"))
+        total = len(questions)
+        color = "text-green-7" if covered == total else "text-orange-7" if covered > 0 else "text-grey-6"
+        ui.label(f"覆盖进度：{covered} / {total}").classes(f"text-sm font-bold {color} mb-1")
+
+        for q in questions:
+            qid = q.get("id", "")
+            is_covered = bool(q.get("covered"))
+            covered_by = q.get("covered_by", "")
+            tag = " ✓" if is_covered else ""
+            label_color = "text-green-8" if is_covered else "text-grey-9"
+            badge = f" [{'自动' if covered_by == 'auto' else '手动'}]" if is_covered else ""
+
+            with ui.row().classes("w-full items-start gap-2 py-1").style(
+                "border-bottom:1px solid #F3F4F6;"
+            ):
+                cb = ui.checkbox(value=is_covered).props("dense size=sm")
+
+                async def _toggle(e, _qid=qid, _cid=candidate_id) -> None:
+                    try:
+                        async with httpx.AsyncClient(timeout=5) as client:
+                            await client.patch(
+                                f"{_base_url}/api/interview/questions/{_qid}",
+                                params={"candidate_id": _cid},
+                                json={"covered": e.value},
+                            )
+                    except Exception:
+                        pass
+
+                cb.on("update:model-value", _toggle)
+
+                with ui.column().classes("flex-1 gap-0 min-w-0"):
+                    ui.label(q.get("question", "") + tag).classes(
+                        f"text-sm {label_color} {'line-through' if is_covered else ''}"
+                    )
+                    focus_text = q.get("focus", "")
+                    if focus_text:
+                        ui.label(f"考察：{focus_text}{badge}").classes("text-xs text-grey-5")
+
+
 def _render_report(col, report: dict) -> None:
     col.clear()
     if not report:
@@ -685,6 +775,12 @@ def _render_report(col, report: dict) -> None:
         rec = report.get("recommendation", "")
         if rec:
             ui.label(f"建议：{rec}").classes("text-sm text-grey-7 mt-1")
+        interview_id = report.get("interview_id", "")
+        if interview_id:
+            ui.button(
+                "导出 PDF",
+                on_click=lambda: ui.navigate.to(f"/api/interview/{interview_id}/report/export", new_tab=True),
+            ).props("icon=download flat dense").classes("mt-2 mb-1")
         for dim in report.get("dimensions", report.get("scores", [])):
             if not isinstance(dim, dict):
                 continue
@@ -947,6 +1043,74 @@ def _render_candidate_list(
         return
 
     with col:
+        # ── compare toolbar ──────────────────────────────────────────────────
+        if "selected_for_compare" not in state:
+            state["selected_for_compare"] = set()
+
+        compare_bar = ui.row().classes("w-full items-center gap-2 px-2 py-1")
+
+        async def _do_compare() -> None:
+            ids = list(state["selected_for_compare"])
+            if len(ids) < 2:
+                ui.notify("请至少选择 2 名候选人", type="warning")
+                return
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    r = await client.get(
+                        f"{_base_url}/api/candidates/compare",
+                        params={"ids": ",".join(ids)},
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+            except Exception as exc:
+                ui.notify(f"对比失败：{exc}", type="negative")
+                return
+            with ui.dialog() as dlg, ui.card().classes("w-full max-w-3xl"):
+                ui.label("候选人横向对比").classes("text-h6 font-bold mb-2")
+                missing = data.get("missing_report", [])
+                if missing:
+                    ui.label(f"以下候选人暂无评价报告：{', '.join(missing)}").classes("text-sm text-orange-7 mb-1")
+                dims = data.get("dimensions", [])
+                table_data = data.get("score_table", [])
+                if table_data:
+                    headers = ["候选人", "综合分"] + dims
+                    rows_ui = [[
+                        row.get("name", ""),
+                        str(row.get("overall_score") or "—"),
+                    ] + [str(row.get("dimensions", {}).get(d) or "—") for d in dims] for row in table_data]
+                    ui.table(
+                        columns=[{"name": h, "label": h, "field": h} for h in headers],
+                        rows=[dict(zip(headers, r)) for r in rows_ui],
+                    ).classes("w-full text-sm")
+                summary = data.get("llm_summary", "")
+                if summary:
+                    ui.label("AI 对比摘要").classes("text-sm font-bold mt-3 mb-1")
+                    ui.label(summary).classes("text-sm text-grey-8 whitespace-pre-wrap")
+                ui.button("关闭", on_click=dlg.close).classes("mt-2")
+            dlg.open()
+
+        def _refresh_compare_bar() -> None:
+            compare_bar.clear()
+            sel = state["selected_for_compare"]
+            with compare_bar:
+                if len(sel) >= 2:
+                    lbl = f"已选 {len(sel)} 人"
+                    ui.label(lbl).classes("text-xs text-grey-7")
+                    ui.button(
+                        "横向对比",
+                        on_click=lambda: asyncio.create_task(_do_compare()),
+                    ).props("icon=compare_arrows dense flat color=blue-7").classes("text-xs")
+                    ui.button(
+                        "清除",
+                        on_click=lambda: (state["selected_for_compare"].clear(), _render_candidate_list(
+                            col, candidates, state, chat_col, chat_scroll, q_col, profile_col,
+                            panels, tab_profile, stage_badge, candidate_label, round_label,
+                            r_col=r_col, tab_r=tab_r,
+                        )),
+                    ).props("dense flat color=grey-6").classes("text-xs")
+
+        _refresh_compare_bar()
+
         for c in candidates:
             cid = c.get("id", "")
             name = c.get("name") or "—"
@@ -970,6 +1134,19 @@ def _render_candidate_list(
             )
 
             with ui.row().classes("w-full items-center gap-1 px-2 py-2 rounded cursor-pointer").style(item_style) as row_el:
+                _cb_val = cid in state["selected_for_compare"]
+                cb = ui.checkbox(value=_cb_val).props("dense size=xs").classes("shrink-0")
+
+                def _on_cb_change(e, _cid=cid) -> None:
+                    if e.value:
+                        state["selected_for_compare"].add(_cid)
+                    else:
+                        state["selected_for_compare"].discard(_cid)
+                    _refresh_compare_bar()
+
+                cb.on("update:model-value", _on_cb_change)
+                cb.on("click", lambda e: e.stop_propagation() if hasattr(e, "stop_propagation") else None)
+
                 with ui.column().classes("flex-1 gap-0 min-w-0"):
                     ui.label(name).classes(
                         "text-sm font-semibold text-grey-9 truncate"

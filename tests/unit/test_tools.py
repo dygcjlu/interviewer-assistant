@@ -64,7 +64,7 @@ class TestFileRead:
         other = tmp_path / "other"
         other.mkdir()
         target = other / "secret.txt"
-        target.write_text("机密")
+        target.write_text("机密", encoding="utf-8")
         mock_ctx = ToolContext(allowed_read_dirs=[str(tmp_path / "allowed") + "/"])
         with patch("src.tools.file_read.ctx", mock_ctx):
             result = await file_read(str(target))

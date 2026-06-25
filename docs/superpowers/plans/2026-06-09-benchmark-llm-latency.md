@@ -2,6 +2,7 @@
 change: benchmark-llm-latency
 design-doc: docs/superpowers/specs/2026-06-09-benchmark-llm-latency-design.md
 base-ref: 617c91e4d7417d7791ee9df0b73a90b4247232c8
+archived-with: 2026-06-09-benchmark-llm-latency
 ---
 
 # LLM 延迟基准测试脚本 Implementation Plan
@@ -14,6 +15,7 @@ base-ref: 617c91e4d7417d7791ee9df0b73a90b4247232c8
 
 **Tech Stack:** Python 3.12, openai SDK（已安装）, rich（已安装）, argparse, asyncio, csv, dataclasses
 
+archived-with: 2026-06-09-benchmark-llm-latency
 ---
 
 ### Task 1: 数据结构与核心纯函数
@@ -321,6 +323,7 @@ git add scripts/__init__.py scripts/benchmark_llm.py tests/test_benchmark_llm.py
 git commit -m "feat: add benchmark script data structures and pure functions"
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
 ---
 
 ### Task 2: Benchmark Prompt（5KB+）
@@ -410,6 +413,7 @@ git add scripts/benchmark_llm.py
 git commit -m "feat: add 5KB+ benchmark prompt with real CBCT interview scenario"
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
 ---
 
 ### Task 3: 流式调用核心逻辑
@@ -512,6 +516,7 @@ git add scripts/benchmark_llm.py
 git commit -m "feat: add streaming benchmark function and live result printer"
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
 ---
 
 ### Task 4: 汇总输出（Rich 表格 + CSV）
@@ -600,6 +605,7 @@ git add scripts/benchmark_llm.py
 git commit -m "feat: add summary table and CSV export functions"
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
 ---
 
 ### Task 5: main() 入口与 .gitignore
@@ -698,6 +704,7 @@ git add scripts/benchmark_llm.py .gitignore
 git commit -m "feat: add main() entry point, argparse CLI, and benchmark_results.csv to gitignore"
 ```
 
+archived-with: 2026-06-09-benchmark-llm-latency
 ---
 
 ### Task 6: 运行单元测试

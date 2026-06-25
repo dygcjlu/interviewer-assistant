@@ -102,6 +102,8 @@ class SuggestionTrigger:
         self._request_id += 1
         self._last_trigger_time = now
         logger.info("SuggestionTrigger: firing request_id=%d", req_id)
+        from ..utils.metrics import Metrics
+        Metrics.get().record_suggestion_trigger("auto")
         try:
             await self._on_trigger(req_id)
         except Exception:

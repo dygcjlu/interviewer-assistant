@@ -1,6 +1,9 @@
 ---
-alwaysApply: false
+description: "自动调用 Messenger MCP 检查待发送消息"
+globs: "**/*"
+alwaysApply: true
 ---
+
 # MCP 工具调用规则
 
 1. 每轮对话回复**完整输出后**，最后一步必须调用 `check_messages`，适用于 Agent/Plan/Debug/Ask 所有模式，无一例外

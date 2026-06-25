@@ -37,6 +37,7 @@ class TranscriptionManager:
         self._candidate_text: str = ""
 
         self._silence_task: asyncio.Task | None = None
+        self._candidate_utterance_start: float | None = None
 
     # ── public interface ──────────────────────────────────────────────────────
 
@@ -63,6 +64,16 @@ class TranscriptionManager:
 
         # 3. Accumulate text + trigger logic
         if segment.source == "candidate":
+            # 注意：当前测量的是「候选人发言持续时长」（从第一段到最后一段的时间差），
+            # 而非严格的 ASR 系统处理延迟。这是已知限制，保留 asr_latency 名称以避免 API 破坏性变更。
+            if self._candidate_utterance_start is None and segment.start_time is not None:
+                self._candidate_utterance_start = segment.start_time
+            if segment.is_final:
+                if self._candidate_utterance_start is not None:
+                    elapsed_ms = (segment.timestamp.timestamp() - self._candidate_utterance_start) * 1000
+                    from ..utils.metrics import Metrics
+                    Metrics.get().record_asr_latency(elapsed_ms)
+                self._candidate_utterance_start = None
             self._candidate_text += (" " if self._candidate_text else "") + segment.text
             self._suggestion_trigger.on_candidate_segment(segment)
 

@@ -24,6 +24,10 @@ class Metrics:
     _latency_samples: list[float] = field(default_factory=list)
     _MAX_SAMPLES: ClassVar[int] = 200
 
+    _asr_latency_samples: list[float] = field(default_factory=list)
+    suggestion_trigger_auto_count: int = 0
+    suggestion_trigger_manual_count: int = 0
+
     _started_at: float = field(default_factory=time.time)
 
     @classmethod
@@ -31,6 +35,26 @@ class Metrics:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
+
+    @classmethod
+    def reset(cls) -> None:
+        """重置单例实例（仅用于测试隔离）
+
+        警告：此方法仅供测试使用，生产代码不应调用。
+        """
+        cls._instance = None
+
+    def record_asr_latency(self, elapsed_ms: float) -> None:
+        if elapsed_ms > 0:
+            self._asr_latency_samples.append(elapsed_ms)
+            if len(self._asr_latency_samples) > self._MAX_SAMPLES:
+                self._asr_latency_samples = self._asr_latency_samples[-self._MAX_SAMPLES:]
+
+    def record_suggestion_trigger(self, mode: str) -> None:
+        if mode == "auto":
+            self.suggestion_trigger_auto_count += 1
+        else:
+            self.suggestion_trigger_manual_count += 1
 
     def record_request(
         self,
@@ -50,10 +74,10 @@ class Metrics:
             if len(self._latency_samples) > self._MAX_SAMPLES:
                 self._latency_samples = self._latency_samples[-self._MAX_SAMPLES :]
 
-    def _percentile(self, p: float) -> float | None:
-        if not self._latency_samples:
+    def _percentile(self, samples: list[float], p: float) -> float | None:
+        if not samples:
             return None
-        sorted_s = sorted(self._latency_samples)
+        sorted_s = sorted(samples)
         idx = max(0, int(len(sorted_s) * p / 100) - 1)
         return round(sorted_s[idx], 1)
 
@@ -64,7 +88,11 @@ class Metrics:
             "tokens_prompt_total": self.tokens_prompt_total,
             "tokens_completion_total": self.tokens_completion_total,
             "tokens_total": self.tokens_prompt_total + self.tokens_completion_total,
-            "latency_ms_p50": self._percentile(50),
-            "latency_ms_p95": self._percentile(95),
+            "latency_ms_p50": self._percentile(self._latency_samples, 50),
+            "latency_ms_p95": self._percentile(self._latency_samples, 95),
+            "asr_latency_p50_ms": self._percentile(self._asr_latency_samples, 50),
+            "asr_latency_p99_ms": self._percentile(self._asr_latency_samples, 99),
+            "suggestion_trigger_auto_count": self.suggestion_trigger_auto_count,
+            "suggestion_trigger_manual_count": self.suggestion_trigger_manual_count,
             "uptime_sec": round(time.time() - self._started_at, 1),
         }
