@@ -1,4 +1,5 @@
 """Unit tests — EvalAgent question coverage statistics (Task 4)."""
+
 from __future__ import annotations
 
 import json
@@ -14,12 +15,19 @@ from src.framework.prompt_builder import AgentConfig, PromptBuilder
 from src.framework.tool_registry import ToolRegistry
 from src.llm.protocol import ChatResponse
 from src.models.candidate import CandidateProfile
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
+from src.models.session import (
+    ConversationRound,
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
 
 
-def _make_session_with_rounds(candidate_id: str = "c-001", n: int = 2) -> InterviewSession:
+def _make_session_with_rounds(
+    candidate_id: str = "c-001", n: int = 2
+) -> InterviewSession:
     rounds = [
         ConversationRound(
             round_number=i + 1,
@@ -45,9 +53,7 @@ def _make_eval_agent(
     llm_content: str = '{"dimensions": [], "overall_score": 7.5, "strengths": ["表达清晰"], "weaknesses": [], "recommendation": "hire", "summary": "总体良好，面试表现优秀，沟通能力强，技术深度达到岗位要求。"}',
 ) -> EvalAgent:
     mock_llm = AsyncMock()
-    mock_llm.chat = AsyncMock(
-        return_value=ChatResponse(content=llm_content)
-    )
+    mock_llm.chat = AsyncMock(return_value=ChatResponse(content=llm_content))
     candidates_dir = tmp_path / "candidates"
     candidates_dir.mkdir()
     memory_module = MemoryModule(candidates_dir=str(candidates_dir))
@@ -72,14 +78,16 @@ class TestEvalAgentQuestionCoverage:
     async def test_coverage_with_questions_and_some_covered(self, tmp_path):
         """测试有问题清单且部分已覆盖时生成正确覆盖率"""
         # ARRANGE
-        valid_json = json.dumps({
-            "dimensions": [],
-            "overall_score": 7.5,
-            "strengths": ["表达清晰"],
-            "weaknesses": [],
-            "recommendation": "hire",
-            "summary": "总体良好。",
-        })
+        valid_json = json.dumps(
+            {
+                "dimensions": [],
+                "overall_score": 7.5,
+                "strengths": ["表达清晰"],
+                "weaknesses": [],
+                "recommendation": "hire",
+                "summary": "总体良好。",
+            }
+        )
         agent = _make_eval_agent(tmp_path, valid_json)
 
         # 保存候选人
@@ -90,13 +98,37 @@ class TestEvalAgentQuestionCoverage:
 
         # 保存问题清单：7 个问题，4 个已覆盖
         questions = [
-            {"id": "q1", "question": "问题1", "focus": "技术", "covered": True, "covered_by": "auto"},
-            {"id": "q2", "question": "问题2", "focus": "技术", "covered": True, "covered_by": "auto"},
+            {
+                "id": "q1",
+                "question": "问题1",
+                "focus": "技术",
+                "covered": True,
+                "covered_by": "auto",
+            },
+            {
+                "id": "q2",
+                "question": "问题2",
+                "focus": "技术",
+                "covered": True,
+                "covered_by": "auto",
+            },
             {"id": "q3", "question": "问题3", "focus": "技术", "covered": False},
-            {"id": "q4", "question": "问题4", "focus": "技术", "covered": True, "covered_by": "auto"},
+            {
+                "id": "q4",
+                "question": "问题4",
+                "focus": "技术",
+                "covered": True,
+                "covered_by": "auto",
+            },
             {"id": "q5", "question": "问题5", "focus": "技术", "covered": False},
             {"id": "q6", "question": "问题6", "focus": "技术", "covered": False},
-            {"id": "q7", "question": "问题7", "focus": "技术", "covered": True, "covered_by": "auto"},
+            {
+                "id": "q7",
+                "question": "问题7",
+                "focus": "技术",
+                "covered": True,
+                "covered_by": "auto",
+            },
         ]
         agent._memory_module.save_questions(candidate_id, questions)
 
@@ -115,14 +147,16 @@ class TestEvalAgentQuestionCoverage:
     async def test_coverage_with_no_questions(self, tmp_path):
         """测试无问题清单时覆盖率为空字符串"""
         # ARRANGE
-        valid_json = json.dumps({
-            "dimensions": [],
-            "overall_score": 7.5,
-            "strengths": ["表达清晰"],
-            "weaknesses": [],
-            "recommendation": "hire",
-            "summary": "总体良好。",
-        })
+        valid_json = json.dumps(
+            {
+                "dimensions": [],
+                "overall_score": 7.5,
+                "strengths": ["表达清晰"],
+                "weaknesses": [],
+                "recommendation": "hire",
+                "summary": "总体良好。",
+            }
+        )
         agent = _make_eval_agent(tmp_path, valid_json)
 
         candidate_id = "c-no-questions"
@@ -146,14 +180,16 @@ class TestEvalAgentQuestionCoverage:
     async def test_coverage_all_questions_covered(self, tmp_path):
         """测试全部问题已覆盖时覆盖率为 3/3"""
         # ARRANGE
-        valid_json = json.dumps({
-            "dimensions": [],
-            "overall_score": 8.0,
-            "strengths": ["优秀"],
-            "weaknesses": [],
-            "recommendation": "hire",
-            "summary": "全覆盖。",
-        })
+        valid_json = json.dumps(
+            {
+                "dimensions": [],
+                "overall_score": 8.0,
+                "strengths": ["优秀"],
+                "weaknesses": [],
+                "recommendation": "hire",
+                "summary": "全覆盖。",
+            }
+        )
         agent = _make_eval_agent(tmp_path, valid_json)
 
         candidate_id = "c-full-coverage"
@@ -183,14 +219,16 @@ class TestEvalAgentQuestionCoverage:
     async def test_coverage_no_questions_covered(self, tmp_path):
         """测试无问题被覆盖时覆盖率为 0/5"""
         # ARRANGE
-        valid_json = json.dumps({
-            "dimensions": [],
-            "overall_score": 5.0,
-            "strengths": [],
-            "weaknesses": ["未回答"],
-            "recommendation": "no_hire",
-            "summary": "无覆盖。",
-        })
+        valid_json = json.dumps(
+            {
+                "dimensions": [],
+                "overall_score": 5.0,
+                "strengths": [],
+                "weaknesses": ["未回答"],
+                "recommendation": "no_hire",
+                "summary": "无覆盖。",
+            }
+        )
         agent = _make_eval_agent(tmp_path, valid_json)
 
         candidate_id = "c-zero-coverage"

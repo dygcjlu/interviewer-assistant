@@ -1,10 +1,10 @@
 """Unit tests — UserMemoryStore CRUD 与持久化行为。"""
+
 from __future__ import annotations
 
 import pytest
 
 from src.storage.user_memory import UserMemoryStore
-
 
 # ── 辅助 ──────────────────────────────────────────────────────────────────────
 

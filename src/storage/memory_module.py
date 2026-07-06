@@ -14,6 +14,7 @@
               ├── eval_report.md        # 评价报告
               └── session.json          # 会话元数据
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -83,7 +84,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if end == -1:
         return {}, text
     yaml_text = text[3:end].strip()
-    body = text[end + 4:].lstrip("\n")
+    body = text[end + 4 :].lstrip("\n")
     try:
         meta = yaml.safe_load(yaml_text) or {}
     except yaml.YAMLError:
@@ -94,7 +95,11 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 def _render_frontmatter(meta: dict[str, Any]) -> str:
     """将 dict 渲染为 YAML frontmatter 块（含首尾 ---）。"""
-    return "---\n" + yaml.dump(meta, allow_unicode=True, default_flow_style=False) + "---\n"
+    return (
+        "---\n"
+        + yaml.dump(meta, allow_unicode=True, default_flow_style=False)
+        + "---\n"
+    )
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -116,7 +121,9 @@ def _build_candidates_index(candidates: list[dict]) -> str:
     lines.append("|---|---|---|---|")
     for c in candidates:
         latest = c.get("latest_interview") or "—"
-        lines.append(f"| {c['name']} | {c['id']} | {c.get('created_at', '')} | {latest} |")
+        lines.append(
+            f"| {c['name']} | {c['id']} | {c.get('created_at', '')} | {latest} |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -145,7 +152,9 @@ def _build_profile_md(profile: CandidateProfile, resume_markdown: str) -> str:
 def _build_interviews_index(candidate_name: str, interviews: list[dict]) -> str:
     meta = {"interviews": interviews}
     lines = [_render_frontmatter(meta), f"# {candidate_name} · 面试历史\n"]
-    lines.append("| 面试 ID | 开始时间 | 状态 | 触发模式 | 综合评分 | 推荐结论 | 关键结论 |")
+    lines.append(
+        "| 面试 ID | 开始时间 | 状态 | 触发模式 | 综合评分 | 推荐结论 | 关键结论 |"
+    )
     lines.append("|---|---|---|---|---|---|---|")
     for iv in interviews:
         score = iv.get("overall_score")
@@ -157,7 +166,9 @@ def _build_interviews_index(candidate_name: str, interviews: list[dict]) -> str:
         stage_str = stage_map.get(iv.get("stage", ""), iv.get("stage", ""))
         trigger_map = {"auto": "自动", "manual": "手动"}
         trigger_str = trigger_map.get(iv.get("trigger_mode", ""), "自动")
-        lines.append(f"| {iv['interview_id']} | {start} | {stage_str} | {trigger_str} | {score_str} | {rec} | {findings} |")
+        lines.append(
+            f"| {iv['interview_id']} | {start} | {stage_str} | {trigger_str} | {score_str} | {rec} | {findings} |"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -306,7 +317,9 @@ class MemoryModule:
             logger.exception("Failed to read interviews index for %s", candidate_id)
             return []
 
-    def _write_interviews_index(self, candidate_id: str, interviews: list[dict]) -> None:
+    def _write_interviews_index(
+        self, candidate_id: str, interviews: list[dict]
+    ) -> None:
         profile = self._read_profile_meta(candidate_id)
         candidate_name = profile.get("name", candidate_id) if profile else candidate_id
         path = self._interviews_index_path(candidate_id)
@@ -325,7 +338,9 @@ class MemoryModule:
 
     # ─── 候选人 CRUD ─────────────────────────────────────────────────
 
-    async def save_candidate(self, profile: CandidateProfile, resume_markdown: str) -> str:
+    async def save_candidate(
+        self, profile: CandidateProfile, resume_markdown: str
+    ) -> str:
         candidate_id = profile.id or f"c-{uuid.uuid4().hex[:12]}"
         profile.id = candidate_id
 
@@ -344,7 +359,9 @@ class MemoryModule:
             "created_at": profile.created_at[:10],
             "latest_interview": None,
         }
-        existing_idx = next((i for i, c in enumerate(candidates) if c["id"] == candidate_id), -1)
+        existing_idx = next(
+            (i for i, c in enumerate(candidates) if c["id"] == candidate_id), -1
+        )
         if existing_idx >= 0:
             entry["latest_interview"] = candidates[existing_idx].get("latest_interview")
             candidates[existing_idx] = entry
@@ -352,7 +369,9 @@ class MemoryModule:
             candidates.append(entry)
         self._write_candidates_index(candidates)
 
-        logger.info("save_candidate done candidate_id=%s name=%r", candidate_id, profile.name)
+        logger.info(
+            "save_candidate done candidate_id=%s name=%r", candidate_id, profile.name
+        )
         return candidate_id
 
     async def get_candidate(self, candidate_id: str) -> CandidateProfile | None:
@@ -392,8 +411,12 @@ class MemoryModule:
     ) -> list[CandidateProfile]:
         candidates = self._read_candidates_index()
         if keyword:
-            candidates = [c for c in candidates if keyword.lower() in (c.get("name") or "").lower()]
-        paged = candidates[offset: offset + limit]
+            candidates = [
+                c
+                for c in candidates
+                if keyword.lower() in (c.get("name") or "").lower()
+            ]
+        paged = candidates[offset : offset + limit]
         results = []
         for c in paged:
             profile = await self.get_candidate(c["id"])
@@ -405,7 +428,11 @@ class MemoryModule:
         """返回符合关键词筛选的候选人总数（不受 limit/offset 影响）。"""
         candidates = self._read_candidates_index()
         if keyword:
-            candidates = [c for c in candidates if keyword.lower() in (c.get("name") or "").lower()]
+            candidates = [
+                c
+                for c in candidates
+                if keyword.lower() in (c.get("name") or "").lower()
+            ]
         return len(candidates)
 
     async def delete_candidate(self, candidate_id: str) -> None:
@@ -473,7 +500,11 @@ class MemoryModule:
             json.dumps(session_data, ensure_ascii=False, indent=2),
         )
 
-        logger.info("start_interview written session_id=%s candidate_id=%s", interview_id, candidate_id)
+        logger.info(
+            "start_interview written session_id=%s candidate_id=%s",
+            interview_id,
+            candidate_id,
+        )
 
     async def append_round(
         self,
@@ -490,9 +521,11 @@ class MemoryModule:
             "round_number": round_.round_number,
             "interviewer_text": round_.interviewer_text,
             "candidate_text": round_.candidate_text,
-            "timestamp": getattr(round_, "timestamp", datetime.now()).isoformat()
-            if not isinstance(getattr(round_, "timestamp", None), str)
-            else round_.timestamp,
+            "timestamp": (
+                getattr(round_, "timestamp", datetime.now()).isoformat()
+                if not isinstance(getattr(round_, "timestamp", None), str)
+                else round_.timestamp
+            ),
         }
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
 
@@ -540,7 +573,7 @@ class MemoryModule:
                     continue
                 round_count = 0
                 try:
-                    with open(wal_path, "r", encoding="utf-8") as f:
+                    with open(wal_path, encoding="utf-8") as f:
                         for line in f:
                             if line.strip():
                                 round_count += 1
@@ -553,15 +586,17 @@ class MemoryModule:
                 session_json = iv_dir / "session.json"
                 if session_json.exists():
                     try:
-                        start_time = json.loads(session_json.read_text(encoding="utf-8")).get(
-                            "start_time", ""
-                        )
+                        start_time = json.loads(
+                            session_json.read_text(encoding="utf-8")
+                        ).get("start_time", "")
                     except Exception:
                         pass
                 orphans.append(
                     {
                         "candidate_id": cand_dir.name,
-                        "candidate_name": str(cand_meta.get("name", "")) if cand_meta else "",
+                        "candidate_name": (
+                            str(cand_meta.get("name", "")) if cand_meta else ""
+                        ),
                         "interview_id": iv_dir.name,
                         "round_count": round_count,
                         "start_time": start_time,
@@ -585,7 +620,7 @@ class MemoryModule:
             raise StorageError(f"WAL 不存在：{wal_path}")
 
         rounds: list[ConversationRound] = []
-        with open(wal_path, "r", encoding="utf-8") as f:
+        with open(wal_path, encoding="utf-8") as f:
             for line_no, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
@@ -636,16 +671,22 @@ class MemoryModule:
         # 用一个最小 session 拼 transcript.md（复用已有渲染逻辑）
         candidate_meta = self._read_profile_meta(candidate_id) or {}
         candidate = CandidateProfile(
-            id=candidate_id, name=str(candidate_meta.get("name", "")) if candidate_meta else ""
+            id=candidate_id,
+            name=str(candidate_meta.get("name", "")) if candidate_meta else "",
         )
         from ..models.session import InterviewStage, SessionMetadata
+
         meta = SessionMetadata(
             candidate_id=candidate_id,
             start_time=_parse_dt(existing.get("start_time")) or rounds[0].timestamp,
             end_time=end_time,
             trigger_mode=str(existing.get("trigger_mode", "auto")),
-            recording_candidate_path=str(existing.get("recording_candidate_path", "")) or None,
-            recording_interviewer_path=str(existing.get("recording_interviewer_path", "")) or None,
+            recording_candidate_path=str(existing.get("recording_candidate_path", ""))
+            or None,
+            recording_interviewer_path=str(
+                existing.get("recording_interviewer_path", "")
+            )
+            or None,
         )
         recovered_session = InterviewSession(
             id=interview_id,
@@ -707,13 +748,17 @@ class MemoryModule:
                 "start_time": session.metadata.start_time.isoformat(),
                 "trigger_mode": session.metadata.trigger_mode,
             }
-        existing.update({
-            "end_time": end_time.isoformat(),
-            "stage": "completed",
-            "recording_candidate_path": session.metadata.recording_candidate_path or "",
-            "recording_interviewer_path": session.metadata.recording_interviewer_path or "",
-            "context_summary": session.context_summary or "",
-        })
+        existing.update(
+            {
+                "end_time": end_time.isoformat(),
+                "stage": "completed",
+                "recording_candidate_path": session.metadata.recording_candidate_path
+                or "",
+                "recording_interviewer_path": session.metadata.recording_interviewer_path
+                or "",
+                "context_summary": session.context_summary or "",
+            }
+        )
         _write_atomic(
             session_json_path,
             json.dumps(existing, ensure_ascii=False, indent=2),
@@ -731,7 +776,14 @@ class MemoryModule:
             "recommendation": None,
             "key_findings": "",
         }
-        existing_idx = next((i for i, iv in enumerate(interviews) if iv.get("interview_id") == interview_id), -1)
+        existing_idx = next(
+            (
+                i
+                for i, iv in enumerate(interviews)
+                if iv.get("interview_id") == interview_id
+            ),
+            -1,
+        )
         if existing_idx >= 0:
             iv_entry["overall_score"] = interviews[existing_idx].get("overall_score")
             iv_entry["recommendation"] = interviews[existing_idx].get("recommendation")
@@ -756,7 +808,9 @@ class MemoryModule:
             try:
                 wal_path.replace(archived)
                 logger.debug(
-                    "finish_interview archived WAL session_id=%s -> %s", interview_id, archived.name
+                    "finish_interview archived WAL session_id=%s -> %s",
+                    interview_id,
+                    archived.name,
                 )
             except OSError:
                 logger.warning(
@@ -765,7 +819,11 @@ class MemoryModule:
                     exc_info=True,
                 )
 
-        logger.info("finish_interview done session_id=%s candidate_id=%s", interview_id, candidate_id)
+        logger.info(
+            "finish_interview done session_id=%s candidate_id=%s",
+            interview_id,
+            candidate_id,
+        )
 
     # ─── 面试简报 ─────────────────────────────────────────────────────
 
@@ -774,7 +832,9 @@ class MemoryModule:
         path = self._brief_path(candidate_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_atomic(path, content)
-        logger.info("save_brief done candidate_id=%s chars=%d", candidate_id, len(content))
+        logger.info(
+            "save_brief done candidate_id=%s chars=%d", candidate_id, len(content)
+        )
 
     def get_brief(self, candidate_id: str) -> str:
         """读取候选人简报，文件不存在时返回空字符串。"""
@@ -795,14 +855,18 @@ class MemoryModule:
     def save_questions(self, candidate_id: str, questions: list) -> None:
         """原子写入结构化问题清单（list[dict]）。"""
         import json
+
         path = self._questions_path(candidate_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_atomic(path, json.dumps(questions, ensure_ascii=False, indent=2))
-        logger.info("save_questions done candidate_id=%s count=%d", candidate_id, len(questions))
+        logger.info(
+            "save_questions done candidate_id=%s count=%d", candidate_id, len(questions)
+        )
 
     def get_questions(self, candidate_id: str) -> list:
         """读取问题清单，不存在时返回空列表。"""
         import json
+
         path = self._questions_path(candidate_id)
         if not path.exists():
             return []
@@ -812,7 +876,13 @@ class MemoryModule:
             logger.exception("get_questions failed for %s", candidate_id)
             return []
 
-    def update_question_coverage(self, candidate_id: str, question_id: str, covered: bool, covered_by: str = "manual") -> bool:
+    def update_question_coverage(
+        self,
+        candidate_id: str,
+        question_id: str,
+        covered: bool,
+        covered_by: str = "manual",
+    ) -> bool:
         """更新单个问题的覆盖状态。返回是否找到该问题。"""
         questions = self.get_questions(candidate_id)
         for q in questions:
@@ -823,10 +893,12 @@ class MemoryModule:
                 return True
         return False
 
-    async def get_latest_eval_report(self, candidate_id: str) -> "EvalReport | None":
+    async def get_latest_eval_report(self, candidate_id: str) -> EvalReport | None:
         interviews = self._read_interviews_index(candidate_id)
         for iv in interviews:
-            report = await self.get_eval_report(iv["interview_id"], candidate_id=candidate_id)
+            report = await self.get_eval_report(
+                iv["interview_id"], candidate_id=candidate_id
+            )
             if report is not None:
                 return report
         return None
@@ -863,7 +935,9 @@ class MemoryModule:
             rounds = _parse_transcript(transcript_path.read_text(encoding="utf-8"))
 
         # 读取 eval report
-        eval_report = await self.get_eval_report(interview_id, candidate_id=candidate_id)
+        eval_report = await self.get_eval_report(
+            interview_id, candidate_id=candidate_id
+        )
 
         rec_candidate = session_data.get("recording_candidate_path", "")
         rec_interviewer = session_data.get("recording_interviewer_path", "")
@@ -944,16 +1018,19 @@ class MemoryModule:
                 _trigger_mode = _sd.get("trigger_mode", _trigger_mode)
             except Exception:
                 pass
-            interviews.insert(0, {
-                "interview_id": report.interview_id,
-                "start_time": _start_time,
-                "end_time": None,
-                "stage": "completed",
-                "trigger_mode": _trigger_mode,
-                "overall_score": report.overall_score,
-                "recommendation": report.recommendation,
-                "key_findings": key_findings,
-            })
+            interviews.insert(
+                0,
+                {
+                    "interview_id": report.interview_id,
+                    "start_time": _start_time,
+                    "end_time": None,
+                    "stage": "completed",
+                    "trigger_mode": _trigger_mode,
+                    "overall_score": report.overall_score,
+                    "recommendation": report.recommendation,
+                    "key_findings": key_findings,
+                },
+            )
         self._write_interviews_index(candidate_id, interviews)
 
         logger.info("save_eval_report done interview_id=%s", report.interview_id)
@@ -1046,27 +1123,35 @@ class MemoryModule:
                     key_findings = ""
                     if eval_path.exists():
                         try:
-                            emeta, _ = _parse_frontmatter(eval_path.read_text(encoding="utf-8"))
+                            emeta, _ = _parse_frontmatter(
+                                eval_path.read_text(encoding="utf-8")
+                            )
                             overall_score = emeta.get("overall_score")
                             recommendation = emeta.get("recommendation")
                             kf_parts = []
                             if emeta.get("strengths"):
-                                kf_parts.append("优势: " + "; ".join(list(emeta["strengths"])[:2]))
+                                kf_parts.append(
+                                    "优势: " + "; ".join(list(emeta["strengths"])[:2])
+                                )
                             if emeta.get("weaknesses"):
-                                kf_parts.append("不足: " + "; ".join(list(emeta["weaknesses"])[:2]))
+                                kf_parts.append(
+                                    "不足: " + "; ".join(list(emeta["weaknesses"])[:2])
+                                )
                             key_findings = "，".join(kf_parts)
                         except Exception:
                             pass
-                    iv_entries.append({
-                        "interview_id": iv_dir.name,
-                        "start_time": sd.get("start_time", ""),
-                        "end_time": sd.get("end_time"),
-                        "stage": sd.get("stage", "completed"),
-                        "trigger_mode": sd.get("trigger_mode", "auto"),
-                        "overall_score": overall_score,
-                        "recommendation": recommendation,
-                        "key_findings": key_findings,
-                    })
+                    iv_entries.append(
+                        {
+                            "interview_id": iv_dir.name,
+                            "start_time": sd.get("start_time", ""),
+                            "end_time": sd.get("end_time"),
+                            "stage": sd.get("stage", "completed"),
+                            "trigger_mode": sd.get("trigger_mode", "auto"),
+                            "overall_score": overall_score,
+                            "recommendation": recommendation,
+                            "key_findings": key_findings,
+                        }
+                    )
             if iv_entries:
                 _write_atomic(
                     interviews_dir / "index.md",
@@ -1075,15 +1160,21 @@ class MemoryModule:
 
             latest_interview = None
             if iv_entries:
-                latest_end = iv_entries[0].get("end_time") or iv_entries[0].get("start_time") or ""
+                latest_end = (
+                    iv_entries[0].get("end_time")
+                    or iv_entries[0].get("start_time")
+                    or ""
+                )
                 latest_interview = latest_end[:10] if latest_end else None
 
-            candidates.append({
-                "id": candidate_id,
-                "name": name,
-                "created_at": created_at,
-                "latest_interview": latest_interview,
-            })
+            candidates.append(
+                {
+                    "id": candidate_id,
+                    "name": name,
+                    "created_at": created_at,
+                    "latest_interview": latest_interview,
+                }
+            )
 
         self._write_candidates_index(candidates)
         logger.info("rebuild_index done: %d candidates", len(candidates))
@@ -1107,13 +1198,17 @@ def _profile_from_meta(meta: dict) -> CandidateProfile:
     )
 
 
-def _format_history_summary(candidate_name: str, summaries: list[InterviewSummary]) -> str:
+def _format_history_summary(
+    candidate_name: str, summaries: list[InterviewSummary]
+) -> str:
     if not summaries:
         return ""
     lines = [f"候选人 {candidate_name} 历史面试记录："]
     for idx, s in enumerate(summaries, start=1):
         date_str = s.date.strftime("%Y-%m-%d %H:%M")
-        score_str = f"{s.overall_score:.1f}/10" if s.overall_score is not None else "未评分"
+        score_str = (
+            f"{s.overall_score:.1f}/10" if s.overall_score is not None else "未评分"
+        )
         rec_str = s.recommendation or "未推荐"
         findings = s.key_findings or "无关键发现"
         lines.append(
@@ -1132,31 +1227,35 @@ def _parse_transcript(text: str) -> list[ConversationRound]:
     for line in body.splitlines():
         if line.startswith("## Round "):
             if current:
-                rounds.append(ConversationRound(
-                    round_number=round_number,
-                    interviewer_text=current.get("interviewer", ""),
-                    candidate_text=current.get("candidate", ""),
-                    llm_suggestion=current.get("suggestion"),
-                    timestamp=datetime.now(),
-                ))
+                rounds.append(
+                    ConversationRound(
+                        round_number=round_number,
+                        interviewer_text=current.get("interviewer", ""),
+                        candidate_text=current.get("candidate", ""),
+                        llm_suggestion=current.get("suggestion"),
+                        timestamp=datetime.now(),
+                    )
+                )
             current = {}
             try:
                 round_number = int(line.split("Round ")[1].split(" ")[0])
             except (IndexError, ValueError):
                 round_number += 1
         elif line.startswith("**面试官：**"):
-            current["interviewer"] = line[len("**面试官：**"):].strip()
+            current["interviewer"] = line[len("**面试官：**") :].strip()
         elif line.startswith("**候选人：**"):
-            current["candidate"] = line[len("**候选人：**"):].strip()
+            current["candidate"] = line[len("**候选人：**") :].strip()
         elif line.startswith("**追问建议：**"):
-            current["suggestion"] = line[len("**追问建议：**"):].strip()
+            current["suggestion"] = line[len("**追问建议：**") :].strip()
 
     if current:
-        rounds.append(ConversationRound(
-            round_number=round_number,
-            interviewer_text=current.get("interviewer", ""),
-            candidate_text=current.get("candidate", ""),
-            llm_suggestion=current.get("suggestion"),
-            timestamp=datetime.now(),
-        ))
+        rounds.append(
+            ConversationRound(
+                round_number=round_number,
+                interviewer_text=current.get("interviewer", ""),
+                candidate_text=current.get("candidate", ""),
+                llm_suggestion=current.get("suggestion"),
+                timestamp=datetime.now(),
+            )
+        )
     return rounds

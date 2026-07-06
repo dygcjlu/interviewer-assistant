@@ -3,6 +3,7 @@
 RED phase: 这些测试应该失败，因为当前代码直接实例化 OpenAICompatibleClient，
 绕过了 app.state.llm_client 注入，导致 mock 无法生效。
 """
+
 from __future__ import annotations
 
 import json
@@ -27,7 +28,13 @@ async def test_check_question_coverage_uses_injected_llm(client, mock_llm, tmp_p
 
     # 保存问题清单
     questions = [
-        {"id": "q1", "question": "介绍项目经验", "focus": "项目", "covered": False, "covered_by": ""}
+        {
+            "id": "q1",
+            "question": "介绍项目经验",
+            "focus": "项目",
+            "covered": False,
+            "covered_by": "",
+        }
     ]
     memory.save_questions("test-001", questions)
 
@@ -38,7 +45,9 @@ async def test_check_question_coverage_uses_injected_llm(client, mock_llm, tmp_p
     session = await controller.get_session()
 
     from datetime import datetime
+
     from src.models.session import ConversationRound
+
     session.rounds.append(
         ConversationRound(
             round_number=1,
@@ -49,7 +58,9 @@ async def test_check_question_coverage_uses_injected_llm(client, mock_llm, tmp_p
     )
 
     # 预设 mock 响应：LLM 判定 q1 已覆盖
-    mock_llm.push_chat(ChatResponse(content='["q1"]', prompt_tokens=50, completion_tokens=10))
+    mock_llm.push_chat(
+        ChatResponse(content='["q1"]', prompt_tokens=50, completion_tokens=10)
+    )
 
     # 调用 API
     resp = await client.post(
@@ -83,7 +94,6 @@ async def test_compare_candidates_uses_injected_llm(client, mock_llm, tmp_path):
 
     # 手动创建评价报告目录结构
     import yaml
-    from pathlib import Path
 
     c1_dir = Path(tmp_path) / "candidates" / "c1" / "interviews" / "int-1"
     c2_dir = Path(tmp_path) / "candidates" / "c2" / "interviews" / "int-2"
@@ -95,7 +105,9 @@ async def test_compare_candidates_uses_injected_llm(client, mock_llm, tmp_path):
         "interview_id": "int-1",
         "candidate_id": "c1",
         "overall_score": 85,
-        "dimensions": [{"dimension": "技术能力", "score": 90, "comment": "算法强", "evidence": []}],
+        "dimensions": [
+            {"dimension": "技术能力", "score": 90, "comment": "算法强", "evidence": []}
+        ],
         "strengths": ["算法强"],
         "weaknesses": ["沟通弱"],
         "recommendation": "推荐",
@@ -107,7 +119,9 @@ async def test_compare_candidates_uses_injected_llm(client, mock_llm, tmp_path):
         "interview_id": "int-2",
         "candidate_id": "c2",
         "overall_score": 75,
-        "dimensions": [{"dimension": "技术能力", "score": 70, "comment": "经验少", "evidence": []}],
+        "dimensions": [
+            {"dimension": "技术能力", "score": 70, "comment": "经验少", "evidence": []}
+        ],
         "strengths": ["态度好"],
         "weaknesses": ["经验少"],
         "recommendation": "观察",
@@ -117,16 +131,18 @@ async def test_compare_candidates_uses_injected_llm(client, mock_llm, tmp_path):
 
     (c1_dir / "eval_report.md").write_text(
         f"---\n{yaml.dump(report1_data, allow_unicode=True)}---\n\n优秀候选人",
-        encoding="utf-8"
+        encoding="utf-8",
     )
     (c2_dir / "eval_report.md").write_text(
         f"---\n{yaml.dump(report2_data, allow_unicode=True)}---\n\n待观察候选人",
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     # 预设 mock 响应
     mock_summary = "候选人A综合能力更强，推荐优先录用。"
-    mock_llm.push_chat(ChatResponse(content=mock_summary, prompt_tokens=100, completion_tokens=20))
+    mock_llm.push_chat(
+        ChatResponse(content=mock_summary, prompt_tokens=100, completion_tokens=20)
+    )
 
     # 调用 API (GET with query params)
     resp = await client.get("/api/candidates/compare", params={"ids": "c1,c2"})
@@ -139,7 +155,9 @@ async def test_compare_candidates_uses_injected_llm(client, mock_llm, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_generate_questions_uses_injected_llm(client, mock_llm, tmp_path):
+async def test_dispatch_generate_questions_uses_injected_llm(
+    client, mock_llm, tmp_path
+):
     """测试 dispatch_to_agent._generate_questions_from_brief 使用注入的 llm_client。
 
     RED: 当前会失败，因为 dispatch_to_agent.py line 191 直接实例化 OpenAICompatibleClient
@@ -156,11 +174,15 @@ async def test_dispatch_generate_questions_uses_injected_llm(client, mock_llm, t
     session = await controller.get_session()
 
     # 预设 mock 响应：返回结构化问题
-    questions_json = json.dumps([
-        {"question": "介绍 Java 项目", "focus": "项目经验"},
-        {"question": "并发编程经验", "focus": "技术深度"},
-    ])
-    mock_llm.push_chat(ChatResponse(content=questions_json, prompt_tokens=80, completion_tokens=30))
+    questions_json = json.dumps(
+        [
+            {"question": "介绍 Java 项目", "focus": "项目经验"},
+            {"question": "并发编程经验", "focus": "技术深度"},
+        ]
+    )
+    mock_llm.push_chat(
+        ChatResponse(content=questions_json, prompt_tokens=80, completion_tokens=30)
+    )
 
     # 手动触发 _generate_questions_from_brief
     from src.tools.dispatch_to_agent import _generate_questions_from_brief

@@ -1,4 +1,5 @@
 """Unit tests — storage 模块：MemoryModule CRUD 和辅助函数。"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -25,7 +26,6 @@ from src.storage.memory_module import (
     _parse_frontmatter,
     _render_frontmatter,
 )
-
 
 # ── 辅助 ──────────────────────────────────────────────────────────────────────
 
@@ -57,7 +57,12 @@ def _make_eval_report(interview_id: str = "s-001") -> EvalReport:
         id="eval-001",
         interview_id=interview_id,
         dimensions=[
-            DimensionScore(dimension="技术深度", score=8.0, comment="优秀", evidence=["提到了分布式"])
+            DimensionScore(
+                dimension="技术深度",
+                score=8.0,
+                comment="优秀",
+                evidence=["提到了分布式"],
+            )
         ],
         overall_score=8.0,
         strengths=["系统思维"],
@@ -178,7 +183,9 @@ class TestBuildTranscriptMd:
     def test_generates_transcript_with_rounds(self):
         session = _make_session()
         session.rounds = [
-            ConversationRound(round_number=1, interviewer_text="请介绍一下", candidate_text="我叫张三")
+            ConversationRound(
+                round_number=1, interviewer_text="请介绍一下", candidate_text="我叫张三"
+            )
         ]
         result = _build_transcript_md(session)
         assert "Round 1" in result
@@ -192,7 +199,9 @@ class TestBuildTranscriptMd:
 
     def test_includes_llm_suggestion_when_present(self):
         session = _make_session()
-        r = ConversationRound(round_number=1, interviewer_text="问", candidate_text="答")
+        r = ConversationRound(
+            round_number=1, interviewer_text="问", candidate_text="答"
+        )
         r.llm_suggestion = "可以追问并发设计"
         session.rounds = [r]
         result = _build_transcript_md(session)
@@ -318,9 +327,7 @@ class TestMemoryModuleInterviews:
         await module.save_candidate(profile, "")
         session = _make_session()
         await module.start_interview(session)
-        interview_dir = (
-            tmp_path / "candidates" / "c-001" / "interviews" / "s-001"
-        )
+        interview_dir = tmp_path / "candidates" / "c-001" / "interviews" / "s-001"
         assert interview_dir.exists()
 
     @pytest.mark.asyncio
@@ -335,6 +342,7 @@ class TestMemoryModuleInterviews:
         )
         assert session_json.exists()
         import json as _json
+
         data = _json.loads(session_json.read_text())
         assert data["interview_id"] == "s-001"
         assert data["stage"] == "interviewing"
@@ -361,7 +369,9 @@ class TestMemoryModuleInterviews:
         await module.save_candidate(profile, "")
         session = _make_session()
         await module.start_interview(session)
-        round_ = ConversationRound(round_number=1, interviewer_text="问", candidate_text="答")
+        round_ = ConversationRound(
+            round_number=1, interviewer_text="问", candidate_text="答"
+        )
         await module.append_round("c-001", "s-001", round_)
         wal_path = (
             tmp_path / "candidates" / "c-001" / "interviews" / "s-001" / "rounds.jsonl"
@@ -397,7 +407,9 @@ class TestMemoryModuleFinishInterview:
         session = _make_session()
         await module.start_interview(session)
         session.rounds.append(
-            ConversationRound(round_number=1, interviewer_text="问", candidate_text="答")
+            ConversationRound(
+                round_number=1, interviewer_text="问", candidate_text="答"
+            )
         )
         await module.finish_interview(session)
         transcript_path = (
@@ -409,6 +421,7 @@ class TestMemoryModuleFinishInterview:
     @pytest.mark.asyncio
     async def test_finish_interview_updates_session_json(self, tmp_path):
         import json as _json
+
         module = _make_module(tmp_path)
         profile = _make_profile()
         await module.save_candidate(profile, "")
@@ -441,13 +454,16 @@ class TestMemoryModuleEvalReport:
     @pytest.mark.asyncio
     async def test_get_eval_report_nonexistent_returns_none(self, tmp_path):
         module = _make_module(tmp_path)
-        result = await module.get_eval_report("nonexistent-interview", candidate_id="c-001")
+        result = await module.get_eval_report(
+            "nonexistent-interview", candidate_id="c-001"
+        )
         assert result is None
 
     @pytest.mark.asyncio
     async def test_save_eval_report_orphan_when_no_candidate(self, tmp_path):
         """如果找不到 candidate，应将报告写入 eval_orphans/ 并 raise StorageError。"""
         from src.models.exceptions import StorageError
+
         module = _make_module(tmp_path)
         report = _make_eval_report(interview_id="orphan-interview")
         with pytest.raises(StorageError):
@@ -485,7 +501,9 @@ class TestMemoryModuleGetInterviewDetail:
         await module.save_candidate(profile, "")
         session = _make_session()
         session.rounds.append(
-            ConversationRound(round_number=1, interviewer_text="问", candidate_text="答")
+            ConversationRound(
+                round_number=1, interviewer_text="问", candidate_text="答"
+            )
         )
         await module.start_interview(session)
         await module.finish_interview(session)
@@ -523,14 +541,15 @@ class TestMemoryModuleScanOrphanWal:
 
     @pytest.mark.asyncio
     async def test_scan_orphan_wal_finds_orphan(self, tmp_path):
-        import json as _json
         module = _make_module(tmp_path)
         profile = _make_profile()
         await module.save_candidate(profile, "")
         session = _make_session()
         await module.start_interview(session)
         # append a round without finish_interview
-        round_ = ConversationRound(round_number=1, interviewer_text="问", candidate_text="答")
+        round_ = ConversationRound(
+            round_number=1, interviewer_text="问", candidate_text="答"
+        )
         await module.append_round("c-001", "s-001", round_)
         orphans = await module.scan_orphan_wal()
         assert len(orphans) == 1
@@ -558,7 +577,9 @@ class TestMemoryModuleDiscard:
         await module.save_candidate(profile, "")
         session = _make_session()
         await module.start_interview(session)
-        round_ = ConversationRound(round_number=1, interviewer_text="问", candidate_text="答")
+        round_ = ConversationRound(
+            round_number=1, interviewer_text="问", candidate_text="答"
+        )
         await module.append_round("c-001", "s-001", round_)
         result = await module.discard_orphan_wal("c-001", "s-001")
         assert result is True
@@ -627,7 +648,9 @@ class TestMemoryModuleRecoverWal:
         await module.save_candidate(profile, "")
         session = _make_session()
         await module.start_interview(session)
-        round_ = ConversationRound(round_number=1, interviewer_text="问", candidate_text="答")
+        round_ = ConversationRound(
+            round_number=1, interviewer_text="问", candidate_text="答"
+        )
         await module.append_round("c-001", "s-001", round_)
         count = await module.recover_interview_from_wal("c-001", "s-001")
         assert count == 1
@@ -639,7 +662,9 @@ class TestMemoryModuleRecoverWal:
         await module.save_candidate(profile, "")
         session = _make_session()
         await module.start_interview(session)
-        wal_path = tmp_path / "candidates" / "c-001" / "interviews" / "s-001" / "rounds.jsonl"
+        wal_path = (
+            tmp_path / "candidates" / "c-001" / "interviews" / "s-001" / "rounds.jsonl"
+        )
         wal_path.parent.mkdir(parents=True, exist_ok=True)
         wal_path.write_text("", encoding="utf-8")
         count = await module.recover_interview_from_wal("c-001", "s-001")
@@ -650,6 +675,7 @@ class TestMemoryModuleRecoverWal:
 class TestParseTranscript:
     def test_parse_transcript_basic(self):
         from src.storage.memory_module import _parse_transcript
+
         text = "---\n---\n## Round 1\n**面试官：** 请自我介绍\n**候选人：** 我是张三"
         rounds = _parse_transcript(text)
         assert len(rounds) == 1
@@ -658,6 +684,7 @@ class TestParseTranscript:
 
     def test_parse_transcript_multiple_rounds(self):
         from src.storage.memory_module import _parse_transcript
+
         text = (
             "---\n---\n"
             "## Round 1\n**面试官：** 问题1\n**候选人：** 回答1\n"
@@ -669,6 +696,7 @@ class TestParseTranscript:
 
     def test_parse_transcript_with_suggestion(self):
         from src.storage.memory_module import _parse_transcript
+
         text = (
             "---\n---\n"
             "## Round 1\n**面试官：** 问题\n**候选人：** 回答\n**追问建议：** 追问什么"
@@ -678,5 +706,6 @@ class TestParseTranscript:
 
     def test_parse_transcript_empty_returns_empty(self):
         from src.storage.memory_module import _parse_transcript
+
         rounds = _parse_transcript("")
         assert rounds == []

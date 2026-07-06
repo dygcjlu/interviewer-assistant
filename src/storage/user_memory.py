@@ -3,6 +3,7 @@
 条目之间以 ENTRY_DELIMITER 分隔，支持精确的 add / replace / remove 操作，
 并使用原子写入（mkstemp + os.replace）保证文件安全。
 """
+
 from __future__ import annotations
 
 import logging
@@ -89,7 +90,9 @@ class UserMemoryStore:
             raise ValueError(
                 f"条目内容不能包含分隔符（{ENTRY_DELIMITER!r}），请检查内容是否异常"
             )
-        new_render = self.render() + (ENTRY_DELIMITER if self._entries else "") + content
+        new_render = (
+            self.render() + (ENTRY_DELIMITER if self._entries else "") + content
+        )
         if len(new_render) > self.char_limit:
             raise ValueError(
                 f"添加后总字符数 ({len(new_render)}) 超过上限 ({self.char_limit})，"

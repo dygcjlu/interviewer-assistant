@@ -11,6 +11,7 @@
     LLM_API_KEY       百炼 DashScope API Key（所有百炼模型共用）
     DEEPSEEK_API_KEY  DeepSeek 官方 API Key（api.deepseek.com）
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,7 +19,7 @@ import asyncio
 import csv
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import openai
@@ -27,9 +28,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
+    from rich import box as rich_box
     from rich.console import Console
     from rich.table import Table
-    from rich import box as rich_box
 
     _RICH = True
 except ImportError:
@@ -75,7 +76,9 @@ class BenchmarkResult:
 
 
 # 非思考模式的默认参数（所有模型共用）
-NO_THINK = ThinkingConfig(extra_body=None, suppress_temperature=False, reasoning_effort=None)
+NO_THINK = ThinkingConfig(
+    extra_body=None, suppress_temperature=False, reasoning_effort=None
+)
 
 # 百炼 enable_thinking 格式（Qwen / 百炼 DeepSeek / 万擎 / Kimi）
 _BAILIAN_THINK = ThinkingConfig(
@@ -94,30 +97,151 @@ _DS_OFFICIAL_THINK = ThinkingConfig(
 
 MODEL_CONFIGS: list[ModelConfig] = [
     # ── 百炼 Qwen 官方 ─────────────────────────────────────────────────────────
-    ModelConfig("qwen3.7-plus",              "qwen3.7-plus",              _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("qwen3.7-plus+think",        "qwen3.7-plus",              _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("qwen3.7-max",               "qwen3.7-max",               _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("qwen3.7-max+think",         "qwen3.7-max",               _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
+    ModelConfig(
+        "qwen3.7-plus",
+        "qwen3.7-plus",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "qwen3.7-plus+think",
+        "qwen3.7-plus",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "qwen3.7-max",
+        "qwen3.7-max",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "qwen3.7-max+think",
+        "qwen3.7-max",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
     # ── 百炼 DeepSeek 自营 ────────────────────────────────────────────────────
-    ModelConfig("ds-v4-pro (百炼)",          "deepseek-v4-pro",           _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("ds-v4-pro+think (百炼)",    "deepseek-v4-pro",           _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("ds-v4-flash (百炼)",        "deepseek-v4-flash",         _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("ds-v4-flash+think (百炼)",  "deepseek-v4-flash",         _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
+    ModelConfig(
+        "ds-v4-pro (百炼)",
+        "deepseek-v4-pro",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "ds-v4-pro+think (百炼)",
+        "deepseek-v4-pro",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "ds-v4-flash (百炼)",
+        "deepseek-v4-flash",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "ds-v4-flash+think (百炼)",
+        "deepseek-v4-flash",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
     # ── 百炼 万擎 DeepSeek ───────────────────────────────────────────────────
-    ModelConfig("vanchin-v4-pro",            "vanchin/deepseek-v4-pro",   _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("vanchin-v4-pro+think",      "vanchin/deepseek-v4-pro",   _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
+    ModelConfig(
+        "vanchin-v4-pro",
+        "vanchin/deepseek-v4-pro",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "vanchin-v4-pro+think",
+        "vanchin/deepseek-v4-pro",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
     # ── 百炼 Kimi ────────────────────────────────────────────────────────────
-    ModelConfig("kimi-k2.6",                 "kimi/kimi-k2.6",            _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
-    ModelConfig("kimi-k2.6+think",           "kimi/kimi-k2.6",            _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, _BAILIAN_THINK),
+    ModelConfig(
+        "kimi-k2.6",
+        "kimi/kimi-k2.6",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
+    ModelConfig(
+        "kimi-k2.6+think",
+        "kimi/kimi-k2.6",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        _BAILIAN_THINK,
+    ),
     # ── 百炼 MiniMax ─────────────────────────────────────────────────────────
-    ModelConfig("minimax-m3",                "MiniMax/MiniMax-M3",        _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, None),
+    ModelConfig(
+        "minimax-m3",
+        "MiniMax/MiniMax-M3",
+        _DASHSCOPE_URL,
+        "LLM_API_KEY",
+        NO_THINK,
+        None,
+    ),
     # ── 百炼 GLM ─────────────────────────────────────────────────────────────
-    ModelConfig("glm-5.1",                   "ZHIPU/GLM-5.1",             _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, None),
+    ModelConfig(
+        "glm-5.1", "ZHIPU/GLM-5.1", _DASHSCOPE_URL, "LLM_API_KEY", NO_THINK, None
+    ),
     # ── DeepSeek 官方 ────────────────────────────────────────────────────────
-    ModelConfig("ds-v4-pro (官方)",          "deepseek-v4-pro",           _DEEPSEEK_URL, "DEEPSEEK_API_KEY", NO_THINK, _DS_OFFICIAL_THINK),
-    ModelConfig("ds-v4-pro+think (官方)",    "deepseek-v4-pro",           _DEEPSEEK_URL, "DEEPSEEK_API_KEY", NO_THINK, _DS_OFFICIAL_THINK),
-    ModelConfig("ds-v4-flash (官方)",        "deepseek-v4-flash",         _DEEPSEEK_URL, "DEEPSEEK_API_KEY", NO_THINK, _DS_OFFICIAL_THINK),
-    ModelConfig("ds-v4-flash+think (官方)",  "deepseek-v4-flash",         _DEEPSEEK_URL, "DEEPSEEK_API_KEY", NO_THINK, _DS_OFFICIAL_THINK),
+    ModelConfig(
+        "ds-v4-pro (官方)",
+        "deepseek-v4-pro",
+        _DEEPSEEK_URL,
+        "DEEPSEEK_API_KEY",
+        NO_THINK,
+        _DS_OFFICIAL_THINK,
+    ),
+    ModelConfig(
+        "ds-v4-pro+think (官方)",
+        "deepseek-v4-pro",
+        _DEEPSEEK_URL,
+        "DEEPSEEK_API_KEY",
+        NO_THINK,
+        _DS_OFFICIAL_THINK,
+    ),
+    ModelConfig(
+        "ds-v4-flash (官方)",
+        "deepseek-v4-flash",
+        _DEEPSEEK_URL,
+        "DEEPSEEK_API_KEY",
+        NO_THINK,
+        _DS_OFFICIAL_THINK,
+    ),
+    ModelConfig(
+        "ds-v4-flash+think (官方)",
+        "deepseek-v4-flash",
+        _DEEPSEEK_URL,
+        "DEEPSEEK_API_KEY",
+        NO_THINK,
+        _DS_OFFICIAL_THINK,
+    ),
 ]
 
 
@@ -243,7 +367,9 @@ async def run_streaming_benchmark(
         )
 
     client = openai.AsyncOpenAI(api_key=api_key, base_url=config.base_url)
-    kwargs = build_request_kwargs(config, thinking_cfg, temperature=temperature, timeout=timeout)
+    kwargs = build_request_kwargs(
+        config, thinking_cfg, temperature=temperature, timeout=timeout
+    )
     ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
     kwargs["messages"] = [
         {"role": "system", "content": f"[timestamp: {ts}]"},
@@ -267,7 +393,11 @@ async def run_streaming_benchmark(
                 ttft = (time.perf_counter() - start) * 1000
 
         total_ms = (time.perf_counter() - start) * 1000
-        tps = (completion_tokens / total_ms * 1000) if total_ms > 0 and completion_tokens else None
+        tps = (
+            (completion_tokens / total_ms * 1000)
+            if total_ms > 0 and completion_tokens
+            else None
+        )
 
         return BenchmarkResult(
             label=config.label,
@@ -294,9 +424,19 @@ def print_live_result(idx: int, total: int, result: BenchmarkResult) -> None:
         status = f"ERROR: {result.error[:60]}"
         line = f"[{idx:3d}/{total}] {result.label:<32} | think={think_mark} | {status}"
     else:
-        ttft_s = f"{result.ttft_ms / 1000:.2f}s" if result.ttft_ms is not None else "  N/A "
-        total_s = f"{result.total_ms / 1000:.2f}s" if result.total_ms is not None else "  N/A "
-        tps = f"{result.tokens_per_sec:.1f}" if result.tokens_per_sec is not None else "N/A"
+        ttft_s = (
+            f"{result.ttft_ms / 1000:.2f}s" if result.ttft_ms is not None else "  N/A "
+        )
+        total_s = (
+            f"{result.total_ms / 1000:.2f}s"
+            if result.total_ms is not None
+            else "  N/A "
+        )
+        tps = (
+            f"{result.tokens_per_sec:.1f}"
+            if result.tokens_per_sec is not None
+            else "N/A"
+        )
         line = (
             f"[{idx:3d}/{total}] {result.label:<32} | think={think_mark} "
             f"| TTFT={ttft_s:>7} | Total={total_s:>8} | {tps:>7} tok/s | OK"
@@ -308,12 +448,20 @@ def print_summary_table(results: list[BenchmarkResult]) -> None:
     """打印按总延迟排序的汇总表格。"""
     sorted_results = sorted(
         results,
-        key=lambda r: (r.error is not None, r.total_ms if r.total_ms is not None else float("inf")),
+        key=lambda r: (
+            r.error is not None,
+            r.total_ms if r.total_ms is not None else float("inf"),
+        ),
     )
 
     if _RICH:
         console = Console()
-        table = Table(box=rich_box.ROUNDED, show_header=True, header_style="bold cyan", title="LLM Latency Benchmark")
+        table = Table(
+            box=rich_box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan",
+            title="LLM Latency Benchmark",
+        )
         table.add_column("Label", style="white", min_width=32)
         table.add_column("Think", justify="center", width=6)
         table.add_column("TTFT (s)", justify="right", width=9)
@@ -330,7 +478,9 @@ def print_summary_table(results: list[BenchmarkResult]) -> None:
             tps = f"{r.tokens_per_sec:.1f}" if r.tokens_per_sec is not None else "-"
             status_str = "OK" if not r.error else f"ERR: {r.error[:25]}"
             row_style = "red" if r.error else ""
-            table.add_row(r.label, think, ttft, total, compl, tps, status_str, style=row_style)
+            table.add_row(
+                r.label, think, ttft, total, compl, tps, status_str, style=row_style
+            )
 
         console.print()
         console.print(table)
@@ -345,31 +495,47 @@ def print_summary_table(results: list[BenchmarkResult]) -> None:
             think = "Y" if r.thinking else "N"
             ttft = f"{r.ttft_ms / 1000:.2f}" if r.ttft_ms is not None else "     -"
             total = f"{r.total_ms / 1000:.2f}" if r.total_ms is not None else "     -"
-            tps = f"{r.tokens_per_sec:.1f}" if r.tokens_per_sec is not None else "     -"
+            tps = (
+                f"{r.tokens_per_sec:.1f}" if r.tokens_per_sec is not None else "     -"
+            )
             status_str = "OK" if not r.error else f"ERR: {r.error[:30]}"
-            print(f"{r.label:<32} {think:>6} {ttft:>9} {total:>10} {tps:>8}  {status_str}")
+            print(
+                f"{r.label:<32} {think:>6} {ttft:>9} {total:>10} {tps:>8}  {status_str}"
+            )
 
 
 def write_csv(results: list[BenchmarkResult], path: str) -> None:
     """将结果写入 CSV 文件。"""
     fieldnames = [
-        "label", "thinking", "ttft_ms", "total_ms",
-        "prompt_tokens", "completion_tokens", "tokens_per_sec", "error",
+        "label",
+        "thinking",
+        "ttft_ms",
+        "total_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "tokens_per_sec",
+        "error",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for r in results:
-            writer.writerow({
-                "label": r.label,
-                "thinking": r.thinking,
-                "ttft_ms": f"{r.ttft_ms:.1f}" if r.ttft_ms is not None else "",
-                "total_ms": f"{r.total_ms:.1f}" if r.total_ms is not None else "",
-                "prompt_tokens": r.prompt_tokens,
-                "completion_tokens": r.completion_tokens,
-                "tokens_per_sec": f"{r.tokens_per_sec:.1f}" if r.tokens_per_sec is not None else "",
-                "error": r.error or "",
-            })
+            writer.writerow(
+                {
+                    "label": r.label,
+                    "thinking": r.thinking,
+                    "ttft_ms": f"{r.ttft_ms:.1f}" if r.ttft_ms is not None else "",
+                    "total_ms": f"{r.total_ms:.1f}" if r.total_ms is not None else "",
+                    "prompt_tokens": r.prompt_tokens,
+                    "completion_tokens": r.completion_tokens,
+                    "tokens_per_sec": (
+                        f"{r.tokens_per_sec:.1f}"
+                        if r.tokens_per_sec is not None
+                        else ""
+                    ),
+                    "error": r.error or "",
+                }
+            )
     print(f"\nCSV written to: {path}")
 
 
@@ -383,12 +549,30 @@ def parse_args() -> argparse.Namespace:
             "  DEEPSEEK_API_KEY  DeepSeek 官方 API Key\n"
         ),
     )
-    parser.add_argument("--filter", metavar="KEYWORD", help="只跑 label 包含关键字的配置（大小写不敏感）")
-    parser.add_argument("--skip-thinking", action="store_true", help="跳过所有 +think 变体")
-    parser.add_argument("--runs", type=int, default=1, metavar="N", help="每个配置重复 N 次（默认 1）")
-    parser.add_argument("--output-csv", action="store_true", help="输出 scripts/benchmark_results.csv")
-    parser.add_argument("--timeout", type=float, default=90.0, metavar="SEC", help="单次调用超时秒数（默认 90）")
-    parser.add_argument("--temperature", type=float, default=0.1, help="LLM temperature（默认 0.1）")
+    parser.add_argument(
+        "--filter",
+        metavar="KEYWORD",
+        help="只跑 label 包含关键字的配置（大小写不敏感）",
+    )
+    parser.add_argument(
+        "--skip-thinking", action="store_true", help="跳过所有 +think 变体"
+    )
+    parser.add_argument(
+        "--runs", type=int, default=1, metavar="N", help="每个配置重复 N 次（默认 1）"
+    )
+    parser.add_argument(
+        "--output-csv", action="store_true", help="输出 scripts/benchmark_results.csv"
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=90.0,
+        metavar="SEC",
+        help="单次调用超时秒数（默认 90）",
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=0.1, help="LLM temperature（默认 0.1）"
+    )
     return parser.parse_args()
 
 
@@ -407,7 +591,9 @@ async def _run_all(
             print(f"\n=== Run {run_n + 1}/{runs} ===")
         for cfg in configs:
             run_idx += 1
-            result = await run_streaming_benchmark(cfg, prompt, timeout=timeout, temperature=temperature)
+            result = await run_streaming_benchmark(
+                cfg, prompt, timeout=timeout, temperature=temperature
+            )
             print_live_result(run_idx, total, result)
             results.append(result)
     return results
@@ -415,24 +601,34 @@ async def _run_all(
 
 def main() -> None:
     args = parse_args()
-    configs = filter_configs(MODEL_CONFIGS, filter_str=args.filter, skip_thinking=args.skip_thinking)
+    configs = filter_configs(
+        MODEL_CONFIGS, filter_str=args.filter, skip_thinking=args.skip_thinking
+    )
 
     if not configs:
         print("No configs match the given filter. Exiting.")
         return
 
     prompt_size = len(BENCHMARK_PROMPT.encode("utf-8"))
-    print(f"\nLLM Latency Benchmark")
-    print(f"Configs: {len(configs)} x {args.runs} runs = {len(configs) * args.runs} calls")
-    print(f"Prompt size: {prompt_size:,} bytes | Timeout: {args.timeout}s | Temperature: {args.temperature}")
+    print("\nLLM Latency Benchmark")
+    print(
+        f"Configs: {len(configs)} x {args.runs} runs = {len(configs) * args.runs} calls"
+    )
+    print(
+        f"Prompt size: {prompt_size:,} bytes | Timeout: {args.timeout}s | Temperature: {args.temperature}"
+    )
     print("-" * 65)
 
-    results = asyncio.run(_run_all(configs, BENCHMARK_PROMPT, args.runs, args.timeout, args.temperature))
+    results = asyncio.run(
+        _run_all(configs, BENCHMARK_PROMPT, args.runs, args.timeout, args.temperature)
+    )
 
     print_summary_table(results)
 
     if args.output_csv:
-        csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "benchmark_results.csv")
+        csv_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "benchmark_results.csv"
+        )
         write_csv(results, csv_path)
 
 

@@ -3,11 +3,11 @@
 断言策略：只验证结构和约束，不验证 LLM 生成的具体内容。
 每个 test_* 函数依赖独立的 httpx 客户端（session 级 live_server）。
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 import httpx
 import pytest
@@ -184,7 +184,10 @@ def _assert_eval_report_structure(report: dict) -> None:
     assert 1 <= report["overall_score"] <= 10
     assert "recommendation" in report
     assert report["recommendation"] in (
-        "strong_hire", "hire", "weak_hire", "no_hire"
+        "strong_hire",
+        "hire",
+        "weak_hire",
+        "no_hire",
     ), f"非法 recommendation 值: {report['recommendation']}"
     assert "summary" in report
     assert "strengths" in report

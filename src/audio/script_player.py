@@ -1,4 +1,5 @@
 """ScriptPlayer — 按预定义脚本向 TranscriptionManager 注入对话片段，用于调试。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -36,7 +37,9 @@ class ScriptPlayer:
         """加载脚本并启动后台回放任务。"""
         script = self._load_script()
         self._task = asyncio.create_task(self._play(script, transcription_manager))
-        logger.info("ScriptPlayer: started, %d entries from %s", len(script), self._script_path)
+        logger.info(
+            "ScriptPlayer: started, %d entries from %s", len(script), self._script_path
+        )
 
     async def stop(self) -> None:
         """取消回放任务（若仍在运行）。"""
@@ -55,7 +58,9 @@ class ScriptPlayer:
         with self._script_path.open(encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, list):
-            raise ValueError(f"ScriptPlayer: script must be a JSON array, got {type(data)}")
+            raise ValueError(
+                f"ScriptPlayer: script must be a JSON array, got {type(data)}"
+            )
         return data
 
     async def _play(self, script: list[dict], tm: TranscriptionManager) -> None:

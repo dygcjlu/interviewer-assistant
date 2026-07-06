@@ -4,14 +4,15 @@
 连接端点：wss://vop.baidu.com/realtime_asr
 鉴权方式：START 帧中直接携带 appid + appkey（实时 ASR 专用短期鉴权，无需 OAuth token）。
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import AsyncIterator
 
 from websockets.asyncio.client import connect as ws_connect
 
@@ -25,15 +26,15 @@ _SAMPLE_RATE = 16000
 _FORMAT = "pcm"
 
 
-_RECONNECT_DELAY_SEC = 1.5   # 断连后等待重连的秒数
-_SEND_CHUNK_BYTES = 5120     # 百度建议每次发送 5120 字节（160ms）
+_RECONNECT_DELAY_SEC = 1.5  # 断连后等待重连的秒数
+_SEND_CHUNK_BYTES = 5120  # 百度建议每次发送 5120 字节（160ms）
 
 # 致命错误码：服务端会关闭连接，需要重连
 # -3005（本句无有效语音）是非致命错误，连接仍活跃，不应触发重连
 _FATAL_ERR_NOS = {4002, -3004}
 
 # 百度 ASR 会将上一句的末尾标点延迟到下一句结果的开头，需在接收层纠正
-_LEADING_PUNCT = frozenset('，。！？；：、…"\'""\'\'（）【】「」')
+_LEADING_PUNCT = frozenset("，。！？；：、…\"'\"\"''（）【】「」")
 
 
 class BaiduRealtimeSTT:
@@ -49,11 +50,11 @@ class BaiduRealtimeSTT:
         self._channel = channel
         self._ws = None
         self._connected = False
-        self._closed = False       # close() 调用后设为 True，禁止重连
-        self._reconnecting = False # 防止并发重连
+        self._closed = False  # close() 调用后设为 True，禁止重连
+        self._reconnecting = False  # 防止并发重连
         self._recv_queue: asyncio.Queue[TranscriptSegment] = asyncio.Queue()
         self._recv_task: asyncio.Task | None = None
-        self._audio_buf: bytes = b""   # 累积缓冲，攒满 _SEND_CHUNK_BYTES 再发
+        self._audio_buf: bytes = b""  # 累积缓冲，攒满 _SEND_CHUNK_BYTES 再发
         self._send_count: int = 0
         settings = get_settings()
         self._app_id: str = getattr(settings, "BAIDU_APP_ID", "")
@@ -80,7 +81,7 @@ class BaiduRealtimeSTT:
                 "data": {
                     "appid": int(self._app_id),
                     "appkey": self._api_key,
-                    "dev_pid": 15372,       # 普通话（与 demo 一致）
+                    "dev_pid": 15372,  # 普通话（与 demo 一致）
                     "cuid": f"interviewer-assistant-{self._channel}",
                     "format": _FORMAT,
                     "sample": _SAMPLE_RATE,
@@ -118,11 +119,14 @@ class BaiduRealtimeSTT:
         self._send_count += 1
         if self._send_count == 1:
             import numpy as np  # noqa: PLC0415
+
             arr = np.frombuffer(chunk, dtype=np.int16)
             rms = float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
             logger.debug(
                 "BaiduRealtimeSTT [%s]: first_chunk bytes=%d rms=%.1f",
-                self._channel, len(chunk), rms,
+                self._channel,
+                len(chunk),
+                rms,
             )
         try:
             await self._ws.send(chunk)
@@ -136,7 +140,7 @@ class BaiduRealtimeSTT:
 
     async def close(self) -> None:
         """发送结束帧，关闭连接。"""
-        self._closed = True   # 阻止 send_audio 触发重连
+        self._closed = True  # 阻止 send_audio 触发重连
         if self._ws is not None and self._connected:
             try:
                 # 发送缓冲区剩余数据
@@ -146,7 +150,9 @@ class BaiduRealtimeSTT:
                 await self._ws.send(json.dumps({"type": "FINISH"}))
                 await self._ws.close()
             except Exception:
-                logger.debug("BaiduRealtimeSTT [%s]: close error (ignored)", self._channel)
+                logger.debug(
+                    "BaiduRealtimeSTT [%s]: close error (ignored)", self._channel
+                )
         self._connected = False
         if self._recv_task and not self._recv_task.done():
             self._recv_task.cancel()
@@ -173,12 +179,14 @@ class BaiduRealtimeSTT:
             if pending_fin_text is None:
                 return
             text = pending_fin_text + extra_punct
-            await self._recv_queue.put(TranscriptSegment(
-                text=text,
-                source=self._channel,
-                is_final=True,
-                timestamp=datetime.now(),
-            ))
+            await self._recv_queue.put(
+                TranscriptSegment(
+                    text=text,
+                    source=self._channel,
+                    is_final=True,
+                    timestamp=datetime.now(),
+                )
+            )
             pending_fin_text = None
 
         try:
@@ -235,12 +243,14 @@ class BaiduRealtimeSTT:
                     # 缓冲 FIN_TEXT，等待下一条结果确认其末尾标点已到位
                     pending_fin_text = result
                 else:
-                    await self._recv_queue.put(TranscriptSegment(
-                        text=result,
-                        source=self._channel,
-                        is_final=False,
-                        timestamp=datetime.now(),
-                    ))
+                    await self._recv_queue.put(
+                        TranscriptSegment(
+                            text=result,
+                            source=self._channel,
+                            is_final=False,
+                            timestamp=datetime.now(),
+                        )
+                    )
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -249,7 +259,10 @@ class BaiduRealtimeSTT:
             await _flush_pending()
             # WebSocket 被服务器关闭（如 backend timeout 后）时，标记为断连
             self._connected = False
-            logger.debug("BaiduRealtimeSTT [%s]: recv loop exited, _connected set to False", self._channel)
+            logger.debug(
+                "BaiduRealtimeSTT [%s]: recv loop exited, _connected set to False",
+                self._channel,
+            )
 
     async def _reconnect(self) -> None:
         """断连后延迟重连，仅当未被 close() 且当前未在重连时执行。"""
@@ -274,8 +287,11 @@ class BaiduRealtimeSTT:
                     pass
             self._ws = None
             await self.connect()
-            logger.info("BaiduRealtimeSTT [%s]: reconnect %s", self._channel,
-                        "ok" if self._connected else "failed")
+            logger.info(
+                "BaiduRealtimeSTT [%s]: reconnect %s",
+                self._channel,
+                "ok" if self._connected else "failed",
+            )
         except Exception:
             logger.exception("BaiduRealtimeSTT [%s]: reconnect error", self._channel)
         finally:

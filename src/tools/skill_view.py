@@ -1,4 +1,5 @@
 """skill_view — 加载指定面试技巧完整内容。"""
+
 from __future__ import annotations
 
 import logging

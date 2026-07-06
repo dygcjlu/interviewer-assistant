@@ -4,6 +4,7 @@
 连接端点：wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
 鉴权方式：HTTP 请求头 X-Api-App-Key / X-Api-Access-Key / X-Api-Resource-Id
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,8 +12,8 @@ import json
 import logging
 import struct
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import AsyncIterator
 
 from websockets.asyncio.client import connect as ws_connect
 
@@ -25,11 +26,12 @@ _WSS_URL = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel"
 _SAMPLE_RATE = 16000
 _CHANNELS = 1
 _BITS = 16
-_SEND_CHUNK_BYTES = 6400       # 200ms × 16000Hz × 2bytes
+_SEND_CHUNK_BYTES = 6400  # 200ms × 16000Hz × 2bytes
 _RECONNECT_DELAY_SEC = 1.5
 
 
 # ── Binary frame helpers ───────────────────────────────────────────────────────
+
 
 def _build_full_client_request(payload_json: bytes) -> bytes:
     """Build a Full Client Request binary frame (no compression).
@@ -59,10 +61,7 @@ def _build_audio_frame(audio: bytes, seq: int, is_last: bool) -> bytes:
     signed_seq = -seq if is_last else seq
     header = bytes([0x11, type_flags, 0x00, 0x00])
     return (
-        header
-        + struct.pack(">i", signed_seq)
-        + struct.pack(">I", len(audio))
-        + audio
+        header + struct.pack(">i", signed_seq) + struct.pack(">I", len(audio)) + audio
     )
 
 
@@ -84,8 +83,10 @@ def _parse_server_response(data: bytes) -> dict | None:
             if len(data) >= 12:
                 error_code = struct.unpack(">I", data[4:8])[0]
                 msg_size = struct.unpack(">I", data[8:12])[0]
-                error_msg = data[12:12 + msg_size].decode(errors="replace")
-                logger.warning("VolcASR server error: code=%d msg=%s", error_code, error_msg)
+                error_msg = data[12 : 12 + msg_size].decode(errors="replace")
+                logger.warning(
+                    "VolcASR server error: code=%d msg=%s", error_code, error_msg
+                )
             return None
 
         offset = 4
@@ -95,9 +96,9 @@ def _parse_server_response(data: bytes) -> dict | None:
         if len(data) < offset + 4:
             return None
 
-        payload_size = struct.unpack(">I", data[offset:offset + 4])[0]
+        payload_size = struct.unpack(">I", data[offset : offset + 4])[0]
         offset += 4
-        payload_bytes = data[offset:offset + payload_size]
+        payload_bytes = data[offset : offset + payload_size]
         parsed = json.loads(payload_bytes)
 
         result = parsed.get("result", {})
@@ -156,21 +157,23 @@ class VolcRealtimeSTT:
 
         try:
             self._ws = await ws_connect(_WSS_URL, additional_headers=headers)
-            req_payload = json.dumps({
-                "user": {"uid": f"interviewer-assistant-{self._channel}"},
-                "audio": {
-                    "format": "pcm",
-                    "sample_rate": _SAMPLE_RATE,
-                    "bits": _BITS,
-                    "channel": _CHANNELS,
-                    "language": "zh-CN",
-                },
-                "request": {
-                    "model_name": "bigmodel",
-                    "show_utterances": True,
-                    "result_type": "single",
-                },
-            }).encode()
+            req_payload = json.dumps(
+                {
+                    "user": {"uid": f"interviewer-assistant-{self._channel}"},
+                    "audio": {
+                        "format": "pcm",
+                        "sample_rate": _SAMPLE_RATE,
+                        "bits": _BITS,
+                        "channel": _CHANNELS,
+                        "language": "zh-CN",
+                    },
+                    "request": {
+                        "model_name": "bigmodel",
+                        "show_utterances": True,
+                        "result_type": "single",
+                    },
+                }
+            ).encode()
             await self._ws.send(_build_full_client_request(req_payload))
             self._connected = True
             self._seq = 1  # FCR implicitly occupies seq=1; audio frames start at seq=2
@@ -211,11 +214,15 @@ class VolcRealtimeSTT:
         if self._ws is not None and self._connected:
             try:
                 self._seq += 1
-                await self._ws.send(_build_audio_frame(self._audio_buf, seq=self._seq, is_last=True))
+                await self._ws.send(
+                    _build_audio_frame(self._audio_buf, seq=self._seq, is_last=True)
+                )
                 self._audio_buf = b""
                 await self._ws.close()
             except Exception:
-                logger.debug("VolcRealtimeSTT [%s]: close error (ignored)", self._channel)
+                logger.debug(
+                    "VolcRealtimeSTT [%s]: close error (ignored)", self._channel
+                )
         self._connected = False
         if self._recv_task and not self._recv_task.done():
             self._recv_task.cancel()
@@ -242,12 +249,14 @@ class VolcRealtimeSTT:
                     if not text:
                         continue
                     is_final = bool(utterance.get("definite", False))
-                    await self._recv_queue.put(TranscriptSegment(
-                        text=text,
-                        source=self._channel,
-                        is_final=is_final,
-                        timestamp=datetime.now(),
-                    ))
+                    await self._recv_queue.put(
+                        TranscriptSegment(
+                            text=text,
+                            source=self._channel,
+                            is_final=is_final,
+                            timestamp=datetime.now(),
+                        )
+                    )
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -278,8 +287,11 @@ class VolcRealtimeSTT:
                     pass
             self._ws = None
             await self.connect()
-            logger.info("VolcRealtimeSTT [%s]: reconnect %s", self._channel,
-                        "ok" if self._connected else "failed")
+            logger.info(
+                "VolcRealtimeSTT [%s]: reconnect %s",
+                self._channel,
+                "ok" if self._connected else "failed",
+            )
         except Exception:
             logger.exception("VolcRealtimeSTT [%s]: reconnect error", self._channel)
         finally:

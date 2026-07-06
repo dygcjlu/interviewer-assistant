@@ -1,4 +1,5 @@
 """E2E API test: upload resume → parse → generate questions → verify sync endpoints."""
+
 from __future__ import annotations
 
 import json
@@ -26,7 +27,9 @@ def chat(message: str) -> str:
     """POST /api/chat SSE, return full assistant reply."""
     reply = ""
     with httpx.Client(timeout=TIMEOUT) as client:
-        with client.stream("POST", f"{BASE}/api/chat", json={"message": message}) as resp:
+        with client.stream(
+            "POST", f"{BASE}/api/chat", json={"message": message}
+        ) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines():
                 if not line.startswith("data: "):
@@ -80,7 +83,9 @@ def main() -> None:
 
         # 3. Profile before parse → 404 expected
         print("\n[3] Profile before parse")
-        r = client.get(f"{BASE}/api/resume/profile", params={"candidate_id": candidate_id})
+        r = client.get(
+            f"{BASE}/api/resume/profile", params={"candidate_id": candidate_id}
+        )
         if r.status_code == 404:
             ok("profile 404 before parse (expected)")
         else:
@@ -110,7 +115,9 @@ def main() -> None:
 
         # 6. Profile after parse
         print("\n[6] Profile after parse")
-        r = client.get(f"{BASE}/api/resume/profile", params={"candidate_id": candidate_id})
+        r = client.get(
+            f"{BASE}/api/resume/profile", params={"candidate_id": candidate_id}
+        )
         r.raise_for_status()
         profile_data = r.json()
         resume_md = profile_data.get("resume_markdown", "")
@@ -129,7 +136,9 @@ def main() -> None:
 
         # 8. Profile with questions
         print("\n[8] Profile with questions")
-        r = client.get(f"{BASE}/api/resume/profile", params={"candidate_id": candidate_id})
+        r = client.get(
+            f"{BASE}/api/resume/profile", params={"candidate_id": candidate_id}
+        )
         r.raise_for_status()
         final = r.json()
         questions = final.get("questions", [])
@@ -139,14 +148,18 @@ def main() -> None:
                 f"Chat preview: {q_reply[:200]}…"
             )
         ok(f"questions count={len(questions)}")
-        ok(f"first question: [{questions[0].get('dimension')}] {questions[0].get('question', '')[:60]}…")
+        ok(
+            f"first question: [{questions[0].get('dimension')}] {questions[0].get('question', '')[:60]}…"
+        )
 
         # 9. Session state
         print("\n[9] Session state")
         r = client.get(f"{BASE}/api/session/current")
         r.raise_for_status()
         sess = r.json().get("session") or {}
-        ok(f"session candidate_name={sess.get('candidate_name')!r} stage={sess.get('stage')}")
+        ok(
+            f"session candidate_name={sess.get('candidate_name')!r} stage={sess.get('stage')}"
+        )
 
     print("\n=== ALL E2E CHECKS PASSED ===\n")
 

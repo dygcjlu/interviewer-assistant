@@ -4,6 +4,7 @@
 连接端点：wss://office-api-ast-dx.iflyaisol.com/ast/communicate/v1?{请求参数}
 鉴权方式：URL 参数中携带 HMAC-SHA1 签名（握手前完成鉴权）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -13,8 +14,8 @@ import hmac
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
-from typing import AsyncIterator
 from urllib.parse import quote, urlencode
 
 from websockets.asyncio.client import connect as ws_connect
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 _WSS_BASE = "wss://office-api-ast-dx.iflyaisol.com/ast/communicate/v1"
 _SAMPLE_RATE = 16000
-_SEND_CHUNK_BYTES = 1280     # 官方建议：每 40ms 发送 1280 字节
+_SEND_CHUNK_BYTES = 1280  # 官方建议：每 40ms 发送 1280 字节
 _RECONNECT_DELAY_SEC = 1.5
 
 # 讯飞 ASR 会将上一句的末尾标点延迟到下一句结果的开头，需在接收层纠正
@@ -48,7 +49,7 @@ class XunfeiRealtimeSTT:
         self._connected = False
         self._closed = False
         self._reconnecting = False
-        self._session_id: str | None = None     # 从握手响应 sid 字段获取
+        self._session_id: str | None = None  # 从握手响应 sid 字段获取
         self._recv_queue: asyncio.Queue[TranscriptSegment] = asyncio.Queue()
         self._recv_task: asyncio.Task | None = None
         self._audio_buf: bytes = b""
@@ -120,7 +121,9 @@ class XunfeiRealtimeSTT:
                 await self._ws.send(json.dumps(end_frame))
                 await self._ws.close()
             except Exception:
-                logger.debug("XunfeiRealtimeSTT [%s]: close error (ignored)", self._channel)
+                logger.debug(
+                    "XunfeiRealtimeSTT [%s]: close error (ignored)", self._channel
+                )
         self._connected = False
         if self._recv_task and not self._recv_task.done():
             self._recv_task.cancel()
@@ -153,8 +156,7 @@ class XunfeiRealtimeSTT:
         # 升序排序后逐个 URL-encode key/value，拼接 baseString
         sorted_keys = sorted(params.keys())
         base_string = "&".join(
-            f"{quote(k, safe='')}={quote(params[k], safe='')}"
-            for k in sorted_keys
+            f"{quote(k, safe='')}={quote(params[k], safe='')}" for k in sorted_keys
         )
 
         mac = hmac.new(
@@ -188,12 +190,14 @@ class XunfeiRealtimeSTT:
             if pending_fin_text is None:
                 return
             text = pending_fin_text + extra_punct
-            await self._recv_queue.put(TranscriptSegment(
-                text=text,
-                source=self._channel,
-                is_final=True,
-                timestamp=datetime.now(),
-            ))
+            await self._recv_queue.put(
+                TranscriptSegment(
+                    text=text,
+                    source=self._channel,
+                    is_final=True,
+                    timestamp=datetime.now(),
+                )
+            )
             pending_fin_text = None
 
         try:
@@ -211,7 +215,8 @@ class XunfeiRealtimeSTT:
                     self._session_id = msg.get("sid")
                     logger.debug(
                         "XunfeiRealtimeSTT [%s]: session started sid=%s",
-                        self._channel, self._session_id,
+                        self._channel,
+                        self._session_id,
                     )
                     continue
 
@@ -220,7 +225,9 @@ class XunfeiRealtimeSTT:
                 if msg_type == "error" or code != "0":
                     logger.warning(
                         "XunfeiRealtimeSTT [%s]: service error code=%s desc=%s",
-                        self._channel, code, msg.get("desc", ""),
+                        self._channel,
+                        code,
+                        msg.get("desc", ""),
                     )
                     # 致命错误：鉴权失败、用量不足、引擎异常断连
                     if code in {"35001", "35002", "37008"}:
@@ -233,7 +240,8 @@ class XunfeiRealtimeSTT:
                     err_data = msg.get("data", {})
                     logger.warning(
                         "XunfeiRealtimeSTT [%s]: engine error desc=%s",
-                        self._channel, err_data.get("desc", ""),
+                        self._channel,
+                        err_data.get("desc", ""),
                     )
                     continue
 
@@ -268,12 +276,14 @@ class XunfeiRealtimeSTT:
                     # 缓冲最终结果，等待下一条结果确认其末尾标点已到位
                     pending_fin_text = text
                 else:
-                    await self._recv_queue.put(TranscriptSegment(
-                        text=text,
-                        source=self._channel,
-                        is_final=False,
-                        timestamp=datetime.now(),
-                    ))
+                    await self._recv_queue.put(
+                        TranscriptSegment(
+                            text=text,
+                            source=self._channel,
+                            is_final=False,
+                            timestamp=datetime.now(),
+                        )
+                    )
 
         except asyncio.CancelledError:
             pass
@@ -313,7 +323,8 @@ class XunfeiRealtimeSTT:
         try:
             logger.info(
                 "XunfeiRealtimeSTT [%s]: reconnecting in %.1fs...",
-                self._channel, _RECONNECT_DELAY_SEC,
+                self._channel,
+                _RECONNECT_DELAY_SEC,
             )
             await asyncio.sleep(_RECONNECT_DELAY_SEC)
             if self._closed:
@@ -329,7 +340,8 @@ class XunfeiRealtimeSTT:
             await self.connect()
             logger.info(
                 "XunfeiRealtimeSTT [%s]: reconnect %s",
-                self._channel, "ok" if self._connected else "failed",
+                self._channel,
+                "ok" if self._connected else "failed",
             )
         except Exception:
             logger.exception("XunfeiRealtimeSTT [%s]: reconnect error", self._channel)

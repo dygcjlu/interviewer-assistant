@@ -1,4 +1,5 @@
 """Integration tests — GET /api/recovery/scan、POST /api/recovery/finish|discard"""
+
 from __future__ import annotations
 
 import pytest

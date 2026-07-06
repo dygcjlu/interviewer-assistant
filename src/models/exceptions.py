@@ -4,6 +4,7 @@
 应选择最贴近语义的子类，禁止直接抛出 ``ValueError`` 等内建异常作为
 业务错误。
 """
+
 from __future__ import annotations
 
 

@@ -4,11 +4,12 @@
   原生采样率通常为 48kHz / 2ch，通过 numpy 降采样混声到 16kHz / 1ch 后推送。
 - 面试官声道（interviewer）：使用 sounddevice 捕获默认麦克风输入（MME）。
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import sounddevice as sd
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 _TARGET_RATE = 16000
 _CHANNELS = 1
 _DTYPE = "int16"
-_BLOCKSIZE_MS = 20   # 每帧 20ms
+_BLOCKSIZE_MS = 20  # 每帧 20ms
 
 
 class WasapiCapturer:
@@ -33,8 +34,8 @@ class WasapiCapturer:
     def __init__(self) -> None:
         self._callback: Callable[[AudioFrame], None] | None = None
         self._running = False
-        self._loopback_stream = None   # pyaudiowpatch stream
-        self._pyaudio = None           # PyAudio instance, kept alive
+        self._loopback_stream = None  # pyaudiowpatch stream
+        self._pyaudio = None  # PyAudio instance, kept alive
         self._mic_stream: sd.RawInputStream | None = None
 
     def set_on_frame(self, callback: Callable[[AudioFrame], None]) -> None:
@@ -104,7 +105,9 @@ class WasapiCapturer:
         try:
             import pyaudiowpatch as pyaudio  # noqa: PLC0415
         except ImportError:
-            logger.warning("WasapiCapturer: pyaudiowpatch not installed; loopback unavailable")
+            logger.warning(
+                "WasapiCapturer: pyaudiowpatch not installed; loopback unavailable"
+            )
             return None
 
         try:
@@ -150,7 +153,9 @@ class WasapiCapturer:
                 frames_per_buffer=blocksize,
                 input=True,
                 input_device_index=loopback_device["index"],
-                stream_callback=self._make_loopback_callback(native_rate, native_channels),
+                stream_callback=self._make_loopback_callback(
+                    native_rate, native_channels
+                ),
             )
             self._pyaudio = p
             self._loopback_stream = stream
@@ -176,6 +181,7 @@ class WasapiCapturer:
 
         def _cb(in_data, frame_count, time_info, status) -> tuple:
             import pyaudiowpatch as pyaudio  # noqa: PLC0415
+
             if not self._running or self._callback is None:
                 return (None, pyaudio.paContinue)
 
@@ -204,6 +210,7 @@ class WasapiCapturer:
 
     def _make_sd_callback(self, source: str):
         """sounddevice 麦克风回调，通过 run_coroutine_threadsafe 传回主 loop。"""
+
         def _cb(indata: bytes, frames: int, time_info, status) -> None:
             if status:
                 logger.debug("WasapiCapturer [%s] status: %s", source, status)
@@ -215,6 +222,7 @@ class WasapiCapturer:
                 timestamp=time.monotonic(),
             )
             self._callback(frame)
+
         return _cb
 
 

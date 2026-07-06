@@ -1,4 +1,5 @@
 """Unit tests — 数据模型结构与不变量。"""
+
 from __future__ import annotations
 
 import dataclasses
@@ -14,7 +15,6 @@ from src.models.session import (
     InterviewStage,
     SessionMetadata,
 )
-
 
 # ── CandidateProfile ──────────────────────────────────────────────────────────
 
@@ -171,7 +171,9 @@ def test_eval_report_structure():
 
 @pytest.mark.unit
 def test_dimension_score_evidence_list():
-    ds = DimensionScore(dimension="编程能力", score=9.0, comment="代码质量高", evidence=[])
+    ds = DimensionScore(
+        dimension="编程能力", score=9.0, comment="代码质量高", evidence=[]
+    )
     assert isinstance(ds.evidence, list)
 
 

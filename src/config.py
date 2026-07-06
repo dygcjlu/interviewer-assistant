@@ -1,4 +1,5 @@
 """应用配置 — 从 .env 文件和环境变量加载。"""
+
 from __future__ import annotations
 
 from pathlib import Path

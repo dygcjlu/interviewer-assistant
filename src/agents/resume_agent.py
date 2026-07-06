@@ -1,13 +1,13 @@
 """ResumeAgent — 任务驱动的 ReAct 循环，负责简历解析与面试题目生成。"""
+
 from __future__ import annotations
 
 import json
 import logging
-import re
 
-from .base import AgentRequest, AgentResponse, BaseAgent
 from ..models.message import Message
 from ..models.session import InterviewSession
+from .base import AgentRequest, AgentResponse, BaseAgent
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ class ResumeAgent(BaseAgent):
         """
         self._bind_log_context("execute")
         from ..config import get_settings
+
         settings = get_settings()
         max_rounds = settings.RESUME_AGENT_MAX_TOOL_ROUNDS
 
@@ -50,7 +51,11 @@ class ResumeAgent(BaseAgent):
                 parsed = json.loads(result)
             except Exception:
                 return None
-            if isinstance(parsed, dict) and parsed.get("user_facing") and parsed.get("error"):
+            if (
+                isinstance(parsed, dict)
+                and parsed.get("user_facing")
+                and parsed.get("error")
+            ):
                 return _USER_FACING_SENTINEL + str(parsed["error"])
             return None
 
@@ -66,7 +71,7 @@ class ResumeAgent(BaseAgent):
 
         # L1-6: 收到 user_facing 早退信号 → 不解析 JSON，直接返回 error 透传
         if result_text.startswith(_USER_FACING_SENTINEL):
-            err_text = result_text[len(_USER_FACING_SENTINEL):]
+            err_text = result_text[len(_USER_FACING_SENTINEL) :]
             logger.warning("ResumeAgent.execute user_facing early exit: %s", err_text)
             return {"type": "error", "message": err_text, "user_facing": True}
 
@@ -92,14 +97,16 @@ class ResumeAgent(BaseAgent):
 
     async def handle_request(self, request: AgentRequest) -> AgentResponse:
         """兼容 BaseAgent 接口（不对外使用）。"""
-        return AgentResponse(success=False, error="ResumeAgent 只通过 dispatch_to_agent 调用")
+        return AgentResponse(
+            success=False, error="ResumeAgent 只通过 dispatch_to_agent 调用"
+        )
 
     def _build_messages(self, task: str) -> list[Message]:
-        from ..framework.prompt_builder import AgentConfig
-        from ..models.session import InterviewSession, InterviewStage, SessionMetadata
-        from ..models.candidate import CandidateProfile
         import uuid
         from datetime import datetime
+
+        from ..models.candidate import CandidateProfile
+        from ..models.session import InterviewSession, InterviewStage, SessionMetadata
 
         dummy_session = InterviewSession(
             id=str(uuid.uuid4()),

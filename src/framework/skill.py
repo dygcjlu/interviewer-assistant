@@ -1,4 +1,5 @@
 """SkillLoader — 从文件系统加载 Skill 元数据和完整内容。"""
+
 from __future__ import annotations
 
 import logging
@@ -33,7 +34,9 @@ class SkillLoader:
         """扫描 skills/ 目录，读取每个 SKILL.md 的 frontmatter，返回索引列表。"""
         result: list[SkillMeta] = []
         if not self._skills_dir.exists():
-            logger.warning("SkillLoader: skills_dir does not exist: %s", self._skills_dir)
+            logger.warning(
+                "SkillLoader: skills_dir does not exist: %s", self._skills_dir
+            )
             return result
         for skill_dir in sorted(self._skills_dir.iterdir()):
             if not skill_dir.is_dir():
@@ -52,7 +55,9 @@ class SkillLoader:
         """按需加载指定 Skill 的完整 SKILL.md 内容。"""
         skill_file = self._skills_dir / name / "SKILL.md"
         if not skill_file.exists():
-            raise FileNotFoundError(f"Skill not found: {name!r} (looked in {skill_file})")
+            raise FileNotFoundError(
+                f"Skill not found: {name!r} (looked in {skill_file})"
+            )
         full_text = skill_file.read_text(encoding="utf-8")
         meta = self._parse_frontmatter(full_text)
         return SkillContent(meta=meta, full_text=full_text)

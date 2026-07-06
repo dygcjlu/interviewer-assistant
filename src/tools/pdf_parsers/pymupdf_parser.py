@@ -1,4 +1,5 @@
 """PymupdfParser — 使用 pymupdf4llm 的本地解析器（原有逻辑）。"""
+
 from __future__ import annotations
 
 import asyncio

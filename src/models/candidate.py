@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-def update_candidate_from_data(candidate: "CandidateProfile", data: dict | list) -> None:
+def update_candidate_from_data(candidate: CandidateProfile, data: dict | list) -> None:
     """将 LLM 解析出的候选人信息写回 CandidateProfile（in-place）。"""
     if not isinstance(data, dict):
         return
@@ -43,4 +43,6 @@ class CandidateProfile:
     resume_pdf: str = ""
     # 运行时瞬态字段（不持久化到 profile.md frontmatter）
     history_summary: str | None = None
-    resume_content: str = ""  # profile.md 正文（Markdown），由 create_session 从文件加载
+    resume_content: str = (
+        ""  # profile.md 正文（Markdown），由 create_session 从文件加载
+    )

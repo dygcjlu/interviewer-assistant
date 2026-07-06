@@ -2,10 +2,11 @@
 
 绝不在生产环境使用；仅供本地开发和单元测试。
 """
+
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable
 
 from .protocol import AudioFrame, TranscriptSegment
 
@@ -16,8 +17,8 @@ class MockAudioCapturer:
     每 20ms 产出一帧 320 字节（16kHz, 16bit, 单声道）静音数据。
     """
 
-    _FRAME_INTERVAL = 0.02        # 20ms
-    _FRAME_BYTES = 320             # 16kHz × 0.02s × 2 bytes
+    _FRAME_INTERVAL = 0.02  # 20ms
+    _FRAME_BYTES = 320  # 16kHz × 0.02s × 2 bytes
 
     def __init__(self) -> None:
         self._callback: Callable[[AudioFrame], None] | None = None

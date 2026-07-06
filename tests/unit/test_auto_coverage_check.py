@@ -1,14 +1,19 @@
 """Unit tests — 自动覆盖检测功能（后端触发）。"""
+
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.models.candidate import CandidateProfile
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
+from src.models.session import (
+    ConversationRound,
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 from src.tools._context import ToolContext
 
 
@@ -45,9 +50,16 @@ class TestAutoCheckCoverage:
 
         # Mock memory module
         mock_memory = MagicMock()
-        mock_memory.get_questions = MagicMock(return_value=[
-            {"id": "q1", "question": "Python 经验", "focus": "技术背景", "covered": False}
-        ])
+        mock_memory.get_questions = MagicMock(
+            return_value=[
+                {
+                    "id": "q1",
+                    "question": "Python 经验",
+                    "focus": "技术背景",
+                    "covered": False,
+                }
+            ]
+        )
         mock_memory.update_question_coverage = MagicMock(return_value=True)
 
         # Mock LLM client
@@ -61,13 +73,15 @@ class TestAutoCheckCoverage:
             memory=mock_memory,
             llm_client=mock_llm,
             candidate_id="c-001",
-            session=session
+            session=session,
         )
 
         # 验证调用
         mock_memory.get_questions.assert_called_once_with("c-001")
         mock_llm.chat.assert_awaited_once()
-        mock_memory.update_question_coverage.assert_called_once_with("c-001", "q1", True, covered_by="auto")
+        mock_memory.update_question_coverage.assert_called_once_with(
+            "c-001", "q1", True, covered_by="auto"
+        )
 
     @pytest.mark.asyncio
     async def test_auto_check_coverage_skips_when_no_questions(self):
@@ -86,7 +100,7 @@ class TestAutoCheckCoverage:
             memory=mock_memory,
             llm_client=mock_llm,
             candidate_id="c-001",
-            session=session
+            session=session,
         )
 
         # 应该不调用 LLM
@@ -101,9 +115,16 @@ class TestAutoCheckCoverage:
         session.rounds = []
 
         mock_memory = MagicMock()
-        mock_memory.get_questions = MagicMock(return_value=[
-            {"id": "q1", "question": "Python 经验", "focus": "技术背景", "covered": False}
-        ])
+        mock_memory.get_questions = MagicMock(
+            return_value=[
+                {
+                    "id": "q1",
+                    "question": "Python 经验",
+                    "focus": "技术背景",
+                    "covered": False,
+                }
+            ]
+        )
 
         mock_llm = MagicMock()
         mock_llm.chat = AsyncMock()
@@ -112,7 +133,7 @@ class TestAutoCheckCoverage:
             memory=mock_memory,
             llm_client=mock_llm,
             candidate_id="c-001",
-            session=session
+            session=session,
         )
 
         # 应该不调用 LLM
@@ -135,7 +156,7 @@ class TestAutoCheckCoverage:
             memory=mock_memory,
             llm_client=mock_llm,
             candidate_id="c-001",
-            session=session
+            session=session,
         )
 
 
@@ -146,8 +167,8 @@ class TestDispatchSideEffectWithCoverage:
     @pytest.mark.asyncio
     async def test_apply_side_effects_triggers_coverage_check_after_suggestion(self):
         """当 result_type 为 'suggestion' 时，应异步触发覆盖检测。"""
+
         from src.tools.dispatch_to_agent import _apply_side_effects
-        import asyncio as real_asyncio
 
         session = _make_session()
 
@@ -155,9 +176,16 @@ class TestDispatchSideEffectWithCoverage:
         mock_controller.get_session = AsyncMock(return_value=session)
 
         mock_memory = MagicMock()
-        mock_memory.get_questions = MagicMock(return_value=[
-            {"id": "q1", "question": "Python 经验", "focus": "技术背景", "covered": False}
-        ])
+        mock_memory.get_questions = MagicMock(
+            return_value=[
+                {
+                    "id": "q1",
+                    "question": "Python 经验",
+                    "focus": "技术背景",
+                    "covered": False,
+                }
+            ]
+        )
 
         mock_llm = MagicMock()
         mock_response = MagicMock()
@@ -170,14 +198,16 @@ class TestDispatchSideEffectWithCoverage:
         mock_ctx = ToolContext(
             controller=mock_controller,
             memory_module=mock_memory,
-            main_agent=mock_main_agent
+            main_agent=mock_main_agent,
         )
 
         result = {"type": "suggestion", "content": "追问建议"}
 
         # Mock asyncio.create_task to capture the coroutine
-        with patch("src.tools.dispatch_to_agent.ctx", mock_ctx), \
-             patch("asyncio.create_task") as mock_create_task:
+        with (
+            patch("src.tools.dispatch_to_agent.ctx", mock_ctx),
+            patch("asyncio.create_task") as mock_create_task,
+        ):
             await _apply_side_effects("suggestion", result)
 
             # 验证创建了异步任务
@@ -197,8 +227,10 @@ class TestDispatchSideEffectWithCoverage:
 
         result = {"type": "parse_done"}
 
-        with patch("src.tools.dispatch_to_agent.ctx", mock_ctx), \
-             patch("asyncio.create_task") as mock_create_task:
+        with (
+            patch("src.tools.dispatch_to_agent.ctx", mock_ctx),
+            patch("asyncio.create_task") as mock_create_task,
+        ):
             await _apply_side_effects("parse_done", result)
 
             # 不应创建覆盖检测任务

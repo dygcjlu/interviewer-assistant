@@ -1,4 +1,5 @@
 """Integration tests — POST /api/candidate/select"""
+
 from __future__ import annotations
 
 import pytest
@@ -9,16 +10,16 @@ from src.models.candidate import CandidateProfile
 async def _seed(client, cid: str, name: str) -> None:
     memory = client._transport.app.state.memory_module
     candidate = CandidateProfile(id=cid, name=name)
-    await memory.save_candidate(candidate, f"# {name} 简历正文\n技术栈：Python, FastAPI")
+    await memory.save_candidate(
+        candidate, f"# {name} 简历正文\n技术栈：Python, FastAPI"
+    )
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_select_existing_candidate_returns_200(client):
     await _seed(client, "cid-sel-001", "选中候选人")
-    r = await client.post(
-        "/api/candidate/select", json={"candidate_id": "cid-sel-001"}
-    )
+    r = await client.post("/api/candidate/select", json={"candidate_id": "cid-sel-001"})
     assert r.status_code == 200
     data = r.json()
     assert data["candidate_id"] == "cid-sel-001"
@@ -33,9 +34,7 @@ async def test_select_existing_candidate_returns_200(client):
 async def test_select_candidate_updates_session(client):
     """select 后 /api/session/current 的 candidate_id 应更新。"""
     await _seed(client, "cid-sel-002", "更新会话候选人")
-    await client.post(
-        "/api/candidate/select", json={"candidate_id": "cid-sel-002"}
-    )
+    await client.post("/api/candidate/select", json={"candidate_id": "cid-sel-002"})
     r = await client.get("/api/session/current")
     session = r.json()["session"]
     assert session is not None
@@ -45,9 +44,7 @@ async def test_select_candidate_updates_session(client):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_select_nonexistent_candidate_returns_404(client):
-    r = await client.post(
-        "/api/candidate/select", json={"candidate_id": "not-exist"}
-    )
+    r = await client.post("/api/candidate/select", json={"candidate_id": "not-exist"})
     assert r.status_code == 404
     assert r.json()["detail"]["code"] == "not_found"
 
@@ -56,9 +53,10 @@ async def test_select_nonexistent_candidate_returns_404(client):
 @pytest.mark.asyncio
 async def test_select_candidate_injects_history_into_main_agent(client):
     """选中有历史记录的候选人后，MainAgent 的系统提示应包含历史面试摘要。"""
-    from unittest.mock import AsyncMock, patch
-    from src.storage.memory_module import CandidateHistory, InterviewSummary
     from datetime import datetime
+    from unittest.mock import AsyncMock, patch
+
+    from src.storage.memory_module import CandidateHistory, InterviewSummary
 
     await _seed(client, "cid-hist-001", "历史候选人")
 
@@ -78,7 +76,9 @@ async def test_select_candidate_injects_history_into_main_agent(client):
     memory = client._transport.app.state.memory_module
     main_agent = client._transport.app.state.main_agent
 
-    with patch.object(memory, "get_candidate_history", new=AsyncMock(return_value=fake_history)):
+    with patch.object(
+        memory, "get_candidate_history", new=AsyncMock(return_value=fake_history)
+    ):
         r = await client.post(
             "/api/candidate/select", json={"candidate_id": "cid-hist-001"}
         )
@@ -101,7 +101,9 @@ async def test_select_candidate_no_history_does_not_break(client):
 
     main_agent = client._transport.app.state.main_agent
 
-    with patch.object(memory, "get_candidate_history", new=AsyncMock(return_value=None)):
+    with patch.object(
+        memory, "get_candidate_history", new=AsyncMock(return_value=None)
+    ):
         r = await client.post(
             "/api/candidate/select", json={"candidate_id": "cid-hist-002"}
         )
@@ -122,7 +124,11 @@ async def test_select_candidate_history_exception_does_not_break(client):
     memory = client._transport.app.state.memory_module
     main_agent = client._transport.app.state.main_agent
 
-    with patch.object(memory, "get_candidate_history", new=AsyncMock(side_effect=OSError("disk error"))):
+    with patch.object(
+        memory,
+        "get_candidate_history",
+        new=AsyncMock(side_effect=OSError("disk error")),
+    ):
         r = await client.post(
             "/api/candidate/select", json={"candidate_id": "cid-hist-003"}
         )

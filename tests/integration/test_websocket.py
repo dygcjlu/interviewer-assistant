@@ -1,15 +1,14 @@
 """Integration tests — WebSocket /ws/interview 消息契约。"""
+
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 from starlette.testclient import TestClient
 
 from src.models.candidate import CandidateProfile
-
 
 # WebSocket 测试使用 starlette TestClient 的同步 WS 支持
 # 同时提供异步辅助工具
@@ -85,7 +84,6 @@ def test_websocket_connects_and_receives_session_snapshot_when_session_exists(
     tmp_path, mock_llm
 ):
     """连接时若有活跃会话，立即收到 session_snapshot 消息。"""
-    import asyncio
 
     from tests.integration.conftest import _build_test_app
 
@@ -133,7 +131,6 @@ def test_websocket_request_suggestion_no_session_returns_error(tmp_path, mock_ll
 @pytest.mark.integration
 def test_websocket_set_trigger_mode_updates_session(tmp_path, mock_llm):
     """发送 set_trigger_mode manual → 收到 status 消息且 trigger_mode 更新。"""
-    import asyncio
 
     from tests.integration.conftest import _build_test_app
 

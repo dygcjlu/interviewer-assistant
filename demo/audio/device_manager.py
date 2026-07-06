@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import soundcard as sc
 
@@ -42,7 +42,9 @@ class AudioDeviceManager:
     """
 
     def __init__(self) -> None:
-        self._on_change: Callable[[list[DeviceInfo], list[DeviceInfo]], None] | None = None
+        self._on_change: Callable[[list[DeviceInfo], list[DeviceInfo]], None] | None = (
+            None
+        )
         self._poll_thread: threading.Thread | None = None
         self._polling = False
         self._last_mic_ids: set[str] = set()
@@ -124,7 +126,9 @@ class AudioDeviceManager:
         logger.info("Device monitoring stopped")
 
     def _snapshot_device_ids(self) -> None:
-        self._last_mic_ids = {str(m.id) for m in sc.all_microphones(include_loopback=True)}
+        self._last_mic_ids = {
+            str(m.id) for m in sc.all_microphones(include_loopback=True)
+        }
         self._last_speaker_ids = {str(s.id) for s in sc.all_speakers()}
 
     def _poll_loop(self, interval: float) -> None:
@@ -133,9 +137,14 @@ class AudioDeviceManager:
             if not self._polling:
                 break
             try:
-                cur_mic_ids = {str(m.id) for m in sc.all_microphones(include_loopback=True)}
+                cur_mic_ids = {
+                    str(m.id) for m in sc.all_microphones(include_loopback=True)
+                }
                 cur_speaker_ids = {str(s.id) for s in sc.all_speakers()}
-                if cur_mic_ids != self._last_mic_ids or cur_speaker_ids != self._last_speaker_ids:
+                if (
+                    cur_mic_ids != self._last_mic_ids
+                    or cur_speaker_ids != self._last_speaker_ids
+                ):
                     self._last_mic_ids = cur_mic_ids
                     self._last_speaker_ids = cur_speaker_ids
                     logger.info("Audio device change detected")

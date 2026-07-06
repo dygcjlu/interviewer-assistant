@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import AsyncIterator, Callable, Protocol
+from typing import Protocol
 
 
 @dataclass
 class AudioFrame:
     data: bytes
-    source: str                            # "candidate" | "interviewer" | "mixed"
+    source: str  # "candidate" | "interviewer" | "mixed"
     timestamp: float
 
 
@@ -26,7 +27,7 @@ class AudioCapturer(Protocol):
 @dataclass
 class TranscriptSegment:
     text: str
-    source: str                            # "candidate" | "interviewer"
+    source: str  # "candidate" | "interviewer"
     is_final: bool
     timestamp: datetime
     start_time: float | None = None

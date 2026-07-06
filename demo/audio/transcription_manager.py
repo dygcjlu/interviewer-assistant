@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator, Dict, List, Optional
+from collections.abc import AsyncIterator
 
 from demo.audio.capture import CaptureMode
-from demo.audio.stt import BAIDU_CHUNK_BYTES, BaiduRealtimeSTT, TranscriptSegment
 from demo.audio.stream import AudioStreamManager
+from demo.audio.stt import BAIDU_CHUNK_BYTES, BaiduRealtimeSTT, TranscriptSegment
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,9 @@ class TranscriptionManager:
         self._dev_pid = dev_pid
 
         self._stream_manager = AudioStreamManager(mode=mode, enable_vad=False)
-        self._stt_clients: Dict[str, BaiduRealtimeSTT] = {}
+        self._stt_clients: dict[str, BaiduRealtimeSTT] = {}
         self._transcript_queue: asyncio.Queue = asyncio.Queue()
-        self._tasks: List[asyncio.Task] = []
+        self._tasks: list[asyncio.Task] = []
         self._running = False
 
     async def start(self) -> None:
@@ -82,9 +82,7 @@ class TranscriptionManager:
                 )
             )
             self._tasks.append(
-                asyncio.create_task(
-                    self._recv_loop(stt), name=f"recv-{source}"
-                )
+                asyncio.create_task(self._recv_loop(stt), name=f"recv-{source}")
             )
 
         self._running = True

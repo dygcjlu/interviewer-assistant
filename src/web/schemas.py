@@ -1,4 +1,5 @@
 """Web 层 Pydantic 请求/响应 schema。"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel

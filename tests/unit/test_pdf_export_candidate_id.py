@@ -1,4 +1,5 @@
 """Unit tests — Task 3: Fix PDF export to use report.candidate_id instead of parsing interview_id."""
+
 from __future__ import annotations
 
 import json
@@ -15,12 +16,19 @@ from src.framework.tool_registry import ToolRegistry
 from src.llm.protocol import ChatResponse
 from src.models.candidate import CandidateProfile
 from src.models.evaluation import EvalReport
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
+from src.models.session import (
+    ConversationRound,
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
 
 
-def _make_session_with_candidate(candidate_id: str = "c-001", name: str = "张三") -> InterviewSession:
+def _make_session_with_candidate(
+    candidate_id: str = "c-001", name: str = "张三"
+) -> InterviewSession:
     """Create a test session with a specific candidate_id."""
     rounds = [
         ConversationRound(
@@ -43,16 +51,23 @@ def _make_session_with_candidate(candidate_id: str = "c-001", name: str = "张�
 
 def _make_eval_agent_with_mock_llm(tmp_path: Path) -> EvalAgent:
     """Create an EvalAgent with mocked LLM for testing."""
-    valid_json = json.dumps({
-        "dimensions": [
-            {"dimension": "技术深度", "score": 8.0, "comment": "优秀", "evidence": ["提到了微服务"]}
-        ],
-        "overall_score": 8.0,
-        "strengths": ["系统设计清晰"],
-        "weaknesses": ["缺乏运维经验"],
-        "recommendation": "hire",
-        "summary": "候选人表现良好，技术能力扎实，沟通能力强，符合岗位要求，建议录用。",
-    })
+    valid_json = json.dumps(
+        {
+            "dimensions": [
+                {
+                    "dimension": "技术深度",
+                    "score": 8.0,
+                    "comment": "优秀",
+                    "evidence": ["提到了微服务"],
+                }
+            ],
+            "overall_score": 8.0,
+            "strengths": ["系统设计清晰"],
+            "weaknesses": ["缺乏运维经验"],
+            "recommendation": "hire",
+            "summary": "候选人表现良好，技术能力扎实，沟通能力强，符合岗位要求，建议录用。",
+        }
+    )
 
     mock_llm = AsyncMock()
     mock_llm.chat = AsyncMock(return_value=ChatResponse(content=valid_json))
@@ -90,7 +105,9 @@ class TestEvalAgentFillsCandidateId:
         )
 
         # Create session with specific candidate_id
-        session = _make_session_with_candidate(candidate_id=candidate_id, name=candidate_name)
+        session = _make_session_with_candidate(
+            candidate_id=candidate_id, name=candidate_name
+        )
 
         # Generate evaluation
         req = AgentRequest(type="generate_eval", payload={}, session=session)
@@ -102,7 +119,9 @@ class TestEvalAgentFillsCandidateId:
 
         # Verify report.candidate_id is filled from session
         report: EvalReport = resp.data["report"]
-        assert report.candidate_id == candidate_id, f"Expected candidate_id={candidate_id}, got {report.candidate_id}"
+        assert (
+            report.candidate_id == candidate_id
+        ), f"Expected candidate_id={candidate_id}, got {report.candidate_id}"
 
     @pytest.mark.asyncio
     async def test_generate_eval_with_different_candidate_ids(self, tmp_path):
@@ -114,7 +133,9 @@ class TestEvalAgentFillsCandidateId:
         await agent._memory_module.save_candidate(
             CandidateProfile(id=candidate_id_1, name="Alice"), ""
         )
-        session_1 = _make_session_with_candidate(candidate_id=candidate_id_1, name="Alice")
+        session_1 = _make_session_with_candidate(
+            candidate_id=candidate_id_1, name="Alice"
+        )
         req_1 = AgentRequest(type="generate_eval", payload={}, session=session_1)
         resp_1 = await agent.handle_request(req_1)
 
@@ -127,7 +148,9 @@ class TestEvalAgentFillsCandidateId:
         await agent._memory_module.save_candidate(
             CandidateProfile(id=candidate_id_2, name="Bob"), ""
         )
-        session_2 = _make_session_with_candidate(candidate_id=candidate_id_2, name="Bob")
+        session_2 = _make_session_with_candidate(
+            candidate_id=candidate_id_2, name="Bob"
+        )
         req_2 = AgentRequest(type="generate_eval", payload={}, session=session_2)
         resp_2 = await agent.handle_request(req_2)
 

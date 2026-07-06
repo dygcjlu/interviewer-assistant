@@ -1,16 +1,17 @@
 """音频子系统统一管理器。"""
+
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
+from ..models.session import ConversationRound, InterviewSession
 from .protocol import AudioCapturer, AudioFrame, STTEngine
 from .recorder import AudioRecorder, RecordingResult
 from .stream import AudioStreamBridge
 from .transcription import TranscriptionManager
 from .trigger import SuggestionTrigger
-from ..models.session import ConversationRound, InterviewSession
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,9 @@ class AudioManager:
         session: InterviewSession,
         ws_sender: Callable[[dict], Awaitable[None]],
         suggestion_trigger: SuggestionTrigger,
-        on_round_finalized: Callable[[ConversationRound], Awaitable[None]] | None = None,
+        on_round_finalized: (
+            Callable[[ConversationRound], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         """启动音频采集全链路。"""
         # 1. Create TranscriptionManager
@@ -72,12 +75,16 @@ class AudioManager:
         def _sync_frame_callback(frame: AudioFrame) -> None:
             try:
                 if self._loop is not None and self._bridge is not None:
-                    fut = asyncio.run_coroutine_threadsafe(self._bridge.on_frame(frame), self._loop)
+                    fut = asyncio.run_coroutine_threadsafe(
+                        self._bridge.on_frame(frame), self._loop
+                    )
 
-                    def _on_done(f: "asyncio.Future") -> None:
+                    def _on_done(f: asyncio.Future) -> None:
                         exc = f.exception() if not f.cancelled() else None
                         if exc is not None:
-                            logger.error("AudioManager: on_frame future exception: %s", exc)
+                            logger.error(
+                                "AudioManager: on_frame future exception: %s", exc
+                            )
 
                     fut.add_done_callback(_on_done)
             except Exception:
@@ -131,11 +138,15 @@ class AudioManager:
         try:
             await self._candidate_stt.close()
         except Exception:
-            logger.warning("AudioManager rollback: candidate_stt close failed", exc_info=True)
+            logger.warning(
+                "AudioManager rollback: candidate_stt close failed", exc_info=True
+            )
         try:
             await self._interviewer_stt.close()
         except Exception:
-            logger.warning("AudioManager rollback: interviewer_stt close failed", exc_info=True)
+            logger.warning(
+                "AudioManager rollback: interviewer_stt close failed", exc_info=True
+            )
 
         self._transcription_manager = None
         self._bridge = None

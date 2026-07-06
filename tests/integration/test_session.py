@@ -1,4 +1,5 @@
 """Integration tests — GET /api/session/current"""
+
 from __future__ import annotations
 
 import pytest

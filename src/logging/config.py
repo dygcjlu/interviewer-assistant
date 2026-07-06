@@ -1,4 +1,5 @@
 """应用日志初始化 — 主日志 + 错误副本 + 控制台，注入关联字段。"""
+
 from __future__ import annotations
 
 import logging

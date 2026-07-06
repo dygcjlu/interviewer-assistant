@@ -1,13 +1,15 @@
 """BaseAgent — 所有 Agent 的抽象基类与共享请求/响应数据结构。"""
+
 from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import AsyncIterator, Callable, Optional, TYPE_CHECKING
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 # ToolResultHook(tool_name, tool_result_json_str) -> 若返回非 None 则中止 ReAct 用该值作为最终输出
-ToolResultHook = Callable[[str, str], Optional[str]]
+ToolResultHook = Callable[[str, str], str | None]
 
 from src.logging import bind_agent, bind_op
 
@@ -56,7 +58,7 @@ class BaseAgent(ABC):
         self,
         config: AgentConfig,
         prompt_builder: PromptBuilder,
-        llm_client: "LLMClient",
+        llm_client: LLMClient,
         tool_registry: ToolRegistry,
     ) -> None:
         self.config = config
@@ -98,7 +100,7 @@ class BaseAgent(ABC):
         self,
         messages: list[Message],
         max_tool_rounds: int = 5,
-        on_tool_result: "ToolResultHook | None" = None,
+        on_tool_result: ToolResultHook | None = None,
     ) -> str:
         """LLM 调用循环：检测 tool_calls 并顺序执行，直到 LLM 输出纯文本。
 

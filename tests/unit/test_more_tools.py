@@ -1,4 +1,5 @@
 """Unit tests — 更多 tools 模块：manage_user_memory、parse_resume_pdf。"""
+
 from __future__ import annotations
 
 import json
@@ -7,10 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.tools._context import ToolContext
 from src.tools.manage_user_memory import _reload_agents, manage_user_memory
 from src.tools.parse_resume_pdf import get_pdf_parser, parse_resume_pdf
-from src.tools._context import ToolContext
-
 
 # ── manage_user_memory ────────────────────────────────────────────────────────
 
@@ -19,6 +19,7 @@ from src.tools._context import ToolContext
 class TestManageUserMemory:
     def _make_ctx_with_store(self, tmp_path: Path) -> ToolContext:
         from src.storage.user_memory import UserMemoryStore
+
         path = tmp_path / "USER.md"
         path.write_text("")
         store = UserMemoryStore(path)
@@ -164,7 +165,9 @@ class TestParsePdf:
     async def test_returns_text_on_success(self, tmp_path, sample_pdf):
         mock_parser = AsyncMock()
         mock_parser.extract = AsyncMock(return_value="# 简历内容")
-        with patch("src.tools.parse_resume_pdf.get_pdf_parser", return_value=mock_parser):
+        with patch(
+            "src.tools.parse_resume_pdf.get_pdf_parser", return_value=mock_parser
+        ):
             result = await parse_resume_pdf(str(sample_pdf))
         data = json.loads(result)
         assert "text" in data
@@ -180,7 +183,9 @@ class TestParsePdf:
         def mock_get_parser(parser_type: str):
             return primary if parser_type != "pymupdf" else fallback
 
-        with patch("src.tools.parse_resume_pdf.get_pdf_parser", side_effect=mock_get_parser):
+        with patch(
+            "src.tools.parse_resume_pdf.get_pdf_parser", side_effect=mock_get_parser
+        ):
             with patch("src.tools.parse_resume_pdf.get_settings") as mock_settings:
                 mock_settings.return_value.PDF_PARSER = "qwen_vl"
                 result = await parse_resume_pdf(str(sample_pdf))
@@ -189,10 +194,14 @@ class TestParsePdf:
         assert "text" in data or "error" in data
 
     @pytest.mark.asyncio
-    async def test_returns_user_facing_error_when_pymupdf_is_primary_and_fails(self, tmp_path, sample_pdf):
+    async def test_returns_user_facing_error_when_pymupdf_is_primary_and_fails(
+        self, tmp_path, sample_pdf
+    ):
         mock_parser = AsyncMock()
         mock_parser.extract = AsyncMock(side_effect=Exception("pymupdf failed"))
-        with patch("src.tools.parse_resume_pdf.get_pdf_parser", return_value=mock_parser):
+        with patch(
+            "src.tools.parse_resume_pdf.get_pdf_parser", return_value=mock_parser
+        ):
             with patch("src.tools.parse_resume_pdf.get_settings") as mock_settings:
                 mock_settings.return_value.PDF_PARSER = "pymupdf"
                 result = await parse_resume_pdf(str(sample_pdf))
@@ -202,10 +211,12 @@ class TestParsePdf:
 
     def test_get_pdf_parser_returns_pymupdf_by_default(self):
         from src.tools.pdf_parsers import PymupdfParser
+
         parser = get_pdf_parser("unknown")
         assert isinstance(parser, PymupdfParser)
 
     def test_get_pdf_parser_returns_qwen_vl(self):
         from src.tools.pdf_parsers import QwenVLParser
+
         parser = get_pdf_parser("qwen_vl")
         assert isinstance(parser, QwenVLParser)

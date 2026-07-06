@@ -1,4 +1,5 @@
 """QwenVLParser — 使用 Qwen-VL 多模态 LLM 逐页识别 PDF。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -33,7 +34,9 @@ class QwenVLParser(BasePDFParser):
         pages_b64 = await asyncio.get_running_loop().run_in_executor(
             None, self._render_pages, file_path
         )
-        logger.info("QwenVLParser: rendered %d pages from %s", len(pages_b64), file_path)
+        logger.info(
+            "QwenVLParser: rendered %d pages from %s", len(pages_b64), file_path
+        )
 
         # L1-5: Semaphore 限并发 + 单页 try/except → 长 PDF 不再单页失败全批挂
         concurrency = max(1, int(getattr(settings, "QWEN_VL_CONCURRENCY", 8)))
@@ -42,11 +45,15 @@ class QwenVLParser(BasePDFParser):
         async def _run_one(idx: int, b64: str) -> str:
             async with semaphore:
                 try:
-                    return await self._extract_page(client, settings.effective_vl_model, b64)
+                    return await self._extract_page(
+                        client, settings.effective_vl_model, b64
+                    )
                 except Exception as exc:
                     logger.warning(
                         "QwenVLParser: page %d/%d failed: %s",
-                        idx + 1, len(pages_b64), exc,
+                        idx + 1,
+                        len(pages_b64),
+                        exc,
                     )
                     return f"[第 {idx + 1} 页解析失败：{exc.__class__.__name__}: {str(exc)[:120]}]"
 
@@ -72,9 +79,7 @@ class QwenVLParser(BasePDFParser):
         return pages
 
     @staticmethod
-    async def _extract_page(
-        client: openai.AsyncOpenAI, model: str, b64: str
-    ) -> str:
+    async def _extract_page(client: openai.AsyncOpenAI, model: str, b64: str) -> str:
         response = await client.chat.completions.create(
             model=model,
             messages=[

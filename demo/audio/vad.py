@@ -12,7 +12,7 @@ import logging
 import numpy as np
 import webrtcvad
 
-from demo.audio.capture import AudioFrame, SAMPLE_RATE
+from demo.audio.capture import SAMPLE_RATE, AudioFrame
 
 logger = logging.getLogger(__name__)
 

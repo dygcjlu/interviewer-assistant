@@ -4,6 +4,7 @@
 ProviderProfile 结构化声明平台能力，驱动 Client 决定发哪些参数，
 避免在 Client 中硬编码 if provider == "xxx" 分支。
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -31,10 +32,8 @@ class ProviderProfile:
 PROFILES: dict[str, ProviderProfile] = {
     # 通用 OpenAI 兼容：vLLM 自部署、MiniMax、Moonshot 等平台无需特殊处理
     "openai_compat": ProviderProfile(name="openai_compat"),
-
     # 阿里 Qwen 非思考版（qwen-plus、qwen-turbo 等）
     "qwen": ProviderProfile(name="qwen"),
-
     # DeepSeek 思考模式 —— 三个约束全部开启
     "deepseek": ProviderProfile(
         name="deepseek",
@@ -43,7 +42,6 @@ PROFILES: dict[str, ProviderProfile] = {
         thinking_requires_reasoning_content=True,
         thinking_extra_body={"thinking": {"type": "enabled"}},
     ),
-
     # Qwen3 思考版 —— 支持思考，但 temperature 仍可用，不强制回传
     "qwen_thinking": ProviderProfile(
         name="qwen_thinking",

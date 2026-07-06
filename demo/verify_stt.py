@@ -27,8 +27,8 @@ APPID = 121087443
 APPKEY = "eLpyLuxR0of5RWsn497uSdp0"
 DEV_PID = 15372
 SILENCE_SECONDS = 3
-BAIDU_CHUNK_BYTES = 5120        # 160ms at 16kHz 16-bit mono
-FRAME_INTERVAL_S = 0.16         # 模拟实时发送间隔
+BAIDU_CHUNK_BYTES = 5120  # 160ms at 16kHz 16-bit mono
+FRAME_INTERVAL_S = 0.16  # 模拟实时发送间隔
 
 
 async def verify() -> bool:
@@ -39,7 +39,7 @@ async def verify() -> bool:
     sn = str(uuid.uuid4())
     url = f"wss://vop.baidu.com/realtime_asr?sn={sn}"
 
-    print(f"[1/4] 连接 WebSocket ...")
+    print("[1/4] 连接 WebSocket ...")
     ws = await websockets.connect(url)
     print("[1/4] ✓ WebSocket 连接成功")
 
@@ -111,7 +111,7 @@ async def verify() -> bool:
 
     try:
         await asyncio.wait_for(receive_done.wait(), timeout=10.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         print("    (等待 10s 超时，继续)")
 
     recv_task.cancel()
@@ -123,9 +123,7 @@ async def verify() -> bool:
     print()
     print("[4/4] 验证结果:")
     if auth_error:
-        err = next(
-            (m for m in messages if m.get("err_no") in (-3004, -3005)), {}
-        )
+        err = next((m for m in messages if m.get("err_no") in (-3004, -3005)), {})
         print(
             f"    ✗ 鉴权失败: err_no={err.get('err_no')} "
             f"err_msg={err.get('err_msg')}"

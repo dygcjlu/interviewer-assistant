@@ -1,16 +1,14 @@
 """Unit tests — utils 模块：safe_float、write_atomic、Metrics。"""
+
 from __future__ import annotations
 
-import os
 import time
-from pathlib import Path
 
 import pytest
 
-from src.utils.numeric import safe_float
 from src.utils.atomic_io import write_atomic
 from src.utils.metrics import Metrics
-
+from src.utils.numeric import safe_float
 
 # ── safe_float ────────────────────────────────────────────────────────────────
 
@@ -140,9 +138,14 @@ class TestMetrics:
         m = Metrics.get()
         d = m.to_dict()
         for key in [
-            "requests_total", "errors_total", "tokens_prompt_total",
-            "tokens_completion_total", "tokens_total", "latency_ms_p50",
-            "latency_ms_p95", "uptime_sec",
+            "requests_total",
+            "errors_total",
+            "tokens_prompt_total",
+            "tokens_completion_total",
+            "tokens_total",
+            "latency_ms_p50",
+            "latency_ms_p95",
+            "uptime_sec",
         ]:
             assert key in d
 
@@ -215,8 +218,12 @@ class TestMetrics:
     def test_to_dict_contains_all_new_keys(self):
         m = Metrics.get()
         d = m.to_dict()
-        for key in ["asr_latency_p50_ms", "asr_latency_p99_ms",
-                    "suggestion_trigger_auto_count", "suggestion_trigger_manual_count"]:
+        for key in [
+            "asr_latency_p50_ms",
+            "asr_latency_p99_ms",
+            "suggestion_trigger_auto_count",
+            "suggestion_trigger_manual_count",
+        ]:
             assert key in d
 
     def test_metrics_reset(self):

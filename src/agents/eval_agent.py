@@ -1,4 +1,5 @@
 """EvalAgent — 评价报告生成。"""
+
 from __future__ import annotations
 
 import json
@@ -8,9 +9,8 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from src.logging import bind_op, text_summary, truncate
+from src.logging import text_summary, truncate
 
-from .base import AgentRequest, AgentResponse, BaseAgent
 from ..framework.prompt_builder import AgentConfig, PromptBuilder
 from ..framework.tool_registry import ToolRegistry
 from ..models.evaluation import DimensionScore, EvalReport
@@ -20,13 +20,14 @@ from ..models.session import ConversationRound, InterviewSession
 from ..storage.memory_module import MemoryModule
 from ..storage.user_memory import UserMemoryStore
 from ..utils import safe_float as _safe_float
+from .base import AgentRequest, AgentResponse, BaseAgent
 
 if TYPE_CHECKING:
     from ..llm.protocol import LLMClient
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_SIZE = 30          # 分块模式每块轮次数
+_CHUNK_SIZE = 30  # 分块模式每块轮次数
 _TOKEN_THRESHOLD = 30000  # 超过此 token 估算切换为分块 map-reduce
 
 _EVAL_OUTPUT_INSTRUCTIONS = (
@@ -47,7 +48,7 @@ class EvalAgent(BaseAgent):
         self,
         config: AgentConfig,
         prompt_builder: PromptBuilder,
-        llm_client: "LLMClient",
+        llm_client: LLMClient,
         tool_registry: ToolRegistry,
         memory_module: MemoryModule,
         user_memory_store: UserMemoryStore | None = None,
@@ -101,8 +102,12 @@ class EvalAgent(BaseAgent):
         # 计算问题覆盖率
         questions = self._memory_module.get_questions(session.candidate.id)
         total_questions = len(questions) if questions else 0
-        covered_count = sum(1 for q in questions if q.get("covered")) if questions else 0
-        coverage_text = f"已覆盖 {covered_count}/{total_questions}" if total_questions > 0 else ""
+        covered_count = (
+            sum(1 for q in questions if q.get("covered")) if questions else 0
+        )
+        coverage_text = (
+            f"已覆盖 {covered_count}/{total_questions}" if total_questions > 0 else ""
+        )
 
         user_memory = self._read_user_memory()
         base_messages = self._build_base_messages(session, user_memory)
@@ -122,7 +127,9 @@ class EvalAgent(BaseAgent):
                 estimated_tokens,
             )
             try:
-                result_text = await self._eval_single(base_messages, session.rounds, coverage_text)
+                result_text = await self._eval_single(
+                    base_messages, session.rounds, coverage_text
+                )
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 logger.exception(
@@ -137,7 +144,9 @@ class EvalAgent(BaseAgent):
                 estimated_tokens,
             )
             try:
-                result_text = await self._eval_chunked(base_messages, session.rounds, coverage_text)
+                result_text = await self._eval_chunked(
+                    base_messages, session.rounds, coverage_text
+                )
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 logger.exception(
@@ -204,7 +213,9 @@ class EvalAgent(BaseAgent):
                 exc,
             )
         except Exception as exc:
-            save_warning = f"评价报告存储失败：{exc.__class__.__name__}。报告对象仍在内存中。"
+            save_warning = (
+                f"评价报告存储失败：{exc.__class__.__name__}。报告对象仍在内存中。"
+            )
             logger.exception(
                 "EvalAgent generate_eval save_eval_report failed report_id=%s",
                 report.id,
@@ -233,39 +244,51 @@ class EvalAgent(BaseAgent):
             return self._user_memory_store.render()
         return ""
 
-    def _build_base_messages(self, session: InterviewSession, user_memory: str) -> list[Message]:
+    def _build_base_messages(
+        self, session: InterviewSession, user_memory: str
+    ) -> list[Message]:
         """组装评价用基础系统消息（角色定义 + 岗位要求 + 候选人信息 + 历史记忆）。"""
         messages: list[Message] = [
             Message(role="system", content=self.config.system_prompt)
         ]
 
         if user_memory.strip():
-            messages.append(Message(
-                role="system",
-                content=f"## 岗位要求与面试官偏好\n\n{user_memory}",
-            ))
+            messages.append(
+                Message(
+                    role="system",
+                    content=f"## 岗位要求与面试官偏好\n\n{user_memory}",
+                )
+            )
 
-        messages.append(Message(
-            role="system",
-            content=_build_candidate_context(session),
-        ))
+        messages.append(
+            Message(
+                role="system",
+                content=_build_candidate_context(session),
+            )
+        )
 
         if session.candidate.history_summary:
-            messages.append(Message(
-                role="system",
-                content=f"## 候选人历史面试记录\n\n{session.candidate.history_summary}",
-            ))
+            messages.append(
+                Message(
+                    role="system",
+                    content=f"## 候选人历史面试记录\n\n{session.candidate.history_summary}",
+                )
+            )
 
         return messages
 
-    async def _retry_fix_json(self, base_messages: list[Message], bad_output: str) -> str:
+    async def _retry_fix_json(
+        self, base_messages: list[Message], bad_output: str
+    ) -> str:
         """JSON 格式有误时，要求 LLM 基于前次输出重新整理为合法 JSON。"""
         messages = list(base_messages)
         messages.append(Message(role="assistant", content=bad_output))
-        messages.append(Message(
-            role="user",
-            content="输出格式有误，请仅输出符合要求的 JSON 对象，不包含代码块标记或任何说明文字。",
-        ))
+        messages.append(
+            Message(
+                role="user",
+                content="输出格式有误，请仅输出符合要求的 JSON 对象，不包含代码块标记或任何说明文字。",
+            )
+        )
         return await self._run_with_tools(messages)
 
     async def _eval_single(
@@ -278,7 +301,9 @@ class EvalAgent(BaseAgent):
         conversation = _format_rounds(rounds)
         messages = list(base_messages)
 
-        content = f"以下是完整的面试对话记录（共 {len(rounds)} 轮）：\n\n{conversation}\n\n"
+        content = (
+            f"以下是完整的面试对话记录（共 {len(rounds)} 轮）：\n\n{conversation}\n\n"
+        )
         if coverage_text:
             content += f"问题覆盖情况：{coverage_text}\n\n"
         content += _EVAL_OUTPUT_INSTRUCTIONS
@@ -314,20 +339,22 @@ class EvalAgent(BaseAgent):
                     + "\n\n"
                 )
 
-            messages.append(Message(
-                role="user",
-                content=(
-                    f"{prior_context}"
-                    f"以下是面试对话的第 {start_round}–{end_round} 轮"
-                    f"（共 {total} 轮中的第 {chunk_idx}/{chunk_count} 段）：\n\n"
-                    f"{_format_rounds(chunk)}\n\n"
-                    "请分析候选人在这部分对话中的表现，输出结构化文字，包含：\n"
-                    "- 每道题候选人的回答质量与深度\n"
-                    "- 体现出的能力亮点（引用候选人原话）\n"
-                    "- 明显的不足或知识盲点\n"
-                    "- 涉及的考察维度判断"
-                ),
-            ))
+            messages.append(
+                Message(
+                    role="user",
+                    content=(
+                        f"{prior_context}"
+                        f"以下是面试对话的第 {start_round}–{end_round} 轮"
+                        f"（共 {total} 轮中的第 {chunk_idx}/{chunk_count} 段）：\n\n"
+                        f"{_format_rounds(chunk)}\n\n"
+                        "请分析候选人在这部分对话中的表现，输出结构化文字，包含：\n"
+                        "- 每道题候选人的回答质量与深度\n"
+                        "- 体现出的能力亮点（引用候选人原话）\n"
+                        "- 明显的不足或知识盲点\n"
+                        "- 涉及的考察维度判断"
+                    ),
+                )
+            )
             result = await self._run_with_tools(messages)
             partial_analyses.append(
                 f"【第 {start_round}–{end_round} 轮分析】\n{result}"
@@ -350,7 +377,9 @@ class EvalAgent(BaseAgent):
         )
         if coverage_text:
             content += f"问题覆盖情况：{coverage_text}\n\n"
-        content += "请综合以上所有分析，生成完整面试评价报告。\n" + _EVAL_OUTPUT_INSTRUCTIONS
+        content += (
+            "请综合以上所有分析，生成完整面试评价报告。\n" + _EVAL_OUTPUT_INSTRUCTIONS
+        )
 
         messages.append(Message(role="user", content=content))
         logger.info("EvalAgent chunked reduce phase start chunks=%d", chunk_count)

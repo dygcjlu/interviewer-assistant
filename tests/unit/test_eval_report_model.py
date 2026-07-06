@@ -1,11 +1,12 @@
 """Unit tests for EvalReport model extensions - candidate_id and question_coverage fields."""
+
 from __future__ import annotations
 
 from datetime import datetime
 
 import pytest
 
-from src.models.evaluation import EvalReport, DimensionScore
+from src.models.evaluation import EvalReport
 
 
 @pytest.mark.unit

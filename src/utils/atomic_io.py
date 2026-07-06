@@ -1,4 +1,5 @@
 """文件原子写入工具。"""
+
 from __future__ import annotations
 
 import os

@@ -1,7 +1,7 @@
 """Unit tests — TranscriptionManager：on_segment、finalize_round、flush_pending_round。"""
+
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,8 +11,12 @@ from src.audio.protocol import TranscriptSegment
 from src.audio.transcription import TranscriptionManager
 from src.audio.trigger import SuggestionTrigger
 from src.models.candidate import CandidateProfile
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
-
+from src.models.session import (
+    ConversationRound,
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -186,6 +190,7 @@ class TestTranscriptionManager:
     async def test_single_final_segment_records_asr_latency(self):
         """单句直接 is_final=True 时应记录 ASR 延迟（修复 bug）"""
         from src.utils.metrics import Metrics
+
         Metrics.reset()  # 隔离测试
         metrics = Metrics.get()
 
@@ -196,7 +201,7 @@ class TestTranscriptionManager:
             is_final=True,
             source="candidate",
             timestamp=datetime.now(),
-            start_time=100.0  # 设置起始时间
+            start_time=100.0,  # 设置起始时间
         )
         await mgr.on_segment(seg)
 

@@ -1,4 +1,5 @@
 """Unit tests — audio 模块：SuggestionTrigger、AudioStreamBridge、MockAudioCapturer、MockSTTEngine。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +11,6 @@ from src.audio.mock import MockAudioCapturer, MockSTTEngine
 from src.audio.protocol import AudioFrame, TranscriptSegment
 from src.audio.stream import AudioStreamBridge
 from src.audio.trigger import SuggestionTrigger
-
 
 # ── SuggestionTrigger ─────────────────────────────────────────────────────────
 

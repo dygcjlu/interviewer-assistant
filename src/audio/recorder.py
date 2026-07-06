@@ -1,11 +1,11 @@
 """录音管理器 — 完整录音 + 按轮次切片。"""
+
 from __future__ import annotations
 
 import logging
-import os
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import aiofiles
@@ -68,8 +68,12 @@ class AudioRecorder:
         self._session_dir: Path | None = None
         self._candidate_path: str = ""
         self._interviewer_path: str = ""
-        self._candidate_file: aiofiles.threadpool.binary.AsyncBufferedIOBase | None = None
-        self._interviewer_file: aiofiles.threadpool.binary.AsyncBufferedIOBase | None = None
+        self._candidate_file: aiofiles.threadpool.binary.AsyncBufferedIOBase | None = (
+            None
+        )
+        self._interviewer_file: (
+            aiofiles.threadpool.binary.AsyncBufferedIOBase | None
+        ) = None
         self._start_time: float = 0.0
         self._candidate_bytes: int = 0
         self._interviewer_bytes: int = 0
@@ -77,7 +81,9 @@ class AudioRecorder:
         self._round_boundaries: list[tuple[int, float]] = []
         self._is_recording: bool = False
 
-    async def start_recording(self, session_id: str, recordings_dir: str = "recordings") -> None:
+    async def start_recording(
+        self, session_id: str, recordings_dir: str = "recordings"
+    ) -> None:
         """创建 recordings/{session_id}/ 目录，初始化两个 WAV 文件。"""
         self._session_id = session_id
         self._recordings_dir = recordings_dir

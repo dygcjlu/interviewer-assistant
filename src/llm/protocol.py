@@ -2,10 +2,12 @@
 
 所有 Agent 通过此接口与 LLM 交互；实现在 src/llm/client.py。
 """
+
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator, Protocol
+from typing import Protocol
 
 from ..models.message import Message, ToolCallInfo
 
@@ -33,7 +35,7 @@ class StreamChunk:
 class ToolFunction:
     name: str
     description: str
-    parameters: dict                       # JSON Schema
+    parameters: dict  # JSON Schema
 
 
 @dataclass
@@ -63,7 +65,7 @@ class LLMClient(Protocol):
         timeout_sec: float | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """流式请求（逐 token 返回）。
-        
+
         当传入 tools 时，若 LLM 决定调用工具，文字 delta 为空，最终 is_final chunk
         会携带 accumulated_content 和 tool_calls；若 LLM 返回纯文本则逐 delta 推送。
         """

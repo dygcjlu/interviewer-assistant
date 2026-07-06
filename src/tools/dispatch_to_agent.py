@@ -1,4 +1,5 @@
 """dispatch_to_agent — 通用 Agent 分发工具，将任务委托给指定 Agent 执行。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -32,10 +33,15 @@ SCHEMA = {
 
 async def dispatch_to_agent(agent: str, task: str) -> str:
     if agent != "resume":
-        return json.dumps({"type": "error", "message": f"不支持的 agent: {agent!r}"}, ensure_ascii=False)
+        return json.dumps(
+            {"type": "error", "message": f"不支持的 agent: {agent!r}"},
+            ensure_ascii=False,
+        )
 
     if ctx.resume_agent is None or ctx.controller is None:
-        return json.dumps({"type": "error", "message": "服务未初始化"}, ensure_ascii=False)
+        return json.dumps(
+            {"type": "error", "message": "服务未初始化"}, ensure_ascii=False
+        )
 
     task = await _enrich_task_with_session_context(task)
     logger.info("dispatch_to_agent agent=%s task=%s", agent, truncate(task))
@@ -49,7 +55,12 @@ async def dispatch_to_agent(agent: str, task: str) -> str:
 
     result_type = result.get("type") if isinstance(result, dict) else None
     elapsed_ms = (time.perf_counter() - start) * 1000
-    logger.info("dispatch_to_agent done type=%s elapsed_ms=%.1f result=%s", result_type, elapsed_ms, truncate(json.dumps(result, ensure_ascii=False, default=str)))
+    logger.info(
+        "dispatch_to_agent done type=%s elapsed_ms=%.1f result=%s",
+        result_type,
+        elapsed_ms,
+        truncate(json.dumps(result, ensure_ascii=False, default=str)),
+    )
 
     if result_type == "error":
         return json.dumps(result, ensure_ascii=False)
@@ -58,7 +69,9 @@ async def dispatch_to_agent(agent: str, task: str) -> str:
     try:
         await _apply_side_effects(result_type, result)
     except Exception:
-        logger.exception("dispatch_to_agent: side effects failed, result still returned")
+        logger.exception(
+            "dispatch_to_agent: side effects failed, result still returned"
+        )
 
     return json.dumps(result, ensure_ascii=False, default=str)
 
@@ -101,12 +114,13 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
     if result_type == "suggestion":
         if ctx.memory_module is not None and ctx.main_agent is not None:
             from ..web.routes import _auto_check_coverage
+
             asyncio.create_task(
                 _auto_check_coverage(
                     memory=ctx.memory_module,
                     llm_client=ctx.main_agent._llm,
                     candidate_id=session.candidate.id,
-                    session=session
+                    session=session,
                 )
             )
 
@@ -123,7 +137,9 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
             try:
                 resume_markdown = md_file.read_text(encoding="utf-8")
             except Exception:
-                logger.warning("dispatch_to_agent: failed to read markdown file %s", markdown_path)
+                logger.warning(
+                    "dispatch_to_agent: failed to read markdown file %s", markdown_path
+                )
             else:
                 try:
                     md_file.unlink()
@@ -139,11 +155,15 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
             result["warning"] = "简历正文为空，未写入候选人档案；请检查 PDF 解析结果"
         elif ctx.memory_module is not None:
             try:
-                await ctx.memory_module.save_candidate(session.candidate, resume_markdown)
+                await ctx.memory_module.save_candidate(
+                    session.candidate, resume_markdown
+                )
                 session.candidate.resume_content = resume_markdown
             except Exception as exc:
                 logger.exception("dispatch_to_agent: save_candidate failed")
-                result["user_facing"] = f"候选人档案保存失败：{exc}。简历内容未持久化，请重试。"
+                result["user_facing"] = (
+                    f"候选人档案保存失败：{exc}。简历内容未持久化，请重试。"
+                )
                 return
             # 检查是否已存在同名候选人（解析出真实姓名后再去重）
             real_name = session.candidate.name
@@ -178,11 +198,15 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
             history_summary: str | None = None
             if ctx.memory_module is not None:
                 try:
-                    h = await ctx.memory_module.get_candidate_history(session.candidate.id)
+                    h = await ctx.memory_module.get_candidate_history(
+                        session.candidate.id
+                    )
                     if h:
                         history_summary = h.history_summary
                 except Exception:
-                    logger.exception("dispatch_to_agent: get_candidate_history failed in brief_done")
+                    logger.exception(
+                        "dispatch_to_agent: get_candidate_history failed in brief_done"
+                    )
             ctx.main_agent.set_candidate_context(
                 session.candidate,
                 interview_brief=brief_text,
@@ -195,10 +219,12 @@ async def _generate_questions_from_brief(candidate_id: str, brief_text: str) -> 
     if ctx.memory_module is None:
         return
     try:
+        import json
+        import uuid
+
         from ..config import get_settings
         from ..llm.client import OpenAICompatibleClient
         from ..models.message import Message
-        import json, uuid
 
         # 使用 ctx.main_agent 的 llm_client，fallback 到直接实例化
         llm = None
@@ -229,7 +255,7 @@ async def _generate_questions_from_brief(candidate_id: str, brief_text: str) -> 
         end = raw.rfind("]")
         if start == -1 or end == -1:
             raise ValueError("no JSON array in response")
-        items = json.loads(raw[start:end + 1])
+        items = json.loads(raw[start : end + 1])
 
         questions = [
             {
@@ -243,6 +269,12 @@ async def _generate_questions_from_brief(candidate_id: str, brief_text: str) -> 
             if item.get("question")
         ]
         ctx.memory_module.save_questions(candidate_id, questions)
-        logger.info("_generate_questions_from_brief done candidate_id=%s count=%d", candidate_id, len(questions))
+        logger.info(
+            "_generate_questions_from_brief done candidate_id=%s count=%d",
+            candidate_id,
+            len(questions),
+        )
     except Exception:
-        logger.exception("_generate_questions_from_brief failed candidate_id=%s", candidate_id)
+        logger.exception(
+            "_generate_questions_from_brief failed candidate_id=%s", candidate_id
+        )

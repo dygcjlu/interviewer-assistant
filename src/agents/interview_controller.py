@@ -3,24 +3,25 @@
 只负责面试会话生命周期、音频管道管理、WebSocket 广播和阶段状态追踪。
 对话路由由 MainAgent 负责。
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Awaitable, Callable
 
-from src.logging import bind_agent, bind_op, bind_session_id
+from src.logging import bind_op, bind_session_id
 
-from .interview_agent import InterviewAgent
-from .eval_agent import EvalAgent
 from ..audio.manager import AudioManager
 from ..models.candidate import CandidateProfile
 from ..models.exceptions import SessionError
 from ..models.session import InterviewSession, InterviewStage, SessionMetadata
 from ..storage.memory_module import MemoryModule
+from .eval_agent import EvalAgent
+from .interview_agent import InterviewAgent
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,9 @@ async def _broadcast(senders: dict[int, WsSender], msg: dict) -> None:
         except Exception as exc:
             logger.info(
                 "ws_sender broadcast dropped sid=%d type=%s err=%s",
-                sid, msg.get("type"), exc,
+                sid,
+                msg.get("type"),
+                exc,
             )
             dead.append(sid)
     for sid in dead:
@@ -83,9 +86,7 @@ class InterviewController:
 
     # ── session lifecycle ─────────────────────────────────────────────────────
 
-    async def create_session(
-        self, candidate_id: str | None = None
-    ) -> InterviewSession:
+    async def create_session(self, candidate_id: str | None = None) -> InterviewSession:
         """创建新会话（受 `_state_lock` 串行化保护）。"""
         async with self._state_lock:
             return await self._create_session_impl(candidate_id)
@@ -103,7 +104,9 @@ class InterviewController:
                     if history is not None:
                         candidate.history_summary = history.history_summary
                 except Exception:
-                    logger.exception("create_session: get_candidate_history failed, skipping")
+                    logger.exception(
+                        "create_session: get_candidate_history failed, skipping"
+                    )
                 resume_content = await self._memory.get_resume_markdown(candidate_id)
                 candidate.resume_content = resume_content
             else:
@@ -166,14 +169,18 @@ class InterviewController:
                 try:
                     await self._interview_agent.on_deactivate(self._session)
                 except Exception:
-                    logger.exception("InterviewController: on_deactivate interview failed")
+                    logger.exception(
+                        "InterviewController: on_deactivate interview failed"
+                    )
 
             self._session.stage = InterviewStage.COMPLETED
             self._session.metadata.end_time = datetime.now()
 
             # Sync context summary
             if self._interview_agent.context_manager is not None:
-                self._session.context_summary = self._interview_agent.context_manager.summary
+                self._session.context_summary = (
+                    self._interview_agent.context_manager.summary
+                )
 
             try:
                 await self._memory.finish_interview(self._session)
@@ -184,7 +191,9 @@ class InterviewController:
                 try:
                     await self._interview_agent.context_manager.reset()
                 except Exception:
-                    logger.exception("InterviewController: context_manager.reset() failed")
+                    logger.exception(
+                        "InterviewController: context_manager.reset() failed"
+                    )
 
             logger.info("InterviewController: closed session %s", session_id)
         finally:
@@ -264,7 +273,9 @@ class InterviewController:
                 )
                 tm = self._audio.transcription_manager
                 if tm is not None:
-                    self._interview_agent.set_current_round_getter(tm.get_current_round_text)
+                    self._interview_agent.set_current_round_getter(
+                        tm.get_current_round_text
+                    )
                 # L3-3: 音频启动成功也推一条 ok 状态，便于 UI 重置 badge
                 if broadcast is not None:
                     try:
@@ -291,7 +302,9 @@ class InterviewController:
                             }
                         )
                     except Exception:
-                        logger.debug("audio_status fail broadcast failed", exc_info=True)
+                        logger.debug(
+                            "audio_status fail broadcast failed", exc_info=True
+                        )
 
         self._session.stage = InterviewStage.INTERVIEWING
 
@@ -333,7 +346,9 @@ class InterviewController:
         try:
             rec = await self._audio.stop()
             self._session.metadata.recording_candidate_path = rec.full_candidate_path
-            self._session.metadata.recording_interviewer_path = rec.full_interviewer_path
+            self._session.metadata.recording_interviewer_path = (
+                rec.full_interviewer_path
+            )
         except Exception:
             logger.warning("InterviewController: audio stop failed", exc_info=True)
 

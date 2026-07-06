@@ -1,4 +1,5 @@
 """E2E 层 conftest — 启动真实服务器（8001 端口），等待 /api/health 就绪。"""
+
 from __future__ import annotations
 
 import os
@@ -84,8 +85,7 @@ def live_server():
         proc.terminate()
         proc.wait(timeout=5)
         raise RuntimeError(
-            f"E2E 服务器在 {_STARTUP_TIMEOUT_SEC}s 内未就绪。"
-            f"最后错误：{last_error}"
+            f"E2E 服务器在 {_STARTUP_TIMEOUT_SEC}s 内未就绪。" f"最后错误：{last_error}"
         )
 
     yield E2E_BASE

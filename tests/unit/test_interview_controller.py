@@ -1,24 +1,27 @@
 """Unit tests — InterviewController: 会话生命周期、状态机转换。"""
+
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.interview_controller import InterviewController, _broadcast, _noop_ws_sender
+from src.agents.interview_controller import (
+    InterviewController,
+    _broadcast,
+    _noop_ws_sender,
+)
 from src.models.candidate import CandidateProfile
 from src.models.exceptions import SessionError
-from src.models.session import InterviewSession, InterviewStage, SessionMetadata
-
+from src.models.session import InterviewStage
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 
 def _make_memory(tmp_path: Path):
     from src.storage.memory_module import MemoryModule
+
     candidates_dir = tmp_path / "candidates"
     candidates_dir.mkdir(parents=True, exist_ok=True)
     return MemoryModule(candidates_dir=str(candidates_dir))
@@ -33,6 +36,7 @@ def _make_audio_manager() -> MagicMock:
 
 def _make_interview_agent() -> MagicMock:
     from src.framework.context import ContextConfig, ContextManager
+
     mock_llm = MagicMock()
     mock_llm.count_tokens = MagicMock(return_value=100)
     ctx_config = ContextConfig(window_size=3)
@@ -50,7 +54,9 @@ def _make_interview_agent() -> MagicMock:
 
 def _make_eval_agent() -> MagicMock:
     agent = MagicMock()
-    agent.handle_request = AsyncMock(return_value=MagicMock(success=True, data={"eval": "done"}))
+    agent.handle_request = AsyncMock(
+        return_value=MagicMock(success=True, data={"eval": "done"})
+    )
     return agent
 
 
@@ -70,15 +76,22 @@ class TestBroadcast:
     @pytest.mark.asyncio
     async def test_broadcast_calls_all_senders(self):
         received = []
-        async def s1(msg): received.append(("s1", msg))
-        async def s2(msg): received.append(("s2", msg))
+
+        async def s1(msg):
+            received.append(("s1", msg))
+
+        async def s2(msg):
+            received.append(("s2", msg))
+
         senders = {1: s1, 2: s2}
         await _broadcast(senders, {"type": "test"})
         assert len(received) == 2
 
     @pytest.mark.asyncio
     async def test_broadcast_removes_dead_senders(self):
-        async def failing(msg): raise RuntimeError("dead")
+        async def failing(msg):
+            raise RuntimeError("dead")
+
         senders = {1: failing}
         await _broadcast(senders, {"type": "test"})
         assert 1 not in senders
@@ -104,17 +117,19 @@ class TestCreateSession:
 
     @pytest.mark.asyncio
     async def test_create_session_with_candidate_id(self, tmp_path):
-        from src.storage.memory_module import MemoryModule
         memory = _make_memory(tmp_path)
         profile = CandidateProfile(id="c-001", name="张三", skills=["Python"])
         await memory.save_candidate(profile, "")
-        ctrl = InterviewController(_make_interview_agent(), _make_eval_agent(), memory, _make_audio_manager())
+        ctrl = InterviewController(
+            _make_interview_agent(), _make_eval_agent(), memory, _make_audio_manager()
+        )
         session = await ctrl.create_session(candidate_id="c-001")
         assert session.candidate.name == "张三"
 
     @pytest.mark.asyncio
     async def test_create_session_with_nonexistent_candidate_id(self, tmp_path):
         from src.models.exceptions import SessionError
+
         ctrl = _make_controller(tmp_path)
         with pytest.raises(SessionError, match="nonexistent"):
             await ctrl.create_session(candidate_id="nonexistent")
@@ -217,7 +232,10 @@ class TestWsSenders:
     async def test_add_and_remove_ws_sender(self, tmp_path):
         ctrl = _make_controller(tmp_path)
         received = []
-        async def sender(msg): received.append(msg)
+
+        async def sender(msg):
+            received.append(msg)
+
         ctrl._ws_senders[1] = sender
         assert 1 in ctrl._ws_senders
         del ctrl._ws_senders[1]

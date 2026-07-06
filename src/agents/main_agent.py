@@ -3,30 +3,32 @@
 通过分层系统提示感知面试官偏好、候选人信息和当前会话状态；
 通过工具完成对话本身无法直接执行的操作。
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import AsyncIterator, TYPE_CHECKING
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 
-from ..models.message import Message
-from ..models.candidate import CandidateProfile
-from ..storage.conversation_logger import ConversationLogger
-from ..storage.user_memory import UserMemoryStore
 from src.logging import bind_op
 
+from ..models.candidate import CandidateProfile
+from ..models.message import Message
+from ..storage.conversation_logger import ConversationLogger
+from ..storage.user_memory import UserMemoryStore
+
 if TYPE_CHECKING:
-    from pathlib import Path
-    from ..llm.client import OpenAICompatibleClient
     from ..framework.tool_registry import ToolRegistry
+    from ..llm.client import OpenAICompatibleClient
     from ..storage.memory_module import MemoryModule
 
 logger = logging.getLogger(__name__)
 
 _HISTORY_LIMIT = 24
 _NUDGE_INTERVAL = 10  # 每隔多少轮触发一次后台记忆审查（0 表示禁用）
-_NUDGE_MAX_ITER = 3   # 后台审查最多迭代次数
+_NUDGE_MAX_ITER = 3  # 后台审查最多迭代次数
 _TOOL_LOOP_MAX_ROUNDS = 5  # MainAgent.handle_chat 中工具调用循环最大轮次
 
 
@@ -47,6 +49,7 @@ def _extract_user_facing_error(tool_result: str) -> str | None:
     if not isinstance(data, dict) or not data.get("user_facing"):
         return None
     return str(data.get("message") or data.get("error") or "")
+
 
 _LAYER1_ROLE = """你是一位专业的面试助手 Agent，帮助面试官管理候选人、准备面试、支持面试流程。
 
@@ -97,9 +100,9 @@ class MainAgent:
 
     def __init__(
         self,
-        llm_client: "OpenAICompatibleClient",
-        tool_registry: "ToolRegistry",
-        memory_module: "MemoryModule",
+        llm_client: OpenAICompatibleClient,
+        tool_registry: ToolRegistry,
+        memory_module: MemoryModule,
         user_memory_store: UserMemoryStore,
     ) -> None:
         self._llm = llm_client
@@ -122,6 +125,7 @@ class MainAgent:
         self._chat_lock = asyncio.Lock()
 
         from pathlib import Path
+
         self._logger = ConversationLogger(Path("conversations/main_agent.jsonl"))
 
         self._load_user_memory()
@@ -139,7 +143,9 @@ class MainAgent:
         """记忆更新后刷新（store 已是最新，无需重读磁盘）。"""
         self._load_user_memory()
         self._cached_system_prompt = None
-        logger.info("MainAgent: reloaded user memory (%d chars)", len(self._layer2_user_memory))
+        logger.info(
+            "MainAgent: reloaded user memory (%d chars)", len(self._layer2_user_memory)
+        )
 
     def set_candidate_context(
         self,
@@ -172,7 +178,9 @@ class MainAgent:
         if self._cached_system_prompt is None:
             sections = [_LAYER1_ROLE]
             if self._layer2_user_memory:
-                sections.append(f"\n## 面试官偏好与岗位要求\n\n{self._layer2_user_memory}")
+                sections.append(
+                    f"\n## 面试官偏好与岗位要求\n\n{self._layer2_user_memory}"
+                )
             if self._layer3_candidate:
                 sections.append(f"\n## 当前候选人信息\n{self._layer3_candidate}")
             self._cached_system_prompt = "\n".join(sections)
@@ -230,7 +238,9 @@ class MainAgent:
         content_acc = ""
         first_tool_calls = None
         try:
-            async for chunk in self._llm.chat_stream(messages=messages, tools=tool_schemas):
+            async for chunk in self._llm.chat_stream(
+                messages=messages, tools=tool_schemas
+            ):
                 if chunk.is_final:
                     first_tool_calls = chunk.tool_calls
                     content_acc = chunk.accumulated_content
@@ -260,7 +270,9 @@ class MainAgent:
             if self._should_nudge and not tool_called_memory:
                 self._should_nudge = False
                 if self._nudge_task is None or self._nudge_task.done():
-                    self._nudge_task = asyncio.create_task(self._background_memory_review())
+                    self._nudge_task = asyncio.create_task(
+                        self._background_memory_review()
+                    )
             return
 
         # 路径②：有工具调用，进入工具循环
@@ -288,7 +300,9 @@ class MainAgent:
                     "name": tc.function.name,
                     "args": tc.function.arguments,
                 }
-                result_str = await self._tools.dispatch(tc.function.name, tc.function.arguments)
+                result_str = await self._tools.dispatch(
+                    tc.function.name, tc.function.arguments
+                )
                 tool_msg = Message(role="tool", content=result_str, tool_call_id=tc.id)
                 self._history.append(tool_msg)
                 new_messages.append(tool_msg)
@@ -303,12 +317,18 @@ class MainAgent:
                 break
 
             # 下一轮：检查是否还需继续调用工具（非流式）
-            messages_next = [Message(role="system", content=self._build_system_prompt())]
+            messages_next = [
+                Message(role="system", content=self._build_system_prompt())
+            ]
             messages_next.extend(self._history)
             try:
-                next_resp = await self._llm.chat(messages=messages_next, tools=tool_schemas)
+                next_resp = await self._llm.chat(
+                    messages=messages_next, tools=tool_schemas
+                )
             except Exception as exc:
-                logger.exception("MainAgent: follow-up LLM call failed at round %d", loop_rounds)
+                logger.exception(
+                    "MainAgent: follow-up LLM call failed at round %d", loop_rounds
+                )
                 err = f"工具调用完成，但继续生成回复时出错：{exc}"
                 err_msg = Message(role="assistant", content=err)
                 self._history.append(err_msg)
@@ -368,7 +388,9 @@ class MainAgent:
             last = self._history[-1] if self._history else None
             need_final_stream = not (last and last.role == "assistant" and last.content)
             if need_final_stream:
-                messages_final = [Message(role="system", content=self._build_system_prompt())]
+                messages_final = [
+                    Message(role="system", content=self._build_system_prompt())
+                ]
                 messages_final.extend(self._history)
                 reply_text = ""
                 try:
@@ -404,9 +426,7 @@ class MainAgent:
         if self._should_nudge and not tool_called_memory:
             self._should_nudge = False
             if self._nudge_task is None or self._nudge_task.done():
-                self._nudge_task = asyncio.create_task(
-                    self._background_memory_review()
-                )
+                self._nudge_task = asyncio.create_task(self._background_memory_review())
 
     def _trim_history(self) -> None:
         if len(self._history) <= _HISTORY_LIMIT:
@@ -441,18 +461,29 @@ class MainAgent:
                     break
 
                 messages.append(
-                    Message(role="assistant", content=response.content, tool_calls=response.tool_calls)
+                    Message(
+                        role="assistant",
+                        content=response.content,
+                        tool_calls=response.tool_calls,
+                    )
                 )
                 for tc in response.tool_calls:
-                    result_str = await self._tools.dispatch(tc.function.name, tc.function.arguments)
-                    messages.append(Message(role="tool", content=result_str, tool_call_id=tc.id))
+                    result_str = await self._tools.dispatch(
+                        tc.function.name, tc.function.arguments
+                    )
+                    messages.append(
+                        Message(role="tool", content=result_str, tool_call_id=tc.id)
+                    )
                     logger.info(
                         "MainAgent: background review called %s -> %s",
                         tc.function.name,
                         result_str[:120],
                     )
             else:
-                logger.warning("MainAgent: background review reached max iterations (%d)", _NUDGE_MAX_ITER)
+                logger.warning(
+                    "MainAgent: background review reached max iterations (%d)",
+                    _NUDGE_MAX_ITER,
+                )
 
         except Exception:
             logger.exception("MainAgent: background memory review failed (ignored)")

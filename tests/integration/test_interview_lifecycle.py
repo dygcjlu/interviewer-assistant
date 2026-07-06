@@ -1,4 +1,5 @@
 """Integration tests — 面试生命周期（start / stop / eval / brief）与状态机。"""
+
 from __future__ import annotations
 
 import json
@@ -134,16 +135,24 @@ async def test_get_eval_returns_report_structure(interviewing_client, mock_llm):
 
     interviewing_client 已注入 1 轮对话，stop → evaluating，eval → 200。
     """
-    eval_json = json.dumps({
-        "dimensions": [
-            {"dimension": "系统设计", "score": 8, "comment": "表现良好", "evidence": ["提到了分布式锁"]}
-        ],
-        "overall_score": 8.0,
-        "strengths": ["系统思维清晰"],
-        "weaknesses": ["缺乏 K8s 经验"],
-        "recommendation": "hire",
-        "summary": "整体优秀",
-    }, ensure_ascii=False)
+    eval_json = json.dumps(
+        {
+            "dimensions": [
+                {
+                    "dimension": "系统设计",
+                    "score": 8,
+                    "comment": "表现良好",
+                    "evidence": ["提到了分布式锁"],
+                }
+            ],
+            "overall_score": 8.0,
+            "strengths": ["系统思维清晰"],
+            "weaknesses": ["缺乏 K8s 经验"],
+            "recommendation": "hire",
+            "summary": "整体优秀",
+        },
+        ensure_ascii=False,
+    )
     # EvalAgent 调用一次 chat()（非流式）返回 JSON
     mock_llm.push_chat(
         ChatResponse(content=eval_json, prompt_tokens=100, completion_tokens=200)
@@ -160,7 +169,11 @@ async def test_get_eval_returns_report_structure(interviewing_client, mock_llm):
     assert "overall_score" in report
     assert "recommendation" in report
     assert report["recommendation"] in (
-        "strong_hire", "hire", "weak_hire", "no_hire", "hire"
+        "strong_hire",
+        "hire",
+        "weak_hire",
+        "no_hire",
+        "hire",
     )
 
 

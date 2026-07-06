@@ -21,10 +21,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 # Windows 系统字体路径（按优先级尝试）
 _FONT_CANDIDATES = [
-    "C:/Windows/Fonts/msyh.ttc",    # 微软雅黑
+    "C:/Windows/Fonts/msyh.ttc",  # 微软雅黑
     "C:/Windows/Fonts/simhei.ttf",  # 黑体
     "C:/Windows/Fonts/simsun.ttc",  # 宋体
 ]
+
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for path in _FONT_CANDIDATES:
@@ -51,7 +52,9 @@ def put_cn_text(
     return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
 
-def draw_overlay(frame: np.ndarray, current: int, total: int, paused: bool) -> np.ndarray:
+def draw_overlay(
+    frame: np.ndarray, current: int, total: int, paused: bool
+) -> np.ndarray:
     """绘制顶部状态栏和底部操作提示。"""
     h, w = frame.shape[:2]
     out = frame.copy()
@@ -65,8 +68,8 @@ def draw_overlay(frame: np.ndarray, current: int, total: int, paused: bool) -> n
     status = f"帧: {current + 1} / {total}  {'[暂停]' if paused else '[播放]'}"
     hint = "→/D:下一帧  ←/A:上一帧  空格:播放暂停  G:跳转到帧  S:跳过帧数  Q/ESC:退出"
 
-    out = put_cn_text(out, status, (8, 6),  size=20, color=(0, 255, 0))
-    out = put_cn_text(out, hint,   (8, h - 30), size=15, color=(200, 200, 200))
+    out = put_cn_text(out, status, (8, 6), size=20, color=(0, 255, 0))
+    out = put_cn_text(out, hint, (8, h - 30), size=15, color=(200, 200, 200))
     return out
 
 
@@ -97,7 +100,7 @@ def main(video_path: str) -> None:
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    print(f"\n视频信息:")
+    print("\n视频信息:")
     print(f"  路径     : {video_path}")
     print(f"  分辨率   : {w} x {h}")
     print(f"  帧率     : {fps:.2f} fps")
@@ -137,29 +140,29 @@ def main(video_path: str) -> None:
         delay = 1 if not paused else 0
         key = cv2.waitKey(delay) & 0xFF
 
-        if key in (ord('q'), ord('Q'), 27):        # Q / ESC：退出
+        if key in (ord("q"), ord("Q"), 27):  # Q / ESC：退出
             break
-        elif key == 32:                             # 空格：播放/暂停
+        elif key == 32:  # 空格：播放/暂停
             paused = not paused
-        elif key in (83, ord('d'), ord('D')):       # → / D：下一帧
+        elif key in (83, ord("d"), ord("D")):  # → / D：下一帧
             paused = True
             seek(current_frame + 1)
-        elif key in (81, ord('a'), ord('A')):       # ← / A：上一帧
+        elif key in (81, ord("a"), ord("A")):  # ← / A：上一帧
             paused = True
             seek(current_frame - 1)
-        elif key in (ord('g'), ord('G')):           # G：跳转到指定帧
+        elif key in (ord("g"), ord("G")):  # G：跳转到指定帧
             paused = True
-            val = ask_int("跳转到帧", f"请输入目标帧编号（1-based）", 1, total_frames)
+            val = ask_int("跳转到帧", "请输入目标帧编号（1-based）", 1, total_frames)
             if val is not None:
                 seek(val - 1)
                 print(f"  已跳转到第 {val} 帧。")
-        elif key in (ord('s'), ord('S')):           # S：跳过指定帧数
+        elif key in (ord("s"), ord("S")):  # S：跳过指定帧数
             paused = True
             remaining = total_frames - 1 - current_frame
             if remaining <= 0:
                 print("  已在最后一帧，无法继续跳过。")
             else:
-                val = ask_int("跳过帧数", f"请输入要跳过的帧数", 1, remaining)
+                val = ask_int("跳过帧数", "请输入要跳过的帧数", 1, remaining)
                 if val is not None:
                     seek(current_frame + val)
                     print(f"  已跳过 {val} 帧，当前第 {current_frame + 1} 帧。")

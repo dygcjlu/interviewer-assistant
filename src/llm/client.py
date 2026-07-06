@@ -2,20 +2,21 @@
 
 通过 base_url 切换至国产模型（通义千问 / DeepSeek 等）。
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import time
-from typing import Any, AsyncIterator
-
-from src.logging import bind_op, truncate
+from collections.abc import AsyncIterator
+from typing import Any
 
 import openai
 import tiktoken
 
-from ..models.message import FunctionCallInfo, Message, ToolCallInfo
+from src.logging import bind_op, truncate
+
 from ..models.exceptions import (
     LLMConnectionError,
     LLMRateLimitError,
@@ -23,6 +24,7 @@ from ..models.exceptions import (
     LLMRetryExhaustedError,
     LLMTimeoutError,
 )
+from ..models.message import FunctionCallInfo, Message, ToolCallInfo
 from .config import LLMConfig
 from .protocol import ChatResponse, StreamChunk, ToolSchema
 from .providers import get_profile
@@ -43,9 +45,14 @@ class OpenAICompatibleClient:
             base_url=config.base_url,
         )
         try:
-            self._encoding: tiktoken.Encoding | None = tiktoken.get_encoding("cl100k_base")
+            self._encoding: tiktoken.Encoding | None = tiktoken.get_encoding(
+                "cl100k_base"
+            )
         except Exception as exc:
-            logger.warning("tiktoken encoding load failed, fallback to char-based estimate: %s", exc)
+            logger.warning(
+                "tiktoken encoding load failed, fallback to char-based estimate: %s",
+                exc,
+            )
             self._encoding = None
 
     def _thinking_active(self) -> bool:
@@ -120,8 +127,14 @@ class OpenAICompatibleClient:
                 kwargs = self._build_kwargs(
                     payload_messages, payload_tools, temperature, timeout
                 )
-                messages_json = json.dumps(payload_messages, ensure_ascii=False, default=str)
-                logger.debug("llm_messages_full model=%s messages=%s", self._config.model, messages_json)
+                messages_json = json.dumps(
+                    payload_messages, ensure_ascii=False, default=str
+                )
+                logger.debug(
+                    "llm_messages_full model=%s messages=%s",
+                    self._config.model,
+                    messages_json,
+                )
                 logger.info(
                     "llm_request model=%s messages=%d tools=%s attempt=%d/%d messages_body=%s",
                     self._config.model,
@@ -151,17 +164,23 @@ class OpenAICompatibleClient:
                 last_exc = LLMRateLimitError(str(exc))
                 # 限流：指数退避（2^attempt 秒），给服务端时间恢复
                 if attempt < attempts - 1:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
             except openai.APITimeoutError as exc:
                 logger.warning(
-                    "LLM request timed out (attempt %d/%d): %s", attempt + 1, attempts, exc
+                    "LLM request timed out (attempt %d/%d): %s",
+                    attempt + 1,
+                    attempts,
+                    exc,
                 )
                 last_exc = LLMTimeoutError(str(exc))
                 if attempt < attempts - 1:
                     await asyncio.sleep(1.0)
             except openai.APIConnectionError as exc:
                 logger.warning(
-                    "LLM connection error (attempt %d/%d): %s", attempt + 1, attempts, exc
+                    "LLM connection error (attempt %d/%d): %s",
+                    attempt + 1,
+                    attempts,
+                    exc,
                 )
                 last_exc = LLMConnectionError(str(exc))
                 if attempt < attempts - 1:
@@ -189,10 +208,15 @@ class OpenAICompatibleClient:
         completion_tokens = 0
         start = time.perf_counter()
         messages_json = json.dumps(payload_messages, ensure_ascii=False, default=str)
-        logger.debug("llm_messages_full model=%s messages=%s", self._config.model, messages_json)
+        logger.debug(
+            "llm_messages_full model=%s messages=%s", self._config.model, messages_json
+        )
         logger.info(
             "llm_stream_request model=%s messages=%d tools=%s messages_body=%s",
-            self._config.model, len(payload_messages), bool(payload_tools), truncate(messages_json),
+            self._config.model,
+            len(payload_messages),
+            bool(payload_tools),
+            truncate(messages_json),
         )
 
         # Accumulate streaming tool_calls by index (OpenAI splits args across chunks)
@@ -228,7 +252,8 @@ class OpenAICompatibleClient:
                         if idx not in _tc_acc:
                             _tc_acc[idx] = {
                                 "id": getattr(tc_delta, "id", "") or "",
-                                "type": getattr(tc_delta, "type", "function") or "function",
+                                "type": getattr(tc_delta, "type", "function")
+                                or "function",
                                 "name": "",
                                 "arguments": "",
                             }
@@ -253,7 +278,11 @@ class OpenAICompatibleClient:
         logger.info(
             "LLM chat_stream done model=%s tool_calls=%d prompt_tokens=%d "
             "completion_tokens=%d elapsed_ms=%.1f",
-            self._config.model, len(_tc_acc), prompt_tokens, completion_tokens, elapsed_ms,
+            self._config.model,
+            len(_tc_acc),
+            prompt_tokens,
+            completion_tokens,
+            elapsed_ms,
         )
 
         # Build accumulated tool_calls list if any (sorted by index)
@@ -290,7 +319,9 @@ class OpenAICompatibleClient:
         return max(result, 1)
 
     @staticmethod
-    def _message_to_dict(m: Message, include_reasoning_content: bool = False) -> dict[str, Any]:
+    def _message_to_dict(
+        m: Message, include_reasoning_content: bool = False
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {"role": m.role}
         if m.content is not None:
             payload["content"] = m.content
@@ -353,7 +384,9 @@ class OpenAICompatibleClient:
         completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
 
         # 提取思考模式下的推理链内容（DeepSeek/Qwen3 思考版返回）
-        reasoning_content: str | None = getattr(message, "reasoning_content", None) or None
+        reasoning_content: str | None = (
+            getattr(message, "reasoning_content", None) or None
+        )
 
         return ChatResponse(
             content=content,

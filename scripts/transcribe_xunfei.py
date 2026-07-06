@@ -5,6 +5,7 @@
 
 WAV 要求：单声道、16kHz、16-bit PCM（与录音格式一致）。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,8 +27,8 @@ from websockets.asyncio.client import connect as ws_connect
 # ── 常量 ─────────────────────────────────────────────────────────────────────
 _WSS_BASE = "wss://office-api-ast-dx.iflyaisol.com/ast/communicate/v1"
 _SAMPLE_RATE = 16000
-_SEND_CHUNK_BYTES = 1280          # 1280 bytes = 40ms @ 16kHz 16-bit mono
-_REAL_TIME_INTERVAL_SEC = 0.04    # 实时速率：40ms/chunk
+_SEND_CHUNK_BYTES = 1280  # 1280 bytes = 40ms @ 16kHz 16-bit mono
+_REAL_TIME_INTERVAL_SEC = 0.04  # 实时速率：40ms/chunk
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,8 +72,7 @@ def _build_url(app_id: str, key_id: str, key_secret: str) -> str:
 
     sorted_keys = sorted(params.keys())
     base_string = "&".join(
-        f"{quote(k, safe='')}={quote(params[k], safe='')}"
-        for k in sorted_keys
+        f"{quote(k, safe='')}={quote(params[k], safe='')}" for k in sorted_keys
     )
     mac = hmac.new(
         key_secret.encode("utf-8"),
@@ -101,7 +101,12 @@ def _extract_text(data: dict) -> tuple[str, bool]:
         return "", False
 
 
-async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_seconds: float | None = None) -> None:
+async def transcribe(
+    wav_path: Path,
+    output_path: Path,
+    speed: float = 4.0,
+    max_seconds: float | None = None,
+) -> None:
     app_id, key_id, key_secret = _load_credentials()
     if not app_id or not key_id or not key_secret:
         logger.error("讯飞凭据未配置，请检查 .env 文件中的 XUNFEI_* 配置项")
@@ -117,12 +122,19 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
     duration = n_frames / framerate
     logger.info(
         "WAV: %s | channels=%d rate=%d width=%d frames=%d duration=%.1fs",
-        wav_path.name, n_channels, framerate, sampwidth, n_frames, duration,
+        wav_path.name,
+        n_channels,
+        framerate,
+        sampwidth,
+        n_frames,
+        duration,
     )
     if framerate != _SAMPLE_RATE or sampwidth != 2 or n_channels != 1:
         logger.error(
             "格式不符：需要单声道 16kHz 16-bit PCM，实际 channels=%d rate=%d width=%d",
-            n_channels, framerate, sampwidth,
+            n_channels,
+            framerate,
+            sampwidth,
         )
         sys.exit(1)
 
@@ -165,7 +177,9 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
 
                 code = str(msg.get("code", "0"))
                 if msg_type == "error" or code != "0":
-                    logger.warning("服务错误 code=%s desc=%s", code, msg.get("desc", ""))
+                    logger.warning(
+                        "服务错误 code=%s desc=%s", code, msg.get("desc", "")
+                    )
                     continue
 
                 if msg.get("res_type") == "frc":
@@ -194,7 +208,7 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
         offset = 0
         last_log_pct = 0
         while offset < total_bytes:
-            chunk = pcm_data[offset: offset + _SEND_CHUNK_BYTES]
+            chunk = pcm_data[offset : offset + _SEND_CHUNK_BYTES]
             offset += _SEND_CHUNK_BYTES
             sent_bytes += len(chunk)
             await ws.send(chunk)
@@ -214,7 +228,7 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
         # 等待最多 30 秒接收剩余结果
         try:
             await asyncio.wait_for(recv_task, timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             recv_task.cancel()
             logger.info("等待超时，收取结束")
         except Exception:
@@ -230,9 +244,15 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
 def main() -> None:
     parser = argparse.ArgumentParser(description="讯飞 ASR 离线文件转写")
     parser.add_argument("wav", type=Path, help="WAV 文件路径")
-    parser.add_argument("--output", "-o", type=Path, default=None, help="输出 txt 文件路径")
-    parser.add_argument("--speed", "-s", type=float, default=4.0, help="发送速率倍数（默认 4x）")
-    parser.add_argument("--max-seconds", "-t", type=float, default=None, help="只转写前 N 秒")
+    parser.add_argument(
+        "--output", "-o", type=Path, default=None, help="输出 txt 文件路径"
+    )
+    parser.add_argument(
+        "--speed", "-s", type=float, default=4.0, help="发送速率倍数（默认 4x）"
+    )
+    parser.add_argument(
+        "--max-seconds", "-t", type=float, default=None, help="只转写前 N 秒"
+    )
     args = parser.parse_args()
 
     wav_path: Path = args.wav
@@ -241,7 +261,11 @@ def main() -> None:
         sys.exit(1)
 
     output_path: Path = args.output or wav_path.with_suffix(".xunfei.txt")
-    asyncio.run(transcribe(wav_path, output_path, speed=args.speed, max_seconds=args.max_seconds))
+    asyncio.run(
+        transcribe(
+            wav_path, output_path, speed=args.speed, max_seconds=args.max_seconds
+        )
+    )
 
 
 if __name__ == "__main__":

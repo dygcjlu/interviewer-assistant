@@ -1,17 +1,17 @@
 """面试助手后端启动入口 — 组装依赖后通过 NiceGUI 启动。"""
+
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 from nicegui import ui
 
-from src.logging import setup_logging
-
+import src.web.ui as _web_ui  # noqa: F401 — registers @ui.page("/") at import time
 from src.agents.eval_agent import EvalAgent
 from src.agents.interview_agent import InterviewAgent
 from src.agents.interview_controller import InterviewController
@@ -31,13 +31,13 @@ from src.framework.skill import SkillLoader
 from src.framework.tool_registry import ToolRegistry
 from src.llm.client import OpenAICompatibleClient
 from src.llm.config import LLMConfig
+from src.logging import setup_logging
 from src.models.session import InterviewStage
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
 from src.tools import register_all
 from src.tools._context import ctx as tool_ctx
 from src.web.app import create_app
-import src.web.ui as _web_ui  # noqa: F401 — registers @ui.page("/") at import time
 
 LOGS_DIR = Path(__file__).parent.parent / "logs"
 setup_logging(log_dir=LOGS_DIR, level=logging.INFO)
@@ -75,7 +75,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Infrastructure ─────────────────────────────────────────────────────────
     memory_module = MemoryModule(candidates_dir=settings.CANDIDATES_DIR)
 
-    user_memory_store = UserMemoryStore(USER_MEMORY_PATH, char_limit=USER_MEMORY_CHAR_LIMIT)
+    user_memory_store = UserMemoryStore(
+        USER_MEMORY_PATH, char_limit=USER_MEMORY_CHAR_LIMIT
+    )
     user_memory_store.load()
 
     llm_config = LLMConfig(
@@ -103,7 +105,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     context_manager = ContextManager(ctx_config, llm_client)
     prompt_builder = PromptBuilder(
-        skill_loader, tool_registry, memory_module, context_manager,
+        skill_loader,
+        tool_registry,
+        memory_module,
+        context_manager,
         user_memory_store=user_memory_store,
     )
 
@@ -132,46 +137,62 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         interview_config, prompt_builder, llm_client, tool_registry, context_manager
     )
     eval_agent = EvalAgent(
-        eval_config, prompt_builder, llm_client, tool_registry, memory_module,
+        eval_config,
+        prompt_builder,
+        llm_client,
+        tool_registry,
+        memory_module,
         user_memory_store=user_memory_store,
     )
 
     # ── Audio ─────────────────────────────────────────────────────────────────
     if settings.MOCK_AUDIO:
         from src.audio.mock_manager import MockAudioManager
+
         audio_manager = MockAudioManager(
             script_path=settings.MOCK_AUDIO_SCRIPT,
             recordings_dir=str(settings.RECORDINGS_DIR),
         )
-        logger.info("Audio: using MockAudioManager with script=%s", settings.MOCK_AUDIO_SCRIPT)
+        logger.info(
+            "Audio: using MockAudioManager with script=%s", settings.MOCK_AUDIO_SCRIPT
+        )
     else:
         import sys
+
         if sys.platform == "win32":
             from src.audio.wasapi import WasapiCapturer
+
             capturer = WasapiCapturer()
             if settings.STT_ENGINE == "xunfei":
                 from src.audio.xunfei_stt import XunfeiRealtimeSTT
+
                 candidate_stt = XunfeiRealtimeSTT(channel="candidate")
                 interviewer_stt = XunfeiRealtimeSTT(channel="interviewer")
                 logger.info("Audio: using XunfeiRealtimeSTT")
             elif settings.STT_ENGINE == "volc":
                 from src.audio.volc_stt import VolcRealtimeSTT
+
                 candidate_stt = VolcRealtimeSTT(channel="candidate")
                 interviewer_stt = VolcRealtimeSTT(channel="interviewer")
                 logger.info("Audio: using VolcRealtimeSTT")
             else:
                 from src.audio.baidu_stt import BaiduRealtimeSTT
+
                 candidate_stt = BaiduRealtimeSTT(channel="candidate")
                 interviewer_stt = BaiduRealtimeSTT(channel="interviewer")
                 logger.info("Audio: using BaiduRealtimeSTT")
         else:
             from src.audio.mock import MockAudioCapturer, MockSTTEngine
+
             capturer = MockAudioCapturer()
             candidate_stt = MockSTTEngine()
             interviewer_stt = MockSTTEngine()
         recorder = AudioRecorder()
         audio_manager = AudioManager(
-            capturer, candidate_stt, interviewer_stt, recorder,
+            capturer,
+            candidate_stt,
+            interviewer_stt,
+            recorder,
             recordings_dir=str(settings.RECORDINGS_DIR),
         )
 

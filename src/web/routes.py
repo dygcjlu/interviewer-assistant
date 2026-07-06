@@ -1,4 +1,5 @@
 """REST API 路由 — 业务逻辑委托给 MainAgent / InterviewController / MemoryModule。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,12 +21,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from src.logging import bind_op, bind_session_id
 
-from ..agents.base import AgentRequest, AgentResponse
+from ..agents.base import AgentRequest
 from ..models.exceptions import SessionError, StorageError
 from ..models.session import InterviewStage
 from .schemas import (
-    ChatRequest,
     CandidateSelectRequest,
+    ChatRequest,
     StartInterviewRequest,
     SwitchAgentRequest,
 )
@@ -66,10 +67,13 @@ def _to_dict(obj: Any) -> Any:
 
 def _session_err(exc: SessionError) -> HTTPException:
     logger.warning("session_error: %s", exc)
-    return HTTPException(status_code=409, detail={"code": "session_error", "message": str(exc)})
+    return HTTPException(
+        status_code=409, detail={"code": "session_error", "message": str(exc)}
+    )
 
 
 # ── chat (MainAgent) ──────────────────────────────────────────────────────────
+
 
 @router.post("/chat")
 async def chat(request: Request, body: ChatRequest):
@@ -77,7 +81,10 @@ async def chat(request: Request, body: ChatRequest):
     bind_op("chat")
     main_agent = _main_agent(request)
     if main_agent is None:
-        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": "MainAgent 未初始化"})
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "not_ready", "message": "MainAgent 未初始化"},
+        )
 
     async def _stream():
         async for chunk in main_agent.handle_chat(body.message):
@@ -92,6 +99,7 @@ async def chat(request: Request, body: ChatRequest):
 
 # ── candidate select ──────────────────────────────────────────────────────────
 
+
 @router.post("/candidate/select")
 async def select_candidate(request: Request, body: CandidateSelectRequest):
     """选中候选人，更新 MainAgent 上下文。"""
@@ -102,7 +110,9 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
 
     candidate = await memory.get_candidate(body.candidate_id)
     if candidate is None:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "候选人不存在"}
+        )
 
     # Ensure session exists with this candidate
     if controller is not None:
@@ -129,7 +139,11 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
         if candidate_history:
             history_summary = candidate_history.history_summary
     except Exception:
-        logger.warning("Failed to load candidate history for %s, skipping", body.candidate_id, exc_info=True)
+        logger.warning(
+            "Failed to load candidate history for %s, skipping",
+            body.candidate_id,
+            exc_info=True,
+        )
 
     # Update MainAgent context
     if main_agent is not None:
@@ -144,7 +158,11 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
     latest_report = await memory.get_latest_eval_report(body.candidate_id)
     eval_report = _to_dict(latest_report) if latest_report is not None else None
 
-    logger.info("candidate_select done candidate_id=%s name=%s", body.candidate_id, candidate.name)
+    logger.info(
+        "candidate_select done candidate_id=%s name=%s",
+        body.candidate_id,
+        candidate.name,
+    )
     return {
         "candidate_id": body.candidate_id,
         "profile": _to_dict(candidate),
@@ -155,6 +173,7 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
 
 
 # ── resume ────────────────────────────────────────────────────────────────────
+
 
 def _safe_stem(filename: str) -> str:
     """将文件名转换为安全的 stem（保留汉字、字母、数字、-、_）。"""
@@ -181,7 +200,10 @@ async def upload_resume(
     if suffix not in {".pdf"}:
         raise HTTPException(
             status_code=400,
-            detail={"code": "invalid_file_type", "message": f"仅支持 PDF 格式简历，收到的文件类型为 {suffix!r}"},
+            detail={
+                "code": "invalid_file_type",
+                "message": f"仅支持 PDF 格式简历，收到的文件类型为 {suffix!r}",
+            },
         )
 
     safe_stem = _safe_stem(filename)
@@ -219,12 +241,16 @@ async def upload_resume(
         try:
             session = await controller.create_session(candidate_id)
         except SessionError as exc:
-            raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)})
+            raise HTTPException(
+                status_code=404, detail={"code": "not_found", "message": str(exc)}
+            )
     elif session is not None and candidate_id and session.candidate.id != candidate_id:
         try:
             session = await controller.create_session(candidate_id)
         except SessionError as exc:
-            raise HTTPException(status_code=404, detail={"code": "not_found", "message": str(exc)})
+            raise HTTPException(
+                status_code=404, detail={"code": "not_found", "message": str(exc)}
+            )
     elif session is not None and not candidate_id:
         # 仅当当前 session 已绑定其它候选人（有姓名或 PDF 路径）时才重建，
         # 否则复用现有空 session 避免清空已积累的对话上下文。
@@ -291,7 +317,9 @@ async def upload_resume(
     elapsed_ms = (time.perf_counter() - start) * 1000
     logger.info(
         "upload_resume saved file_path=%s bytes=%d elapsed_ms=%.1f",
-        pdf_path, written, elapsed_ms,
+        pdf_path,
+        written,
+        elapsed_ms,
     )
 
     return {
@@ -307,14 +335,16 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
     memory = _memory(request)
     candidate = await memory.get_candidate(candidate_id)
     if candidate is None:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "候选人不存在"}
+        )
     controller = _controller(request)
     session = None
     if controller:
         s = await controller.get_session()
         if s and s.candidate.id == candidate_id:
             session = s
-    brief: str = (session.interview_brief if session and session.interview_brief else "")
+    brief: str = session.interview_brief if session and session.interview_brief else ""
     if not brief:
         brief = memory.get_brief(candidate_id)
     resume_markdown = await memory.get_resume_markdown(candidate_id)
@@ -327,6 +357,7 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
 
 
 # ── brief ─────────────────────────────────────────────────────────────────────
+
 
 @router.get("/interview/brief")
 async def get_brief(
@@ -345,6 +376,7 @@ async def get_brief(
 
 
 # ── interview lifecycle ───────────────────────────────────────────────────────
+
 
 @router.post("/interview/start")
 async def start_interview(
@@ -367,7 +399,10 @@ async def start_interview(
             try:
                 trigger.set_mode(body.trigger_mode)
             except ValueError:
-                logger.warning("start_interview: invalid trigger_mode %r, falling back to auto", body.trigger_mode)
+                logger.warning(
+                    "start_interview: invalid trigger_mode %r, falling back to auto",
+                    body.trigger_mode,
+                )
                 session.metadata.trigger_mode = "auto"
     bind_session_id(session.id)
     logger.info(
@@ -384,14 +419,18 @@ async def stop_interview(controller=Depends(_require_controller)):
     bind_op("stop_interview")
     session = await controller.get_session()
     if session is None:
-        raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
+        raise HTTPException(
+            status_code=409, detail={"code": "no_session", "message": "无活跃会话"}
+        )
     try:
         await controller.stop_interview()
     except SessionError as exc:
         raise _session_err(exc)
     bind_session_id(session.id)
     total_rounds = len(session.rounds)
-    logger.info("stop_interview done session_id=%s total_rounds=%d", session.id, total_rounds)
+    logger.info(
+        "stop_interview done session_id=%s total_rounds=%d", session.id, total_rounds
+    )
     return {
         "session_id": session.id,
         "stage": session.stage.value,
@@ -400,6 +439,7 @@ async def stop_interview(controller=Depends(_require_controller)):
 
 
 # ── session switch (legacy — maps to controller operations) ───────────────────
+
 
 @router.post("/session/switch")
 async def switch_agent(
@@ -420,22 +460,29 @@ async def switch_agent(
 
 # ── suggestion ────────────────────────────────────────────────────────────────
 
+
 @router.post("/interview/suggest")
 async def trigger_suggest(controller=Depends(_require_controller)):
     session = await controller.get_session()
     if session is None:
-        raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
+        raise HTTPException(
+            status_code=409, detail={"code": "no_session", "message": "无活跃会话"}
+        )
     from ..utils.metrics import Metrics
+
     Metrics.get().record_suggestion_trigger("manual")
     resp = await controller.interview_agent.handle_request(
         AgentRequest(type="trigger_suggestion", payload={}, session=session)
     )
     if not resp.success:
-        raise HTTPException(status_code=409, detail={"code": "trigger_error", "message": resp.error})
+        raise HTTPException(
+            status_code=409, detail={"code": "trigger_error", "message": resp.error}
+        )
     return resp.data
 
 
 # ── eval ─────────────────────────────────────────────────────────────────────
+
 
 @router.get("/interview/eval")
 async def get_eval(request: Request, interview_id: str | None = None):
@@ -445,12 +492,17 @@ async def get_eval(request: Request, interview_id: str | None = None):
     if interview_id:
         report = await memory.get_eval_report(interview_id)
         if report is None:
-            raise HTTPException(status_code=404, detail={"code": "not_found", "message": "评价报告不存在"})
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "not_found", "message": "评价报告不存在"},
+            )
         return {"report": _to_dict(report)}
 
     session = await controller.get_session() if controller else None
     if session is None:
-        raise HTTPException(status_code=409, detail={"code": "no_session", "message": "无活跃会话"})
+        raise HTTPException(
+            status_code=409, detail={"code": "no_session", "message": "无活跃会话"}
+        )
 
     eval_resp: Any = None
     eval_error: str | None = None
@@ -480,14 +532,14 @@ async def get_eval(request: Request, interview_id: str | None = None):
                     exc,
                     exc_info=(attempt == 2),
                 )
-                close_warning = (
-                    "评价已生成，但会话关闭失败（已重试3次）。请刷新页面或重启服务再开始下一次面试。"
-                )
+                close_warning = "评价已生成，但会话关闭失败（已重试3次）。请刷新页面或重启服务再开始下一次面试。"
                 if attempt < 2:
                     await asyncio.sleep(0.5 * (attempt + 1))
 
     if eval_error is not None:
-        raise HTTPException(status_code=500, detail={"code": "eval_error", "message": eval_error})
+        raise HTTPException(
+            status_code=500, detail={"code": "eval_error", "message": eval_error}
+        )
 
     # M4-2: EvalAgent 在持久化降级到 eval_orphans 时会在 data.save_warning 里写说明。
     save_warning: str | None = eval_resp.data.get("save_warning")
@@ -502,12 +554,15 @@ async def get_eval(request: Request, interview_id: str | None = None):
 async def export_report_pdf(interview_id: str, request: Request):
     """将指定面试的评价报告导出为 PDF 文件供浏览器下载。"""
     from fastapi.responses import Response
+
     from ..utils.pdf_export import build_report_pdf
 
     memory = _memory(request)
     report = await memory.get_eval_report(interview_id)
     if report is None:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "评价报告不存在"})
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "评价报告不存在"}
+        )
 
     candidate_name = ""
     if report.candidate_id:
@@ -526,6 +581,7 @@ async def export_report_pdf(interview_id: str, request: Request):
 
 # ── structured questions ──────────────────────────────────────────────────────
 
+
 @router.get("/interview/questions")
 async def get_questions(request: Request, candidate_id: str = Query(...)):
     memory = _memory(request)
@@ -534,13 +590,19 @@ async def get_questions(request: Request, candidate_id: str = Query(...)):
 
 
 @router.patch("/interview/questions/{question_id}")
-async def update_question(request: Request, question_id: str, candidate_id: str = Query(...)):
+async def update_question(
+    request: Request, question_id: str, candidate_id: str = Query(...)
+):
     body = await request.json()
     covered = bool(body.get("covered", False))
     memory = _memory(request)
-    found = memory.update_question_coverage(candidate_id, question_id, covered, covered_by="manual")
+    found = memory.update_question_coverage(
+        candidate_id, question_id, covered, covered_by="manual"
+    )
     if not found:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "问题不存在"})
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "问题不存在"}
+        )
     return {"updated": True, "question_id": question_id, "covered": covered}
 
 
@@ -566,12 +628,12 @@ async def _auto_check_coverage(
             return
 
         # 构建对话文本
-        from ..models.message import Message
         import json as _json
 
+        from ..models.message import Message
+
         round_text = "\n\n".join(
-            f"面试官: {r.interviewer_text}\n候选人: {r.candidate_text}"
-            for r in rounds
+            f"面试官: {r.interviewer_text}\n候选人: {r.candidate_text}" for r in rounds
         )
 
         q_list = "\n".join(
@@ -582,16 +644,20 @@ async def _auto_check_coverage(
             f"以下是本轮对话记录：\n{round_text}\n\n"
             f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
             "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
-            "以 JSON 数组返回已覆盖问题的 ID 列表，格式：[\"id1\", \"id2\"]，未覆盖任何问题则返回 []。"
+            '以 JSON 数组返回已覆盖问题的 ID 列表，格式：["id1", "id2"]，未覆盖任何问题则返回 []。'
         )
 
-        resp = await llm_client.chat([Message(role="user", content=prompt)], temperature=0.1)
+        resp = await llm_client.chat(
+            [Message(role="user", content=prompt)], temperature=0.1
+        )
         raw = resp.content or ""
         start, end = raw.find("["), raw.rfind("]")
         if start != -1 and end != -1:
-            covered_ids = _json.loads(raw[start:end + 1])
+            covered_ids = _json.loads(raw[start : end + 1])
             for qid in covered_ids:
-                memory.update_question_coverage(candidate_id, str(qid), True, covered_by="auto")
+                memory.update_question_coverage(
+                    candidate_id, str(qid), True, covered_by="auto"
+                )
 
     except Exception as e:
         # 静默失败，不影响主流程
@@ -605,7 +671,13 @@ async def check_question_coverage(request: Request):
     candidate_id: str = body.get("candidate_id", "")
     round_text: str = body.get("round_text", "")
     if not candidate_id or not round_text:
-        raise HTTPException(status_code=422, detail={"code": "missing_fields", "message": "candidate_id 和 round_text 为必填项"})
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "missing_fields",
+                "message": "candidate_id 和 round_text 为必填项",
+            },
+        )
 
     memory = _memory(request)
     questions = memory.get_questions(candidate_id)
@@ -619,29 +691,35 @@ async def check_question_coverage(request: Request):
 
     updated_ids: list[str] = []
     try:
+        import json as _json
+
         from ..llm.client import OpenAICompatibleClient
         from ..models.message import Message
-        import json as _json
 
         # 使用注入的 llm_client，fallback 到直接实例化
         llm = getattr(request.app.state, "llm_client", None)
         if not llm:
             llm = OpenAICompatibleClient(settings)
 
-        q_list = "\n".join(f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）' for i, q in enumerate(uncovered))
+        q_list = "\n".join(
+            f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）'
+            for i, q in enumerate(uncovered)
+        )
         prompt = (
             f"以下是本轮对话记录：\n{round_text}\n\n"
             f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
             "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
-            "以 JSON 数组返回已覆盖问题的 ID 列表，格式：[\"id1\", \"id2\"]，未覆盖任何问题则返回 []。"
+            '以 JSON 数组返回已覆盖问题的 ID 列表，格式：["id1", "id2"]，未覆盖任何问题则返回 []。'
         )
         resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.1)
         raw = resp.content or ""
         start, end = raw.find("["), raw.rfind("]")
         if start != -1 and end != -1:
-            covered_ids = _json.loads(raw[start:end + 1])
+            covered_ids = _json.loads(raw[start : end + 1])
             for qid in covered_ids:
-                if memory.update_question_coverage(candidate_id, str(qid), True, covered_by="auto"):
+                if memory.update_question_coverage(
+                    candidate_id, str(qid), True, covered_by="auto"
+                ):
                     updated_ids.append(str(qid))
     except Exception:
         logger.exception("check_question_coverage: LLM call failed")
@@ -650,6 +728,7 @@ async def check_question_coverage(request: Request):
 
 
 # ── candidates ────────────────────────────────────────────────────────────────
+
 
 @router.get("/candidates")
 async def list_candidates(
@@ -660,7 +739,9 @@ async def list_candidates(
 ):
     memory = _memory(request)
     total = await memory.count_candidates(keyword=keyword)
-    candidates = await memory.search_candidates(keyword=keyword, limit=limit, offset=offset)
+    candidates = await memory.search_candidates(
+        keyword=keyword, limit=limit, offset=offset
+    )
     return {
         "candidates": [_to_dict(c) for c in candidates],
         "total": total,
@@ -672,7 +753,9 @@ async def get_candidate_history(request: Request, candidate_id: str):
     memory = _memory(request)
     candidate = await memory.get_candidate(candidate_id)
     if candidate is None:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "候选人不存在"}
+        )
     history = await memory.get_candidate_history(candidate_id)
     return {
         "candidate": _to_dict(candidate),
@@ -688,13 +771,22 @@ async def compare_candidates(request: Request, ids: str = ""):
     """
     bind_op("compare_candidates")
     if not ids:
-        raise HTTPException(status_code=422, detail={"code": "missing_ids", "message": "请提供候选人 ID（ids 参数）"})
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "missing_ids", "message": "请提供候选人 ID（ids 参数）"},
+        )
 
     id_list = [i.strip() for i in ids.split(",") if i.strip()]
     if len(id_list) < 2:
-        raise HTTPException(status_code=422, detail={"code": "too_few", "message": "至少选择 2 名候选人进行对比"})
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "too_few", "message": "至少选择 2 名候选人进行对比"},
+        )
     if len(id_list) > 5:
-        raise HTTPException(status_code=422, detail={"code": "too_many", "message": "最多对比 5 名候选人"})
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "too_many", "message": "最多对比 5 名候选人"},
+        )
 
     memory = _memory(request)
     settings = getattr(request.app.state, "settings", None)
@@ -705,13 +797,18 @@ async def compare_candidates(request: Request, ids: str = ""):
     for cid in id_list:
         candidate = await memory.get_candidate(cid)
         if candidate is None:
-            raise HTTPException(status_code=404, detail={"code": "not_found", "message": f"候选人 {cid} 不存在"})
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "not_found", "message": f"候选人 {cid} 不存在"},
+            )
         report = await memory.get_latest_eval_report(cid)
-        rows.append({
-            "id": cid,
-            "name": candidate.name or cid,
-            "report": _to_dict(report) if report else None,
-        })
+        rows.append(
+            {
+                "id": cid,
+                "name": candidate.name or cid,
+                "report": _to_dict(report) if report else None,
+            }
+        )
         if report is None:
             missing_report.append(candidate.name or cid)
 
@@ -752,7 +849,8 @@ async def compare_candidates(request: Request, ids: str = ""):
             if row["report"]:
                 r = row["report"]
                 dims_text = "; ".join(
-                    f"{d.get('dimension')}={d.get('score')}" for d in r.get("dimensions", [])
+                    f"{d.get('dimension')}={d.get('score')}"
+                    for d in r.get("dimensions", [])
                 )
                 report_texts.append(
                     f"【{row['name']}】综合={r.get('overall_score')} | {dims_text} | "
@@ -767,8 +865,7 @@ async def compare_candidates(request: Request, ids: str = ""):
             "以下是多名候选人的面试评价摘要，请生成横向对比分析，包括：\n"
             "1. 各候选人综合能力排序（附简短理由）\n"
             "2. 各自核心优势与短板对比\n"
-            "3. 岗位匹配度建议（谁最适合录用）\n\n"
-            + "\n".join(report_texts)
+            "3. 岗位匹配度建议（谁最适合录用）\n\n" + "\n".join(report_texts)
         )
 
         resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.3)
@@ -778,7 +875,10 @@ async def compare_candidates(request: Request, ids: str = ""):
         llm_summary = "（对比摘要生成失败，请查看评分表格）"
 
     return {
-        "candidates": [{"id": r["id"], "name": r["name"], "has_report": r["report"] is not None} for r in rows],
+        "candidates": [
+            {"id": r["id"], "name": r["name"], "has_report": r["report"] is not None}
+            for r in rows
+        ],
         "missing_report": missing_report,
         "dimensions": all_dims,
         "score_table": score_table,
@@ -792,7 +892,9 @@ async def delete_candidate(request: Request, candidate_id: str):
     memory = _memory(request)
     candidate = await memory.get_candidate(candidate_id)
     if candidate is None:
-        raise HTTPException(status_code=404, detail={"code": "not_found", "message": "候选人不存在"})
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "message": "候选人不存在"}
+        )
 
     # 若当前活跃会话正在使用该候选人，拒绝删除
     controller = _controller(request)
@@ -800,7 +902,10 @@ async def delete_candidate(request: Request, candidate_id: str):
     if session is not None and session.candidate.id == candidate_id:
         raise HTTPException(
             status_code=409,
-            detail={"code": "candidate_in_use", "message": "候选人当前正在面试中，无法删除"},
+            detail={
+                "code": "candidate_in_use",
+                "message": "候选人当前正在面试中，无法删除",
+            },
         )
 
     await memory.delete_candidate(candidate_id)
@@ -809,6 +914,7 @@ async def delete_candidate(request: Request, candidate_id: str):
 
 
 # ── recovery (rounds.jsonl WAL 残留处理) ──────────────────────────────────────
+
 
 @router.get("/recovery/scan")
 async def scan_recovery(request: Request):
@@ -832,7 +938,10 @@ async def finish_recovery(request: Request):
     if not candidate_id or not interview_id:
         raise HTTPException(
             status_code=400,
-            detail={"code": "bad_request", "message": "缺少 candidate_id / interview_id"},
+            detail={
+                "code": "bad_request",
+                "message": "缺少 candidate_id / interview_id",
+            },
         )
     memory = _memory(request)
     try:
@@ -843,11 +952,19 @@ async def finish_recovery(request: Request):
             status_code=404, detail={"code": "not_found", "message": str(exc)}
         ) from exc
     except Exception as exc:
-        logger.exception("finish_recovery failed candidate=%s interview=%s", candidate_id, interview_id)
+        logger.exception(
+            "finish_recovery failed candidate=%s interview=%s",
+            candidate_id,
+            interview_id,
+        )
         raise HTTPException(
             status_code=500, detail={"code": "recovery_failed", "message": str(exc)}
         ) from exc
-    return {"recovered_rounds": recovered, "candidate_id": candidate_id, "interview_id": interview_id}
+    return {
+        "recovered_rounds": recovered,
+        "candidate_id": candidate_id,
+        "interview_id": interview_id,
+    }
 
 
 @router.post("/recovery/discard")
@@ -860,14 +977,22 @@ async def discard_recovery(request: Request):
     if not candidate_id or not interview_id:
         raise HTTPException(
             status_code=400,
-            detail={"code": "bad_request", "message": "缺少 candidate_id / interview_id"},
+            detail={
+                "code": "bad_request",
+                "message": "缺少 candidate_id / interview_id",
+            },
         )
     memory = _memory(request)
     deleted = await memory.discard_orphan_wal(candidate_id, interview_id)
-    return {"deleted": deleted, "candidate_id": candidate_id, "interview_id": interview_id}
+    return {
+        "deleted": deleted,
+        "candidate_id": candidate_id,
+        "interview_id": interview_id,
+    }
 
 
 # ── recordings ────────────────────────────────────────────────────────────────
+
 
 @router.get("/recordings/{session_id}/rounds/{round_number}")
 async def get_round_recording(
@@ -880,17 +1005,24 @@ async def get_round_recording(
     base = settings.RECORDINGS_DIR
     rounds_dir = os.path.join(base, session_id, "rounds")
     candidates = [
-        os.path.join(rounds_dir, f"round_{round_number:03d}_{source}.wav") if source else None,
+        (
+            os.path.join(rounds_dir, f"round_{round_number:03d}_{source}.wav")
+            if source
+            else None
+        ),
         os.path.join(rounds_dir, f"round_{round_number:03d}_candidate.wav"),
         os.path.join(rounds_dir, f"round_{round_number:03d}_interviewer.wav"),
     ]
     for path in candidates:
         if path and os.path.exists(path):
             return FileResponse(path, media_type="audio/wav")
-    raise HTTPException(status_code=404, detail={"code": "not_found", "message": "录音文件不存在"})
+    raise HTTPException(
+        status_code=404, detail={"code": "not_found", "message": "录音文件不存在"}
+    )
 
 
 # ── health / metrics ─────────────────────────────────────────────────────────
+
 
 @router.get("/health")
 async def health(request: Request):
@@ -909,6 +1041,7 @@ async def health(request: Request):
     }
     if not ready:
         from fastapi.responses import JSONResponse
+
         return JSONResponse(status_code=503, content=payload)
     return payload
 
@@ -917,10 +1050,12 @@ async def health(request: Request):
 async def get_metrics():
     """S-11: 返回进程级累积 LLM 指标（token / 请求次数 / 延迟百分位数）。"""
     from ..utils.metrics import Metrics
+
     return Metrics.get().to_dict()
 
 
 # ── session state ─────────────────────────────────────────────────────────────
+
 
 @router.get("/session/current")
 async def get_current_session(request: Request):

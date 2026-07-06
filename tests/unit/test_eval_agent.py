@@ -1,4 +1,5 @@
 """Unit tests — EvalAgent：handle_request、_parse_eval_json、_format_rounds。"""
+
 from __future__ import annotations
 
 import json
@@ -8,17 +9,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.base import AgentRequest, AgentResponse
+from src.agents.base import AgentRequest
 from src.agents.eval_agent import EvalAgent, _format_rounds, _parse_eval_json
-from src.framework.context import ContextConfig, ContextManager
 from src.framework.prompt_builder import AgentConfig, PromptBuilder
 from src.framework.tool_registry import ToolRegistry
 from src.llm.protocol import ChatResponse
 from src.models.candidate import CandidateProfile
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
+from src.models.session import (
+    ConversationRound,
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
-
 
 # ── 共享 fixtures ────────────────────────────────────────────────────────────
 
@@ -49,9 +53,7 @@ def _make_eval_agent(
     llm_content: str = '{"dimensions": [], "overall_score": 7.5, "strengths": ["表达清晰"], "weaknesses": [], "recommendation": "hire", "summary": "总体良好，面试表现优秀，沟通能力强，技术深度达到岗位要求。"}',
 ) -> EvalAgent:
     mock_llm = AsyncMock()
-    mock_llm.chat = AsyncMock(
-        return_value=ChatResponse(content=llm_content)
-    )
+    mock_llm.chat = AsyncMock(return_value=ChatResponse(content=llm_content))
     candidates_dir = tmp_path / "candidates"
     candidates_dir.mkdir()
     memory_module = MemoryModule(candidates_dir=str(candidates_dir))
@@ -107,7 +109,9 @@ class TestParseEvalJson:
 class TestFormatRounds:
     def test_formats_single_round(self):
         rounds = [
-            ConversationRound(round_number=1, interviewer_text="你好", candidate_text="您好")
+            ConversationRound(
+                round_number=1, interviewer_text="你好", candidate_text="您好"
+            )
         ]
         result = _format_rounds(rounds)
         assert "第 1 轮" in result
@@ -116,8 +120,12 @@ class TestFormatRounds:
 
     def test_formats_multiple_rounds_with_separator(self):
         rounds = [
-            ConversationRound(round_number=1, interviewer_text="Q1", candidate_text="A1"),
-            ConversationRound(round_number=2, interviewer_text="Q2", candidate_text="A2"),
+            ConversationRound(
+                round_number=1, interviewer_text="Q1", candidate_text="A1"
+            ),
+            ConversationRound(
+                round_number=2, interviewer_text="Q2", candidate_text="A2"
+            ),
         ]
         result = _format_rounds(rounds)
         assert "第 1 轮" in result
@@ -152,16 +160,23 @@ class TestEvalAgentHandleRequest:
 
     @pytest.mark.asyncio
     async def test_generate_eval_with_rounds_returns_success(self, tmp_path):
-        valid_json = json.dumps({
-            "dimensions": [
-                {"dimension": "技术深度", "score": 8.0, "comment": "优秀", "evidence": ["提到了微服务"]}
-            ],
-            "overall_score": 8.0,
-            "strengths": ["系统设计清晰"],
-            "weaknesses": ["缺乏运维经验"],
-            "recommendation": "hire",
-            "summary": "候选人表现良好，技术能力扎实，沟通能力强，符合岗位要求，建议录用。",
-        })
+        valid_json = json.dumps(
+            {
+                "dimensions": [
+                    {
+                        "dimension": "技术深度",
+                        "score": 8.0,
+                        "comment": "优秀",
+                        "evidence": ["提到了微服务"],
+                    }
+                ],
+                "overall_score": 8.0,
+                "strengths": ["系统设计清晰"],
+                "weaknesses": ["缺乏运维经验"],
+                "recommendation": "hire",
+                "summary": "候选人表现良好，技术能力扎实，沟通能力强，符合岗位要求，建议录用。",
+            }
+        )
         agent = _make_eval_agent(tmp_path, valid_json)
         # 先保存候选人，以便 save_eval_report 不报错
         await agent._memory_module.save_candidate(

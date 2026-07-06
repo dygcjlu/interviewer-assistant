@@ -1,4 +1,5 @@
 """顶层 conftest — 注册 pytest 标记，提供跨层共享 fixture。"""
+
 from __future__ import annotations
 
 import pytest

@@ -1,11 +1,13 @@
 """ToolRegistry — 工具注册中心与调度器。"""
+
 from __future__ import annotations
 
 import json
 import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
 from ..llm.protocol import ToolFunction, ToolSchema
 from ..logging import truncate
@@ -36,7 +38,9 @@ class ToolRegistry:
     ) -> Callable:
         """装饰器 — 注册工具函数，自动从函数签名生成 JSON Schema（若未提供）。"""
 
-        def decorator(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        def decorator(
+            fn: Callable[..., Awaitable[Any]],
+        ) -> Callable[..., Awaitable[Any]]:
             schema = parameters_schema or _build_schema(fn)
             entry = ToolEntry(
                 name=fn.__name__,
@@ -55,8 +59,10 @@ class ToolRegistry:
 
     def get_schemas(self, names: list[str] | None = None) -> list[ToolSchema]:
         """获取工具 JSON Schema 列表（传入 LLM 的 tools 参数）。"""
-        tools = self._tools.values() if names is None else (
-            self._tools[n] for n in names if n in self._tools
+        tools = (
+            self._tools.values()
+            if names is None
+            else (self._tools[n] for n in names if n in self._tools)
         )
         return [
             ToolSchema(
@@ -91,7 +97,9 @@ class ToolRegistry:
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.exception(
-                "ToolRegistry: error dispatching tool %r elapsed_ms=%.1f", name, elapsed_ms,
+                "ToolRegistry: error dispatching tool %r elapsed_ms=%.1f",
+                name,
+                elapsed_ms,
             )
             return json.dumps(
                 {
@@ -116,6 +124,7 @@ class ToolRegistry:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _build_schema(fn: Callable) -> dict:
     """M5-2: 强制要求调用方提供显式 SCHEMA，防止自动推导产生不准确的类型。

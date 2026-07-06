@@ -2,8 +2,8 @@
 
 Prompt 是 Agent 行为的核心定义，作为代码而非配置维护，便于 git diff 审查。
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 RESUME_AGENT_SYSTEM_PROMPT = """你是一位经验丰富的技术面试助手，通过工具自主完成简历解析或面试简报生成任务。
 

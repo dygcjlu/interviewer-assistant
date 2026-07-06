@@ -1,4 +1,5 @@
 """AudioStreamBridge — 桥接 AudioCapturer 回调到双 STT 实例 + 录音器。"""
+
 from __future__ import annotations
 
 import logging

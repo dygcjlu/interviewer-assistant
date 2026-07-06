@@ -1,4 +1,5 @@
 """Unit tests — tools 模块：file_read、file_write、skill_view、_is_allowed。"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,11 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.tools.file_read import _is_allowed as read_is_allowed, file_read
-from src.tools.file_write import _is_allowed as write_is_allowed, file_write
-from src.tools.skill_view import skill_view
 from src.tools._context import ToolContext
-
+from src.tools.file_read import _is_allowed as read_is_allowed
+from src.tools.file_read import file_read
+from src.tools.file_write import file_write
+from src.tools.skill_view import skill_view
 
 # ── _is_allowed（file_read / file_write 共用相同逻辑）────────────────────────
 
@@ -131,6 +132,7 @@ class TestSkillView:
     async def test_returns_skill_content(self):
         mock_loader = MagicMock()
         from src.framework.skill import SkillContent, SkillMeta
+
         mock_loader.load_skill.return_value = SkillContent(
             meta=SkillMeta(name="test_skill", description="desc", trigger_hint="hint"),
             full_text="完整技巧内容",
@@ -153,6 +155,7 @@ class TestSkillView:
     @pytest.mark.asyncio
     async def test_returns_available_skills_on_not_found(self):
         from src.framework.skill import SkillMeta
+
         mock_loader = MagicMock()
         mock_loader.load_skill.side_effect = FileNotFoundError("x")
         mock_loader.load_index.return_value = [

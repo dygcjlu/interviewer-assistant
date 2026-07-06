@@ -1,9 +1,6 @@
 """Unit tests for MemoryModule backward compatibility with EvalReport."""
-from __future__ import annotations
 
-import json
-from datetime import datetime
-from pathlib import Path
+from __future__ import annotations
 
 import pytest
 
@@ -22,7 +19,13 @@ class TestMemoryModuleEvalReportCompatibility:
         candidate_id = "c-001"
         interview_id = "iv-001"
 
-        eval_path = candidates_dir / candidate_id / "interviews" / interview_id / "eval_report.md"
+        eval_path = (
+            candidates_dir
+            / candidate_id
+            / "interviews"
+            / interview_id
+            / "eval_report.md"
+        )
         eval_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Old format: no candidate_id or question_coverage
@@ -66,7 +69,13 @@ Strong candidate overall.
         candidate_id = "c-002"
         interview_id = "iv-002"
 
-        eval_path = candidates_dir / candidate_id / "interviews" / interview_id / "eval_report.md"
+        eval_path = (
+            candidates_dir
+            / candidate_id
+            / "interviews"
+            / interview_id
+            / "eval_report.md"
+        )
         eval_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Has candidate_id but no question_coverage
@@ -110,7 +119,13 @@ Decent candidate.
         candidate_id = "c-003"
         interview_id = "iv-003"
 
-        eval_path = candidates_dir / candidate_id / "interviews" / interview_id / "eval_report.md"
+        eval_path = (
+            candidates_dir
+            / candidate_id
+            / "interviews"
+            / interview_id
+            / "eval_report.md"
+        )
         eval_path.parent.mkdir(parents=True, exist_ok=True)
 
         # New format: has both fields

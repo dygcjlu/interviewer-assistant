@@ -4,6 +4,7 @@
 - Agent 轻量 API（无 Token，免费，IP 限频）
 - 精准 API（需 Token，vlm 模型，更高精度）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,7 +58,9 @@ class MineruParser(BasePDFParser):
             content = await asyncio.to_thread(Path(file_path).read_bytes)
             put_resp = await client.put(file_url, content=content)
             put_resp.raise_for_status()
-            logger.info("MineruParser[agent]: uploaded %s, task_id=%s", file_name, task_id)
+            logger.info(
+                "MineruParser[agent]: uploaded %s, task_id=%s", file_name, task_id
+            )
 
             # 3. 轮询直到完成
             result_data = await self._poll_agent(client, task_id)
@@ -113,7 +116,9 @@ class MineruParser(BasePDFParser):
             content = await asyncio.to_thread(Path(file_path).read_bytes)
             put_resp = await client.put(upload_url, content=content)
             put_resp.raise_for_status()
-            logger.info("MineruParser[precise]: uploaded %s, batch_id=%s", file_name, batch_id)
+            logger.info(
+                "MineruParser[precise]: uploaded %s, batch_id=%s", file_name, batch_id
+            )
 
             # 3. 轮询
             result_data = await self._poll_precise(client, headers, batch_id)
@@ -145,16 +150,22 @@ class MineruParser(BasePDFParser):
             if any(f.get("state") in ("failed", "error") for f in files):
                 raise RuntimeError(f"MinerU precise batch {batch_id} failed: {data}")
             interval = min(interval * 2, MAX_POLL_INTERVAL)
-        raise TimeoutError(f"MinerU precise batch {batch_id} timed out after {TIMEOUT}s")
+        raise TimeoutError(
+            f"MinerU precise batch {batch_id} timed out after {TIMEOUT}s"
+        )
 
     @staticmethod
     def _extract_md_from_zip(zip_bytes: bytes) -> str:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
             names = zf.namelist()
             # 优先 full.md，降级到任意 .md 文件
-            target = "full.md" if "full.md" in names else next(
-                (n for n in names if n.endswith(".md")), None
+            target = (
+                "full.md"
+                if "full.md" in names
+                else next((n for n in names if n.endswith(".md")), None)
             )
             if target is None:
-                raise FileNotFoundError(f"No .md file found in MinerU zip. Files: {names}")
+                raise FileNotFoundError(
+                    f"No .md file found in MinerU zip. Files: {names}"
+                )
             return zf.read(target).decode("utf-8")

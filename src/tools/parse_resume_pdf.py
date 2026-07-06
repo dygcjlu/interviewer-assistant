@@ -1,4 +1,5 @@
 """parse_resume_pdf — 从 PDF 提取 Markdown 文本（Strategy 模式，支持多种解析引擎）。"""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,12 @@ import logging
 from pathlib import Path
 
 from src.config import get_settings
-from src.tools.pdf_parsers import BasePDFParser, MineruParser, PymupdfParser, QwenVLParser
+from src.tools.pdf_parsers import (
+    BasePDFParser,
+    MineruParser,
+    PymupdfParser,
+    QwenVLParser,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +72,8 @@ async def parse_resume_pdf(file_path: str) -> str:
             fallback = get_pdf_parser("pymupdf")
             logger.warning(
                 "parse_resume_pdf: primary=%s failed, falling back to pymupdf for %s",
-                primary_type, file_path,
+                primary_type,
+                file_path,
             )
             text = await fallback.extract(file_path)
             return json.dumps(
@@ -81,7 +88,9 @@ async def parse_resume_pdf(file_path: str) -> str:
                 ensure_ascii=False,
             )
         except Exception as fb_exc:
-            logger.exception("parse_resume_pdf: pymupdf fallback also failed: %s", file_path)
+            logger.exception(
+                "parse_resume_pdf: pymupdf fallback also failed: %s", file_path
+            )
             return json.dumps(
                 {
                     "error": (

@@ -1,4 +1,5 @@
 """Integration tests — POST /api/chat（SSE 流式格式）"""
+
 from __future__ import annotations
 
 import json
@@ -12,17 +13,19 @@ from src.llm.protocol import StreamChunk
 @pytest.mark.asyncio
 async def test_chat_returns_sse_format(client, mock_llm):
     """响应是 text/event-stream，每行以 'data: ' 开头，结束有 [DONE]。"""
-    mock_llm.push_stream([
-        StreamChunk(delta="你好"),
-        StreamChunk(delta="，候选人情况如下"),
-        StreamChunk(
-            delta="",
-            is_final=True,
-            accumulated_content="你好，候选人情况如下",
-            prompt_tokens=10,
-            completion_tokens=8,
-        ),
-    ])
+    mock_llm.push_stream(
+        [
+            StreamChunk(delta="你好"),
+            StreamChunk(delta="，候选人情况如下"),
+            StreamChunk(
+                delta="",
+                is_final=True,
+                accumulated_content="你好，候选人情况如下",
+                prompt_tokens=10,
+                completion_tokens=8,
+            ),
+        ]
+    )
 
     r = await client.post("/api/chat", json={"message": "介绍一下候选人"})
     assert r.status_code == 200
@@ -39,10 +42,12 @@ async def test_chat_returns_sse_format(client, mock_llm):
 @pytest.mark.asyncio
 async def test_chat_delta_events_have_type_field(client, mock_llm):
     """delta 事件 JSON 必须含 type='delta' 和 delta 字段。"""
-    mock_llm.push_stream([
-        StreamChunk(delta="测试内容"),
-        StreamChunk(delta="", is_final=True, accumulated_content="测试内容"),
-    ])
+    mock_llm.push_stream(
+        [
+            StreamChunk(delta="测试内容"),
+            StreamChunk(delta="", is_final=True, accumulated_content="测试内容"),
+        ]
+    )
 
     r = await client.post("/api/chat", json={"message": "测试"})
     lines = r.text.split("\n")

@@ -2,6 +2,7 @@
 
 S-11: 无第三方依赖；通过 GET /api/metrics 暴露 JSON，供 UI / 运维监控使用。
 """
+
 from __future__ import annotations
 
 import time
@@ -13,7 +14,7 @@ from typing import ClassVar
 class Metrics:
     """进程级 Metrics 单例，线程/协程安全（Python GIL 保护 int += 操作）。"""
 
-    _instance: ClassVar["Metrics | None"] = None
+    _instance: ClassVar[Metrics | None] = None
 
     requests_total: int = 0
     errors_total: int = 0
@@ -31,7 +32,7 @@ class Metrics:
     _started_at: float = field(default_factory=time.time)
 
     @classmethod
-    def get(cls) -> "Metrics":
+    def get(cls) -> Metrics:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -48,7 +49,9 @@ class Metrics:
         if elapsed_ms > 0:
             self._asr_latency_samples.append(elapsed_ms)
             if len(self._asr_latency_samples) > self._MAX_SAMPLES:
-                self._asr_latency_samples = self._asr_latency_samples[-self._MAX_SAMPLES:]
+                self._asr_latency_samples = self._asr_latency_samples[
+                    -self._MAX_SAMPLES :
+                ]
 
     def record_suggestion_trigger(self, mode: str) -> None:
         if mode == "auto":

@@ -1,4 +1,5 @@
 """Integration tests — GET /api/candidates 和 DELETE /api/candidates/{id}"""
+
 from __future__ import annotations
 
 import pytest

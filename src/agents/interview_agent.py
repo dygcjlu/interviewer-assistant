@@ -1,21 +1,23 @@
 """InterviewAgent — 实时面试追问建议。"""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import AsyncIterator, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from src.logging import bind_op, text_summary, truncate
+from src.logging import text_summary, truncate
 
-from .base import AgentRequest, AgentResponse, BaseAgent
 from ..audio.trigger import SuggestionTrigger
 from ..framework.prompt_builder import AgentConfig, PromptBuilder
 from ..framework.tool_registry import ToolRegistry
 from ..models.message import Message
 from ..models.session import InterviewSession
 from ..storage.conversation_logger import ConversationLogger
+from .base import AgentRequest, AgentResponse, BaseAgent
 
 if TYPE_CHECKING:
     from ..framework.context import ContextManager
@@ -34,9 +36,9 @@ class InterviewAgent(BaseAgent):
         self,
         config: AgentConfig,
         prompt_builder: PromptBuilder,
-        llm_client: "LLMClient",
+        llm_client: LLMClient,
         tool_registry: ToolRegistry,
-        context_manager: "ContextManager",
+        context_manager: ContextManager,
         silence_threshold_sec: float = _DEFAULT_SILENCE_SEC,
         min_interval_sec: float = _DEFAULT_MIN_INTERVAL_SEC,
     ) -> None:
@@ -174,7 +176,9 @@ class InterviewAgent(BaseAgent):
                 req_id,
                 elapsed_ms,
             )
-            return AgentResponse(success=True, data={"request_id": req_id, "status": "generating"})
+            return AgentResponse(
+                success=True, data={"request_id": req_id, "status": "generating"}
+            )
 
         logger.error("InterviewAgent handle_request unknown type=%r", request.type)
         return AgentResponse(
@@ -182,14 +186,20 @@ class InterviewAgent(BaseAgent):
         )
 
     async def handle_stream(self, request: AgentRequest) -> AsyncIterator[str]:
-        req_id = request.request_id if request.request_id is not None else self._request_counter
+        req_id = (
+            request.request_id
+            if request.request_id is not None
+            else self._request_counter
+        )
         async for token in self.generate_suggestion(req_id):
             yield token
 
     async def generate_suggestion(self, request_id: int) -> AsyncIterator[str]:
         """生成追问建议 — SuggestionTrigger 回调 + 手动触发共用入口。"""
         if self._session is None:
-            logger.warning("InterviewAgent.generate_suggestion called without active session")
+            logger.warning(
+                "InterviewAgent.generate_suggestion called without active session"
+            )
             return
 
         self._bind_log_context("generate_suggestion")
@@ -247,7 +257,9 @@ class InterviewAgent(BaseAgent):
                 "请结合以上所有对话记录、候选人简历和面试简报，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。"
             )
         else:
-            current_text = "面试还未开始，请根据面试简报给出第一个开场问题，直接输出话术。"
+            current_text = (
+                "面试还未开始，请根据面试简报给出第一个开场问题，直接输出话术。"
+            )
 
         user_msg = Message(role="user", content=current_text)
         if self._logger is not None:
@@ -330,7 +342,8 @@ class InterviewAgent(BaseAgent):
         if len(messages) <= 3:
             logger.warning(
                 "InterviewAgent token over budget but messages too short to trim: %d > %d",
-                total, limit,
+                total,
+                limit,
             )
             return None
 
@@ -344,19 +357,26 @@ class InterviewAgent(BaseAgent):
             if tokens <= limit:
                 logger.warning(
                     "InterviewAgent token over budget, trimmed history middle=%d->%d (keep_last=%d) tokens=%d/%d",
-                    len(middle), keep, keep, tokens, limit,
+                    len(middle),
+                    keep,
+                    keep,
+                    tokens,
+                    limit,
                 )
                 return trimmed
         logger.warning(
             "InterviewAgent token still over budget after max trimming: %d > %d (fixed zone too large)",
-            self.llm_client.count_tokens([system, last_user]), limit,
+            self.llm_client.count_tokens([system, last_user]),
+            limit,
         )
         return None
 
     async def _on_trigger_fired(self, request_id: int) -> None:
         """SuggestionTrigger 回调：在后台 task 内消费 generate_suggestion 流。"""
         trigger_mode = (
-            self._suggestion_trigger.mode if self._suggestion_trigger is not None else "unknown"
+            self._suggestion_trigger.mode
+            if self._suggestion_trigger is not None
+            else "unknown"
         )
         logger.info(
             "InterviewAgent on_trigger_fired request_id=%d trigger_mode=%s has_ws_sender=%s",

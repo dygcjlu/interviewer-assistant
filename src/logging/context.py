@@ -1,11 +1,18 @@
 """请求关联上下文 — 通过 contextvars 在单次请求/连接内传播标识。"""
+
 from __future__ import annotations
 
 import contextvars
 
-request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
-connection_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("connection_id", default="-")
-session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("session_id", default="-")
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "request_id", default="-"
+)
+connection_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "connection_id", default="-"
+)
+session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "session_id", default="-"
+)
 agent_var: contextvars.ContextVar[str] = contextvars.ContextVar("agent", default="-")
 op_var: contextvars.ContextVar[str] = contextvars.ContextVar("op", default="-")
 

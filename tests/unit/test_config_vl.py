@@ -1,5 +1,5 @@
 """测试 Settings VL LLM 配置回退逻辑。"""
-import pytest
+
 from src.config import Settings
 
 

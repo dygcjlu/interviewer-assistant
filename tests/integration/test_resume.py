@@ -1,10 +1,10 @@
 """Integration tests — POST /api/resume/upload 和 GET /api/resume/profile"""
+
 from __future__ import annotations
 
 import pytest
 
 from src.models.candidate import CandidateProfile
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -129,7 +129,9 @@ async def test_get_profile_returns_candidate_data(client):
     candidate = CandidateProfile(id="cid-profile-001", name="赵六")
     await memory.save_candidate(candidate, "# 赵六的简历\n")
 
-    r = await client.get("/api/resume/profile", params={"candidate_id": "cid-profile-001"})
+    r = await client.get(
+        "/api/resume/profile", params={"candidate_id": "cid-profile-001"}
+    )
     assert r.status_code == 200
     data = r.json()
     assert data["candidate_id"] == "cid-profile-001"

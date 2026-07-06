@@ -1,4 +1,5 @@
 """结构化日志：上下文传播与初始化配置。"""
+
 from src.logging.config import setup_logging
 from src.logging.context import (
     agent_var,

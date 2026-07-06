@@ -1,4 +1,5 @@
 """Unit tests — framework 模块：ContextManager、ToolRegistry、SkillLoader、PromptBuilder。"""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,18 +12,23 @@ import pytest
 
 from src.framework.context import ContextConfig, ContextData, ContextManager
 from src.framework.prompt_builder import AgentConfig, PromptBuilder, _build_fixed_zone
-from src.framework.skill import SkillContent, SkillLoader, SkillMeta
-from src.framework.tool_registry import ToolEntry, ToolRegistry
+from src.framework.skill import SkillContent, SkillLoader
+from src.framework.tool_registry import ToolRegistry
 from src.llm.protocol import ChatResponse
 from src.models.candidate import CandidateProfile
-from src.models.message import Message
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
-
+from src.models.session import (
+    ConversationRound,
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 
 # ── 共享 fixtures ────────────────────────────────────────────────────────────
 
 
-def _make_round(n: int = 1, interviewer: str = "问", candidate: str = "答") -> ConversationRound:
+def _make_round(
+    n: int = 1, interviewer: str = "问", candidate: str = "答"
+) -> ConversationRound:
     return ConversationRound(
         round_number=n,
         interviewer_text=interviewer,
@@ -46,7 +52,9 @@ def _make_session(candidate_id: str = "c-001", name: str = "张三") -> Intervie
 def _make_llm_mock(content: str = "摘要内容") -> AsyncMock:
     mock = AsyncMock()
     mock.chat = AsyncMock(
-        return_value=ChatResponse(content=content, prompt_tokens=10, completion_tokens=5)
+        return_value=ChatResponse(
+            content=content, prompt_tokens=10, completion_tokens=5
+        )
     )
     return mock
 
@@ -148,7 +156,9 @@ class TestContextManager:
         """压缩完成后 callback 被调用。"""
         mock_llm = _make_llm_mock("压缩摘要")
         callback = MagicMock()
-        cm = ContextManager(self._cfg(threshold=2, window=1), mock_llm, on_compress_done=callback)
+        cm = ContextManager(
+            self._cfg(threshold=2, window=1), mock_llm, on_compress_done=callback
+        )
         for i in range(4):
             await cm.add_round(_make_round(i + 1))
         await asyncio.sleep(0.05)
@@ -175,7 +185,9 @@ class TestToolRegistry:
     def test_register_and_get_tool(self):
         registry = ToolRegistry()
 
-        @registry.register("测试工具", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "测试工具", parameters_schema={"type": "object", "properties": {}}
+        )
         async def my_tool() -> str:
             return "ok"
 
@@ -192,7 +204,13 @@ class TestToolRegistry:
     async def test_dispatch_known_tool_returns_result(self):
         registry = ToolRegistry()
 
-        @registry.register("求和", parameters_schema={"type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}})
+        @registry.register(
+            "求和",
+            parameters_schema={
+                "type": "object",
+                "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+            },
+        )
         async def add(a: int, b: int) -> int:
             return a + b
 
@@ -223,7 +241,9 @@ class TestToolRegistry:
     async def test_dispatch_tool_exception_returns_error_json(self):
         registry = ToolRegistry()
 
-        @registry.register("raises", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "raises", parameters_schema={"type": "object", "properties": {}}
+        )
         async def raises() -> str:
             raise ValueError("boom")
 
@@ -235,11 +255,15 @@ class TestToolRegistry:
     def test_get_schemas_all_tools(self):
         registry = ToolRegistry()
 
-        @registry.register("工具A", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "工具A", parameters_schema={"type": "object", "properties": {}}
+        )
         async def tool_a() -> str:
             return ""
 
-        @registry.register("工具B", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "工具B", parameters_schema={"type": "object", "properties": {}}
+        )
         async def tool_b() -> str:
             return ""
 
@@ -251,11 +275,15 @@ class TestToolRegistry:
     def test_get_schemas_filtered_by_names(self):
         registry = ToolRegistry()
 
-        @registry.register("工具A", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "工具A", parameters_schema={"type": "object", "properties": {}}
+        )
         async def tool_a() -> str:
             return ""
 
-        @registry.register("工具B", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "工具B", parameters_schema={"type": "object", "properties": {}}
+        )
         async def tool_b() -> str:
             return ""
 
@@ -272,7 +300,9 @@ class TestToolRegistry:
     async def test_dispatch_tool_result_is_string_returned_as_is(self):
         registry = ToolRegistry()
 
-        @registry.register("str_tool", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "str_tool", parameters_schema={"type": "object", "properties": {}}
+        )
         async def str_tool() -> str:
             return "直接字符串"
 
@@ -283,7 +313,9 @@ class TestToolRegistry:
     async def test_dispatch_dict_result_serialized_to_json(self):
         registry = ToolRegistry()
 
-        @registry.register("dict_tool", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "dict_tool", parameters_schema={"type": "object", "properties": {}}
+        )
         async def dict_tool() -> dict:
             return {"key": "value"}
 
@@ -360,7 +392,9 @@ trigger_hint: {hint}
             SkillLoader._parse_frontmatter("---\nname: test\n")
 
     def test_parse_frontmatter_valid(self):
-        text = "---\nname: test_skill\ndescription: desc\ntrigger_hint: hint\n---\n# body"
+        text = (
+            "---\nname: test_skill\ndescription: desc\ntrigger_hint: hint\n---\n# body"
+        )
         meta = SkillLoader._parse_frontmatter(text)
         assert meta.name == "test_skill"
         assert meta.description == "desc"
@@ -393,6 +427,7 @@ class TestPromptBuilder:
         context_manager.all_rounds = []
 
         from src.storage.user_memory import UserMemoryStore
+
         user_mem_path = tmp_path / "USER.md"
         user_mem_path.write_text("")
         user_memory_store = UserMemoryStore(user_mem_path)
@@ -469,7 +504,9 @@ class TestPromptBuilder:
         )
         ctx_mgr.all_rounds = [r]
         session = _make_session()
-        config = AgentConfig(name="test", system_prompt="Agent", include_suggestions=True)
+        config = AgentConfig(
+            name="test", system_prompt="Agent", include_suggestions=True
+        )
         messages = builder.build(session, config)
         # system + user + assistant(suggestion)
         assert len(messages) == 3
@@ -487,7 +524,9 @@ class TestPromptBuilder:
         )
         ctx_mgr.all_rounds = [r]
         session = _make_session()
-        config = AgentConfig(name="test", system_prompt="Agent", include_suggestions=False)
+        config = AgentConfig(
+            name="test", system_prompt="Agent", include_suggestions=False
+        )
         messages = builder.build(session, config)
         # system + user only，无 assistant
         assert len(messages) == 2

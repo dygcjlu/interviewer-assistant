@@ -17,7 +17,6 @@ import queue
 import signal
 import sys
 import threading
-import time
 import uuid
 
 import numpy as np
@@ -31,19 +30,20 @@ logging.basicConfig(
 
 APPID = 121087443
 APPKEY = "eLpyLuxR0of5RWsn497uSdp0"
-DEV_PID = 15372          # 普通话
+DEV_PID = 15372  # 普通话
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
-FRAME_MS = 300           # 每帧录音时长
+FRAME_MS = 300  # 每帧录音时长
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)
-CHUNK_BYTES = 5120       # 每次发送给 STT 的 PCM 大小 (160ms)
+CHUNK_BYTES = 5120  # 每次发送给 STT 的 PCM 大小 (160ms)
 BAIDU_WSS = "wss://vop.baidu.com/realtime_asr"
 
 _stop = threading.Event()
 
 
 # ── 录音线程 ────────────────────────────────────────────────────────────────
+
 
 def record_loopback(audio_q: queue.Queue) -> None:
     """从 Loopback 设备持续录音，将 int16 PCM bytes 放入队列。"""
@@ -64,7 +64,11 @@ def record_loopback(audio_q: queue.Queue) -> None:
         with mic.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS) as rec:
             while not _stop.is_set():
                 raw = rec.record(numframes=FRAME_SAMPLES)
-                pcm = (np.clip(raw.flatten(), -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+                pcm = (
+                    (np.clip(raw.flatten(), -1.0, 1.0) * 32767)
+                    .astype(np.int16)
+                    .tobytes()
+                )
                 try:
                     audio_q.put_nowait(pcm)
                 except queue.Full:
@@ -75,6 +79,7 @@ def record_loopback(audio_q: queue.Queue) -> None:
 
 
 # ── STT 会话（async）─────────────────────────────────────────────────────────
+
 
 async def stt_session(audio_q: queue.Queue) -> None:
     """一次 Baidu STT WebSocket 会话：直到服务端关闭或出错。"""
@@ -130,7 +135,9 @@ async def stt_session(audio_q: queue.Queue) -> None:
                 elif msg_type == "FIN_TEXT":
                     if err_no != 0:
                         if err_no != -3101:  # -3101 是正常的无语音超时
-                            print(f"\n[STT错误] err_no={err_no} {data.get('err_msg', '')}")
+                            print(
+                                f"\n[STT错误] err_no={err_no} {data.get('err_msg', '')}"
+                            )
                     elif result:
                         print(f"\r[最终] {result}          ")
                     return  # FIN_TEXT 表示会话结束，退出 recv_loop
@@ -146,6 +153,7 @@ async def stt_session(audio_q: queue.Queue) -> None:
 
 
 # ── 主循环 ───────────────────────────────────────────────────────────────────
+
 
 async def run() -> None:
     audio_q: queue.Queue = queue.Queue(maxsize=100)

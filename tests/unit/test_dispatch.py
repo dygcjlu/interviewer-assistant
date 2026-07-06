@@ -1,15 +1,19 @@
 """Unit tests — dispatch_to_agent 工具。"""
+
 from __future__ import annotations
 
 import json
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.models.candidate import CandidateProfile
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
+from src.models.session import (
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 from src.tools._context import ToolContext
 from src.tools.dispatch_to_agent import (
     _apply_side_effects,
@@ -17,14 +21,15 @@ from src.tools.dispatch_to_agent import (
     dispatch_to_agent,
 )
 
-
 # ── 辅助 ──────────────────────────────────────────────────────────────────────
 
 
 def _make_session() -> InterviewSession:
     return InterviewSession(
         id="s-001",
-        candidate=CandidateProfile(id="c-001", name="张三", resume_pdf="resumes/张三.pdf"),
+        candidate=CandidateProfile(
+            id="c-001", name="张三", resume_pdf="resumes/张三.pdf"
+        ),
         rounds=[],
         stage=InterviewStage.IDLE,
         context_summary="",
@@ -68,7 +73,11 @@ class TestDispatchToAgent:
     async def test_dispatches_to_resume_agent_successfully(self):
         mock_resume_agent = MagicMock()
         mock_resume_agent.execute = AsyncMock(
-            return_value={"type": "parse_done", "markdown_path": "resumes/test.md", "profile": {}}
+            return_value={
+                "type": "parse_done",
+                "markdown_path": "resumes/test.md",
+                "profile": {},
+            }
         )
         mock_controller = MagicMock()
         mock_controller.get_session = AsyncMock(return_value=_make_session())
@@ -90,7 +99,9 @@ class TestDispatchToAgent:
         )
         mock_controller = MagicMock()
         mock_controller.get_session = AsyncMock(return_value=None)
-        mock_ctx = ToolContext(resume_agent=mock_resume_agent, controller=mock_controller)
+        mock_ctx = ToolContext(
+            resume_agent=mock_resume_agent, controller=mock_controller
+        )
         with patch("src.tools.dispatch_to_agent.ctx", mock_ctx):
             result = await dispatch_to_agent("resume", "解析")
         data = json.loads(result)
@@ -102,7 +113,9 @@ class TestDispatchToAgent:
         mock_resume_agent.execute = AsyncMock(side_effect=Exception("unexpected error"))
         mock_controller = MagicMock()
         mock_controller.get_session = AsyncMock(return_value=None)
-        mock_ctx = ToolContext(resume_agent=mock_resume_agent, controller=mock_controller)
+        mock_ctx = ToolContext(
+            resume_agent=mock_resume_agent, controller=mock_controller
+        )
         with patch("src.tools.dispatch_to_agent.ctx", mock_ctx):
             result = await dispatch_to_agent("resume", "任务")
         data = json.loads(result)
@@ -179,7 +192,9 @@ class TestApplySideEffects:
         mock_memory = MagicMock()
         mock_memory.save_brief = MagicMock()
         mock_memory.start_interview = AsyncMock()
-        mock_ctx = ToolContext(controller=mock_controller, memory_module=mock_memory, main_agent=None)
+        mock_ctx = ToolContext(
+            controller=mock_controller, memory_module=mock_memory, main_agent=None
+        )
         result = {"brief": "候选人简报内容"}
         with patch("src.tools.dispatch_to_agent.ctx", mock_ctx):
             await _apply_side_effects("brief_done", result)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from demo.audio.capture import AudioCapture, AudioFrame, CaptureMode
 from demo.audio.vad import VADFilter
@@ -44,7 +44,9 @@ class AudioStreamManager:
     ) -> None:
         self._mode = mode
         self._enable_vad = enable_vad
-        self._vad = VADFilter(vad_aggressiveness, vad_speech_threshold) if enable_vad else None
+        self._vad = (
+            VADFilter(vad_aggressiveness, vad_speech_threshold) if enable_vad else None
+        )
         self._queue_maxsize = queue_maxsize
 
         self._queues: dict[str, asyncio.Queue[AudioFrame | None]] = {}
@@ -99,7 +101,9 @@ class AudioStreamManager:
         if source_queue is not None:
             self._enqueue(source_queue, frame)
 
-    def _enqueue(self, queue: asyncio.Queue[AudioFrame | None], frame: AudioFrame) -> None:
+    def _enqueue(
+        self, queue: asyncio.Queue[AudioFrame | None], frame: AudioFrame
+    ) -> None:
         try:
             self._loop.call_soon_threadsafe(queue.put_nowait, frame)
         except asyncio.QueueFull:

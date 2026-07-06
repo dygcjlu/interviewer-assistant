@@ -1,11 +1,12 @@
 """Unit tests — agents 模块：BaseAgent._run_with_tools、ResumeAgent、InterviewAgent。"""
+
 from __future__ import annotations
 
 import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,8 +23,12 @@ from src.llm.protocol import ChatResponse
 from src.models.candidate import CandidateProfile
 from src.models.exceptions import LLMResponseError
 from src.models.message import FunctionCallInfo, Message, ToolCallInfo
-from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
-
+from src.models.session import (
+    ConversationRound,
+    InterviewSession,
+    InterviewStage,
+    SessionMetadata,
+)
 
 # ── 共享 fixtures ────────────────────────────────────────────────────────────
 
@@ -81,7 +86,9 @@ class TestRunWithTools:
     async def test_returns_content_when_no_tool_calls(self):
         llm = _make_mock_llm("直接回复，无工具调用")
         registry = ToolRegistry()
-        agent = ConcreteAgent(_make_agent_config(), _make_prompt_builder(), llm, registry)
+        agent = ConcreteAgent(
+            _make_agent_config(), _make_prompt_builder(), llm, registry
+        )
         messages = [Message(role="user", content="hi")]
         result = await agent._run_with_tools(messages)
         assert result == "直接回复，无工具调用"
@@ -90,7 +97,9 @@ class TestRunWithTools:
     async def test_executes_tool_call_and_appends_result(self):
         registry = ToolRegistry()
 
-        @registry.register("测试工具", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "测试工具", parameters_schema={"type": "object", "properties": {}}
+        )
         async def test_tool() -> str:
             return "工具执行结果"
 
@@ -107,7 +116,9 @@ class TestRunWithTools:
                 ChatResponse(content="最终回复"),
             ]
         )
-        agent = ConcreteAgent(_make_agent_config(), _make_prompt_builder(), mock_llm, registry)
+        agent = ConcreteAgent(
+            _make_agent_config(), _make_prompt_builder(), mock_llm, registry
+        )
         messages = [Message(role="user", content="hi")]
         result = await agent._run_with_tools(messages)
         assert result == "最终回复"
@@ -118,7 +129,9 @@ class TestRunWithTools:
     async def test_raises_after_max_tool_rounds(self):
         registry = ToolRegistry()
 
-        @registry.register("loop", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "loop", parameters_schema={"type": "object", "properties": {}}
+        )
         async def loop() -> str:
             return "result"
 
@@ -132,7 +145,9 @@ class TestRunWithTools:
         mock_llm.chat = AsyncMock(
             return_value=ChatResponse(content="", tool_calls=[tc])
         )
-        agent = ConcreteAgent(_make_agent_config(), _make_prompt_builder(), mock_llm, registry)
+        agent = ConcreteAgent(
+            _make_agent_config(), _make_prompt_builder(), mock_llm, registry
+        )
         messages = [Message(role="user", content="hi")]
         with pytest.raises(LLMResponseError, match="超出上限"):
             await agent._run_with_tools(messages, max_tool_rounds=2)
@@ -141,7 +156,9 @@ class TestRunWithTools:
     async def test_on_tool_result_hook_can_early_exit(self):
         registry = ToolRegistry()
 
-        @registry.register("parse", parameters_schema={"type": "object", "properties": {}})
+        @registry.register(
+            "parse", parameters_schema={"type": "object", "properties": {}}
+        )
         async def parse() -> dict:
             return {"user_facing": True, "error": "文件解析失败"}
 
@@ -154,7 +171,9 @@ class TestRunWithTools:
         mock_llm.chat = AsyncMock(
             return_value=ChatResponse(content="", tool_calls=[tc])
         )
-        agent = ConcreteAgent(_make_agent_config(), _make_prompt_builder(), mock_llm, registry)
+        agent = ConcreteAgent(
+            _make_agent_config(), _make_prompt_builder(), mock_llm, registry
+        )
         messages = [Message(role="user", content="hi")]
 
         def early_exit_hook(name: str, result: str) -> str | None:
@@ -192,7 +211,7 @@ class TestExtractJson:
             _extract_json("这是纯文字，没有 JSON")
 
     def test_json_array(self):
-        result = _extract_json('[1, 2, 3]')
+        result = _extract_json("[1, 2, 3]")
         assert result == [1, 2, 3]
 
     def test_code_block_without_language_tag(self):
@@ -206,7 +225,9 @@ class TestExtractJson:
 
 @pytest.mark.unit
 class TestFallbackFromMessages:
-    def _make_file_write_messages(self, path: str, content: str = "data") -> list[Message]:
+    def _make_file_write_messages(
+        self, path: str, content: str = "data"
+    ) -> list[Message]:
         tc = ToolCallInfo(
             id="fw-001",
             type="function",
@@ -247,7 +268,10 @@ class TestFallbackFromMessages:
 
 @pytest.mark.unit
 class TestResumeAgent:
-    def _make_agent(self, llm_content: str = '{"type": "parse_done", "markdown_path": "a.md", "profile": {}}'):
+    def _make_agent(
+        self,
+        llm_content: str = '{"type": "parse_done", "markdown_path": "a.md", "profile": {}}',
+    ):
         mock_llm = _make_mock_llm(llm_content)
         registry = ToolRegistry()
         pb = _make_prompt_builder()
@@ -278,7 +302,6 @@ class TestResumeAgent:
     @pytest.mark.asyncio
     async def test_execute_returns_error_on_user_facing_sentinel(self):
         """parse_resume_pdf 返回 user_facing 错误时，execute 早退返回 error。"""
-        from src.agents.resume_agent import _USER_FACING_SENTINEL
         agent, mock_llm = self._make_agent()
         # 让 _run_with_tools 的 hook 触发 user_facing early exit
         # 通过让 LLM 返回 tool call 并注入 hook 来触发
@@ -293,7 +316,10 @@ class TestResumeAgent:
 
         @agent.tool_registry.register(
             "parse_resume_pdf",
-            parameters_schema={"type": "object", "properties": {"pdf_path": {"type": "string"}}},
+            parameters_schema={
+                "type": "object",
+                "properties": {"pdf_path": {"type": "string"}},
+            },
         )
         async def parse_resume_pdf(pdf_path: str) -> dict:
             return {"user_facing": True, "error": "PDF 解析失败", "candidate_id": ""}
@@ -316,7 +342,9 @@ class TestResumeAgent:
             type="function",
             function=FunctionCallInfo(
                 name="file_write",
-                arguments=json.dumps({"file_path": "resumes/test.md", "content": "# 简历"}),
+                arguments=json.dumps(
+                    {"file_path": "resumes/test.md", "content": "# 简历"}
+                ),
             ),
         )
         mock_llm = AsyncMock()
@@ -328,12 +356,23 @@ class TestResumeAgent:
         )
         registry = ToolRegistry()
 
-        @registry.register("file_write", parameters_schema={"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}})
+        @registry.register(
+            "file_write",
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+            },
+        )
         async def file_write(file_path: str, content: str) -> str:
             return f"已成功写入 {file_path}"
 
         pb = _make_prompt_builder()
-        config = AgentConfig(name="resume", system_prompt="Agent", tool_names=["file_write"])
+        config = AgentConfig(
+            name="resume", system_prompt="Agent", tool_names=["file_write"]
+        )
         agent = ResumeAgent(config, pb, mock_llm, registry)
         result = await agent.execute("生成简历 Markdown")
         # fallback 应该返回 parse_done
@@ -357,15 +396,23 @@ class TestResumeAgent:
 class TestInterviewAgent:
     def _make_interview_agent(self):
         from src.agents.interview_agent import InterviewAgent
+
         mock_llm = _make_mock_llm()
         registry = ToolRegistry()
         pb = _make_prompt_builder()
-        config = AgentConfig(name="interview", system_prompt="面试 Agent", tool_names=[])
+        config = AgentConfig(
+            name="interview", system_prompt="面试 Agent", tool_names=[]
+        )
         ctx_config = ContextConfig(window_size=3)
         context_manager = ContextManager(ctx_config, mock_llm)
         agent = InterviewAgent(
-            config, pb, mock_llm, registry, context_manager,
-            silence_threshold_sec=1.0, min_interval_sec=2.0,
+            config,
+            pb,
+            mock_llm,
+            registry,
+            context_manager,
+            silence_threshold_sec=1.0,
+            min_interval_sec=2.0,
         )
         return agent
 
@@ -388,7 +435,9 @@ class TestInterviewAgent:
     async def test_handle_request_set_trigger_mode_not_activated(self):
         agent = self._make_interview_agent()
         session = _make_session()
-        req = AgentRequest(type="set_trigger_mode", payload={"mode": "manual"}, session=session)
+        req = AgentRequest(
+            type="set_trigger_mode", payload={"mode": "manual"}, session=session
+        )
         resp = await agent.handle_request(req)
         # Agent 未激活（_suggestion_trigger is None）
         assert resp.success is False
@@ -398,7 +447,9 @@ class TestInterviewAgent:
         agent = self._make_interview_agent()
         session = _make_session()
         await agent.on_activate(session)
-        req = AgentRequest(type="set_trigger_mode", payload={"mode": "auto"}, session=session)
+        req = AgentRequest(
+            type="set_trigger_mode", payload={"mode": "auto"}, session=session
+        )
         resp = await agent.handle_request(req)
         assert resp.success is True
         assert resp.data["mode"] == "auto"
@@ -408,7 +459,9 @@ class TestInterviewAgent:
         agent = self._make_interview_agent()
         session = _make_session()
         await agent.on_activate(session)
-        req = AgentRequest(type="set_trigger_mode", payload={"mode": "invalid_mode"}, session=session)
+        req = AgentRequest(
+            type="set_trigger_mode", payload={"mode": "invalid_mode"}, session=session
+        )
         resp = await agent.handle_request(req)
         assert resp.success is False
 
@@ -437,6 +490,7 @@ class TestInterviewAgent:
 
     def _make_interview_agent_with_llm(self, content: str = "追问建议"):
         from src.agents.interview_agent import InterviewAgent
+
         mock_llm = MagicMock()
         mock_llm.chat = AsyncMock(
             return_value=ChatResponse(content=content, tool_calls=None)
@@ -444,12 +498,19 @@ class TestInterviewAgent:
         mock_llm.count_tokens = MagicMock(return_value=100)
         registry = ToolRegistry()
         pb = _make_prompt_builder()
-        config = AgentConfig(name="interview", system_prompt="面试 Agent", tool_names=[])
+        config = AgentConfig(
+            name="interview", system_prompt="面试 Agent", tool_names=[]
+        )
         ctx_config = ContextConfig(window_size=3)
         context_manager = ContextManager(ctx_config, mock_llm)
         agent = InterviewAgent(
-            config, pb, mock_llm, registry, context_manager,
-            silence_threshold_sec=1.0, min_interval_sec=2.0,
+            config,
+            pb,
+            mock_llm,
+            registry,
+            context_manager,
+            silence_threshold_sec=1.0,
+            min_interval_sec=2.0,
         )
         return agent
 
@@ -458,7 +519,9 @@ class TestInterviewAgent:
         agent = self._make_interview_agent_with_llm("追问建议：请详细说明")
         session = _make_session()
         session.rounds.append(
-            ConversationRound(round_number=1, interviewer_text="你好", candidate_text="我是张三")
+            ConversationRound(
+                round_number=1, interviewer_text="你好", candidate_text="我是张三"
+            )
         )
         await agent.on_activate(session)
         results = []
@@ -479,8 +542,11 @@ class TestInterviewAgent:
     @pytest.mark.asyncio
     async def test_generate_suggestion_handles_llm_error(self):
         from src.models.exceptions import LLMConnectionError
+
         agent = self._make_interview_agent_with_llm()
-        agent.llm_client.chat = AsyncMock(side_effect=LLMConnectionError("connection failed"))
+        agent.llm_client.chat = AsyncMock(
+            side_effect=LLMConnectionError("connection failed")
+        )
         session = _make_session()
         await agent.on_activate(session)
         # Should not raise, just swallow the error
@@ -527,7 +593,9 @@ class TestInterviewAgent:
         agent = self._make_interview_agent_with_llm("流式建议")
         session = _make_session()
         await agent.on_activate(session)
-        req = AgentRequest(type="trigger_suggestion", payload={}, session=session, request_id=5)
+        req = AgentRequest(
+            type="trigger_suggestion", payload={}, session=session, request_id=5
+        )
         tokens = []
         async for t in agent.handle_stream(req):
             tokens.append(t)
@@ -594,11 +662,12 @@ class TestMainAgentDateInjection:
 @pytest.mark.unit
 class TestMainAgentSetCandidateContext:
     def _make_agent(self):
+        from unittest.mock import AsyncMock, MagicMock
+
         from src.agents.main_agent import MainAgent
         from src.framework.tool_registry import ToolRegistry
         from src.storage.memory_module import MemoryModule
         from src.storage.user_memory import UserMemoryStore
-        from unittest.mock import MagicMock, AsyncMock
 
         llm = AsyncMock()
         tools = MagicMock(spec=ToolRegistry)

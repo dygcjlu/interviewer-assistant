@@ -1,16 +1,17 @@
 """PromptBuilder — 按七层顺序构建各 Agent 的完整 messages 列表。"""
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from .context import ContextManager
-from .skill import SkillLoader
-from .tool_registry import ToolRegistry
 from ..models.message import Message
 from ..models.session import InterviewSession
 from ..storage.user_memory import UserMemoryStore
+from .context import ContextManager
+from .skill import SkillLoader
+from .tool_registry import ToolRegistry
 
 if TYPE_CHECKING:
     from ..storage.memory_module import MemoryModule
@@ -37,7 +38,7 @@ class PromptBuilder:
         self,
         skill_loader: SkillLoader,
         tool_registry: ToolRegistry,
-        memory_module: "MemoryModule",
+        memory_module: MemoryModule,
         context_manager: ContextManager,
         user_memory_store: UserMemoryStore | None = None,
     ) -> None:
@@ -50,10 +51,16 @@ class PromptBuilder:
 
     def reload_user_memory(self) -> None:
         """记忆更新后刷新（store 已是最新，无需重读磁盘）。"""
-        self._user_memory = self._user_memory_store.render() if self._user_memory_store else ""
-        logger.info("PromptBuilder: reloaded user memory (%d chars)", len(self._user_memory))
+        self._user_memory = (
+            self._user_memory_store.render() if self._user_memory_store else ""
+        )
+        logger.info(
+            "PromptBuilder: reloaded user memory (%d chars)", len(self._user_memory)
+        )
 
-    def build(self, session: InterviewSession, agent_config: AgentConfig) -> list[Message]:
+    def build(
+        self, session: InterviewSession, agent_config: AgentConfig
+    ) -> list[Message]:
         """按七层顺序构建完整 messages 列表。所有 system 层合并为单条消息。"""
         system_parts: list[str] = []
 
@@ -93,7 +100,9 @@ class PromptBuilder:
 
         system_parts.append(f"当前日期：{date.today().strftime('%Y-%m-%d')}")
 
-        messages: list[Message] = [Message(role="system", content="\n\n".join(system_parts))]
+        messages: list[Message] = [
+            Message(role="system", content="\n\n".join(system_parts))
+        ]
 
         # Layer 7: Conversation history（面试官+候选人合并为一条 user 消息）
         rounds_to_show = (
@@ -110,7 +119,9 @@ class PromptBuilder:
             )
             if agent_config.include_suggestions and round_.llm_suggestion:
                 messages.append(
-                    Message(role="assistant", content=f"[追问建议] {round_.llm_suggestion}")
+                    Message(
+                        role="assistant", content=f"[追问建议] {round_.llm_suggestion}"
+                    )
                 )
 
         return messages
@@ -154,7 +165,9 @@ def _build_fixed_zone(session: InterviewSession, user_memory: str = "") -> str:
     if c.resume_content:
         lines.append(f"\n## 候选人简历\n\n{c.resume_content.strip()}")
     elif c.id:
-        lines.append(f"简历档案：candidates/{c.id}/profile.md（可调用 file_read 工具查看完整内容）")
+        lines.append(
+            f"简历档案：candidates/{c.id}/profile.md（可调用 file_read 工具查看完整内容）"
+        )
     if session.interview_brief:
         lines.append(f"\n## 面试简报\n\n{session.interview_brief[:3000]}")
     if user_memory:

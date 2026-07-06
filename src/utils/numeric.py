@@ -1,4 +1,5 @@
 """数值容错工具。"""
+
 from __future__ import annotations
 
 

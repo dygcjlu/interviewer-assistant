@@ -5,6 +5,7 @@
 
 WAV 要求：单声道、16kHz、16-bit PCM。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,7 +21,7 @@ from websockets.asyncio.client import connect as ws_connect
 
 _WSS_URL = "wss://vop.baidu.com/realtime_asr"
 _SAMPLE_RATE = 16000
-_SEND_CHUNK_BYTES = 5120      # 百度建议 5120 字节 = 160ms @ 16kHz 16-bit mono
+_SEND_CHUNK_BYTES = 5120  # 百度建议 5120 字节 = 160ms @ 16kHz 16-bit mono
 _REAL_TIME_INTERVAL_SEC = 0.16
 
 logging.basicConfig(
@@ -43,10 +44,17 @@ def _load_credentials() -> tuple[str, str]:
     return creds.get("BAIDU_APP_ID", ""), creds.get("BAIDU_API_KEY", "")
 
 
-async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_seconds: float | None = None) -> None:
+async def transcribe(
+    wav_path: Path,
+    output_path: Path,
+    speed: float = 4.0,
+    max_seconds: float | None = None,
+) -> None:
     app_id, api_key = _load_credentials()
     if not app_id or not api_key:
-        logger.error("百度凭据未配置，请检查 .env 文件中的 BAIDU_APP_ID / BAIDU_API_KEY")
+        logger.error(
+            "百度凭据未配置，请检查 .env 文件中的 BAIDU_APP_ID / BAIDU_API_KEY"
+        )
         sys.exit(1)
 
     with wave.open(str(wav_path)) as wf:
@@ -59,12 +67,19 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
     duration = n_frames / framerate
     logger.info(
         "WAV: %s | channels=%d rate=%d width=%d frames=%d duration=%.1fs",
-        wav_path.name, n_channels, framerate, sampwidth, n_frames, duration,
+        wav_path.name,
+        n_channels,
+        framerate,
+        sampwidth,
+        n_frames,
+        duration,
     )
     if framerate != _SAMPLE_RATE or sampwidth != 2 or n_channels != 1:
         logger.error(
             "格式不符：需要单声道 16kHz 16-bit PCM，实际 channels=%d rate=%d width=%d",
-            n_channels, framerate, sampwidth,
+            n_channels,
+            framerate,
+            sampwidth,
         )
         sys.exit(1)
 
@@ -113,7 +128,9 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
                 msg_type = msg.get("type", "")
 
                 if err_no != 0:
-                    logger.warning("服务错误 err_no=%d err_msg=%s", err_no, msg.get("err_msg", ""))
+                    logger.warning(
+                        "服务错误 err_no=%d err_msg=%s", err_no, msg.get("err_msg", "")
+                    )
                     continue
 
                 result = msg.get("result", "")
@@ -131,7 +148,7 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
         offset = 0
         last_log_pct = 0
         while offset < total_bytes:
-            chunk = pcm_data[offset: offset + _SEND_CHUNK_BYTES]
+            chunk = pcm_data[offset : offset + _SEND_CHUNK_BYTES]
             offset += _SEND_CHUNK_BYTES
             sent_bytes += len(chunk)
             await ws.send(chunk)
@@ -148,7 +165,7 @@ async def transcribe(wav_path: Path, output_path: Path, speed: float = 4.0, max_
 
         try:
             await asyncio.wait_for(recv_task, timeout=30.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             recv_task.cancel()
             logger.info("等待超时，收取结束")
         except Exception:
@@ -165,8 +182,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="百度 ASR 离线文件转写")
     parser.add_argument("wav", type=Path, help="WAV 文件路径")
     parser.add_argument("--output", "-o", type=Path, default=None)
-    parser.add_argument("--speed", "-s", type=float, default=4.0, help="发送速率倍数（默认 4x）")
-    parser.add_argument("--max-seconds", "-t", type=float, default=None, help="只转写前 N 秒")
+    parser.add_argument(
+        "--speed", "-s", type=float, default=4.0, help="发送速率倍数（默认 4x）"
+    )
+    parser.add_argument(
+        "--max-seconds", "-t", type=float, default=None, help="只转写前 N 秒"
+    )
     args = parser.parse_args()
 
     wav_path: Path = args.wav
@@ -175,7 +196,11 @@ def main() -> None:
         sys.exit(1)
 
     output_path: Path = args.output or wav_path.with_suffix(".baidu.txt")
-    asyncio.run(transcribe(wav_path, output_path, speed=args.speed, max_seconds=args.max_seconds))
+    asyncio.run(
+        transcribe(
+            wav_path, output_path, speed=args.speed, max_seconds=args.max_seconds
+        )
+    )
 
 
 if __name__ == "__main__":

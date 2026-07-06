@@ -1,10 +1,11 @@
 """建议生成触发器 — 沉默计时 + 防抖 + 最小间隔。"""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from .protocol import TranscriptSegment
 
@@ -49,7 +50,9 @@ class SuggestionTrigger:
             loop = asyncio.get_running_loop()
             self._pending_task = loop.create_task(self._silence_timer())
         except RuntimeError:
-            logger.warning("SuggestionTrigger: no running event loop, cannot schedule timer")
+            logger.warning(
+                "SuggestionTrigger: no running event loop, cannot schedule timer"
+            )
 
     def set_mode(self, mode: str) -> None:
         """切换触发模式 'auto' | 'manual'。
@@ -96,15 +99,20 @@ class SuggestionTrigger:
         await asyncio.sleep(self._silence_threshold)
         now = time.monotonic()
         if now - self._last_trigger_time < self._min_interval:
-            logger.debug("SuggestionTrigger: skipping trigger — min_interval not elapsed")
+            logger.debug(
+                "SuggestionTrigger: skipping trigger — min_interval not elapsed"
+            )
             return
         req_id = self._request_id
         self._request_id += 1
         self._last_trigger_time = now
         logger.info("SuggestionTrigger: firing request_id=%d", req_id)
         from ..utils.metrics import Metrics
+
         Metrics.get().record_suggestion_trigger("auto")
         try:
             await self._on_trigger(req_id)
         except Exception:
-            logger.exception("SuggestionTrigger: on_trigger callback raised an exception")
+            logger.exception(
+                "SuggestionTrigger: on_trigger callback raised an exception"
+            )

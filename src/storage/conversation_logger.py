@@ -4,6 +4,7 @@
   {"role": "...", "content": "...", "timestamp": "2026-05-20T12:00:00"}
 文件以 UTF-8 追加方式写入，通过 asyncio.to_thread 避免阻塞事件循环。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -54,7 +55,9 @@ class ConversationLogger:
         except OSError:
             logger.exception("ConversationLogger: write failed to %s", self._path)
 
-    async def append_with_system(self, system_content: str, messages: list[Message]) -> None:
+    async def append_with_system(
+        self, system_content: str, messages: list[Message]
+    ) -> None:
         """若 system prompt 变更（或首次），先追加一条 system 行，再追加其余消息。"""
         to_write: list[Message] = []
         if system_content != self._last_system_content:

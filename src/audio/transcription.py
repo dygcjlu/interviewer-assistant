@@ -1,14 +1,15 @@
 """转写管理器 — STT 结果的分发与轮次管理。"""
+
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
+from ..models.session import ConversationRound, InterviewSession
 from .protocol import TranscriptSegment
 from .recorder import AudioRecorder
 from .trigger import SuggestionTrigger
-from ..models.session import ConversationRound, InterviewSession
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,9 @@ class TranscriptionManager:
         ws_sender: Callable[[dict], Awaitable[None]],
         suggestion_trigger: SuggestionTrigger,
         recorder: AudioRecorder,
-        on_round_finalized: Callable[[ConversationRound], Awaitable[None]] | None = None,
+        on_round_finalized: (
+            Callable[[ConversationRound], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         self._session = session
         self._ws_sender = ws_sender
@@ -66,12 +69,18 @@ class TranscriptionManager:
         if segment.source == "candidate":
             # 注意：当前测量的是「候选人发言持续时长」（从第一段到最后一段的时间差），
             # 而非严格的 ASR 系统处理延迟。这是已知限制，保留 asr_latency 名称以避免 API 破坏性变更。
-            if self._candidate_utterance_start is None and segment.start_time is not None:
+            if (
+                self._candidate_utterance_start is None
+                and segment.start_time is not None
+            ):
                 self._candidate_utterance_start = segment.start_time
             if segment.is_final:
                 if self._candidate_utterance_start is not None:
-                    elapsed_ms = (segment.timestamp.timestamp() - self._candidate_utterance_start) * 1000
+                    elapsed_ms = (
+                        segment.timestamp.timestamp() - self._candidate_utterance_start
+                    ) * 1000
                     from ..utils.metrics import Metrics
+
                     Metrics.get().record_asr_latency(elapsed_ms)
                 self._candidate_utterance_start = None
             self._candidate_text += (" " if self._candidate_text else "") + segment.text
@@ -81,7 +90,9 @@ class TranscriptionManager:
             if self._candidate_text:
                 # Candidate already answered → new round starting
                 await self.finalize_round()
-            self._interviewer_text += (" " if self._interviewer_text else "") + segment.text
+            self._interviewer_text += (
+                " " if self._interviewer_text else ""
+            ) + segment.text
 
     def get_current_round_text(self) -> tuple[str, str]:
         """Returns (interviewer_text, candidate_text) for the current round."""
@@ -94,7 +105,10 @@ class TranscriptionManager:
     async def flush_pending_round(self) -> ConversationRound | None:
         """若有未归档内容则结束当前轮次，否则无操作。"""
         if not self.has_pending_round():
-            logger.debug("flush_pending_round skipped session_id=%s (no pending)", self._session.id)
+            logger.debug(
+                "flush_pending_round skipped session_id=%s (no pending)",
+                self._session.id,
+            )
             return None
         logger.info("flush_pending_round start session_id=%s", self._session.id)
         return await self.finalize_round()
@@ -122,7 +136,9 @@ class TranscriptionManager:
             try:
                 await self._on_round_finalized(round_)
             except Exception:
-                logger.exception("TranscriptionManager: on_round_finalized callback failed")
+                logger.exception(
+                    "TranscriptionManager: on_round_finalized callback failed"
+                )
         try:
             await self._ws_sender(
                 {

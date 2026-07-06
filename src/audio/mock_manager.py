@@ -1,14 +1,15 @@
 """MockAudioManager — 用脚本回放替代真实音频采集，仅用于调试。"""
+
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
+from ..models.session import ConversationRound, InterviewSession
 from .recorder import AudioRecorder, RecordingResult
 from .script_player import ScriptPlayer
 from .transcription import TranscriptionManager
 from .trigger import SuggestionTrigger
-from ..models.session import ConversationRound, InterviewSession
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,9 @@ class MockAudioManager:
         session: InterviewSession,
         ws_sender: Callable[[dict], Awaitable[None]],
         suggestion_trigger: SuggestionTrigger,
-        on_round_finalized: Callable[[ConversationRound], Awaitable[None]] | None = None,
+        on_round_finalized: (
+            Callable[[ConversationRound], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         self._transcription_manager = TranscriptionManager(
             session=session,

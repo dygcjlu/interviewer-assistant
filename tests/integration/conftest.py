@@ -1,13 +1,12 @@
 """Integration 层共享 fixture：MockLLMClient + 测试 FastAPI 应用实例。"""
+
 from __future__ import annotations
 
-import asyncio
-import json
 from collections import deque
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -30,14 +29,13 @@ from src.framework.context import ContextConfig, ContextManager
 from src.framework.prompt_builder import AgentConfig, PromptBuilder
 from src.framework.skill import SkillLoader
 from src.framework.tool_registry import ToolRegistry
-from src.llm.protocol import ChatResponse, LLMClient, StreamChunk
-from src.models.message import Message, ToolCallInfo
+from src.llm.protocol import ChatResponse, StreamChunk
+from src.models.message import Message
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
 from src.tools import register_all
 from src.tools._context import ctx as tool_ctx
 from src.web.app import create_app
-
 
 # ── MockLLMClient ──────────────────────────────────────────────────────────────
 

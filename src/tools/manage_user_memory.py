@@ -6,6 +6,7 @@
 - replace: 替换指定索引的条目（先 list 获取索引）
 - remove : 删除指定索引的条目（先 list 获取索引）
 """
+
 from __future__ import annotations
 
 import json
@@ -38,7 +39,9 @@ SCHEMA = {
 }
 
 
-async def manage_user_memory(action: str, index: int | None = None, content: str | None = None) -> str:
+async def manage_user_memory(
+    action: str, index: int | None = None, content: str | None = None
+) -> str:
     store = ctx.user_memory_store
     if store is None:
         return json.dumps({"error": "user_memory_store 未初始化"}, ensure_ascii=False)
@@ -55,20 +58,34 @@ async def manage_user_memory(action: str, index: int | None = None, content: str
 
         if action == "add":
             if not content:
-                return json.dumps({"error": "add 操作需要提供 content"}, ensure_ascii=False)
+                return json.dumps(
+                    {"error": "add 操作需要提供 content"}, ensure_ascii=False
+                )
             new_index = store.add(content)
             _reload_agents()
-            logger.info("manage_user_memory: added entry[%d] (%d chars)", new_index, len(content))
+            logger.info(
+                "manage_user_memory: added entry[%d] (%d chars)",
+                new_index,
+                len(content),
+            )
             return json.dumps(
-                {"success": True, "message": f"已添加为条目 {new_index}", "index": new_index},
+                {
+                    "success": True,
+                    "message": f"已添加为条目 {new_index}",
+                    "index": new_index,
+                },
                 ensure_ascii=False,
             )
 
         if action == "replace":
             if index is None:
-                return json.dumps({"error": "replace 操作需要提供 index"}, ensure_ascii=False)
+                return json.dumps(
+                    {"error": "replace 操作需要提供 index"}, ensure_ascii=False
+                )
             if not content:
-                return json.dumps({"error": "replace 操作需要提供 content"}, ensure_ascii=False)
+                return json.dumps(
+                    {"error": "replace 操作需要提供 content"}, ensure_ascii=False
+                )
             store.replace(index, content)
             _reload_agents()
             logger.info("manage_user_memory: replaced entry[%d]", index)
@@ -79,7 +96,9 @@ async def manage_user_memory(action: str, index: int | None = None, content: str
 
         if action == "remove":
             if index is None:
-                return json.dumps({"error": "remove 操作需要提供 index"}, ensure_ascii=False)
+                return json.dumps(
+                    {"error": "remove 操作需要提供 index"}, ensure_ascii=False
+                )
             store.remove(index)
             _reload_agents()
             logger.info("manage_user_memory: removed entry[%d]", index)

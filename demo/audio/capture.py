@@ -6,8 +6,8 @@ import enum
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 import soundcard as sc
@@ -77,7 +77,9 @@ class _CaptureWorker:
 
     def _run(self) -> None:
         try:
-            with self._device.recorder(samplerate=SAMPLE_RATE, channels=CHANNELS) as recorder:
+            with self._device.recorder(
+                samplerate=SAMPLE_RATE, channels=CHANNELS
+            ) as recorder:
                 while self._running:
                     raw = recorder.record(numframes=FRAME_SAMPLES)
                     frame = AudioFrame(

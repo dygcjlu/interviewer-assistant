@@ -1,4 +1,5 @@
 """Unit tests for VolcRealtimeSTT binary protocol helpers."""
+
 from __future__ import annotations
 
 import json
@@ -91,7 +92,7 @@ class TestBuildAudioFrame:
     def test_payload_size_field(self):
         from src.audio.volc_stt import _build_audio_frame
 
-        audio = b"\xAB" * 6400
+        audio = b"\xab" * 6400
         frame = _build_audio_frame(audio, seq=1, is_last=False)
 
         size = struct.unpack(">I", frame[8:12])[0]
@@ -117,7 +118,9 @@ class TestBuildAudioFrame:
 
 @pytest.mark.unit
 class TestParseServerResponse:
-    def _make_response(self, payload: dict, has_sequence: bool = False, seq: int = 0) -> bytes:
+    def _make_response(
+        self, payload: dict, has_sequence: bool = False, seq: int = 0
+    ) -> bytes:
         """Build a minimal Full Server Response binary frame."""
         payload_bytes = json.dumps(payload).encode()
         # flags: bit0 = has_sequence
@@ -133,18 +136,19 @@ class TestParseServerResponse:
     def _make_error_frame(self, error_code: int, message: str) -> bytes:
         msg_bytes = message.encode()
         header = bytes([0x11, 0xF0, 0x00, 0x00])
-        return header + struct.pack(">I", error_code) + struct.pack(">I", len(msg_bytes)) + msg_bytes
+        return (
+            header
+            + struct.pack(">I", error_code)
+            + struct.pack(">I", len(msg_bytes))
+            + msg_bytes
+        )
 
     def test_parses_definite_utterance(self):
         from src.audio.volc_stt import _parse_server_response
 
-        data = self._make_response({
-            "result": {
-                "utterances": [
-                    {"text": "你好", "definite": True}
-                ]
-            }
-        })
+        data = self._make_response(
+            {"result": {"utterances": [{"text": "你好", "definite": True}]}}
+        )
         result = _parse_server_response(data)
 
         assert result is not None
@@ -154,13 +158,9 @@ class TestParseServerResponse:
     def test_parses_non_definite_utterance(self):
         from src.audio.volc_stt import _parse_server_response
 
-        data = self._make_response({
-            "result": {
-                "utterances": [
-                    {"text": "正在识别", "definite": False}
-                ]
-            }
-        })
+        data = self._make_response(
+            {"result": {"utterances": [{"text": "正在识别", "definite": False}]}}
+        )
         result = _parse_server_response(data)
 
         assert result is not None
@@ -185,7 +185,7 @@ class TestParseServerResponse:
     def test_returns_none_on_malformed_bytes(self):
         from src.audio.volc_stt import _parse_server_response
 
-        result = _parse_server_response(b"\xFF\xFF")
+        result = _parse_server_response(b"\xff\xff")
         assert result is None
 
     def test_parses_response_with_sequence(self):
@@ -193,7 +193,8 @@ class TestParseServerResponse:
 
         data = self._make_response(
             {"result": {"utterances": [{"text": "测试", "definite": True}]}},
-            has_sequence=True, seq=3
+            has_sequence=True,
+            seq=3,
         )
         result = _parse_server_response(data)
 
@@ -245,7 +246,7 @@ class TestVolcRealtimeSTTSendAudio:
     @pytest.mark.asyncio
     async def test_send_audio_buffers_below_threshold(self):
         """Audio smaller than 6400 bytes is buffered, not sent."""
-        from src.audio.volc_stt import VolcRealtimeSTT, _SEND_CHUNK_BYTES
+        from src.audio.volc_stt import _SEND_CHUNK_BYTES, VolcRealtimeSTT
 
         stt = VolcRealtimeSTT(channel="candidate")
         stt._connected = True
@@ -261,7 +262,7 @@ class TestVolcRealtimeSTTSendAudio:
     @pytest.mark.asyncio
     async def test_send_audio_flushes_at_threshold(self):
         """Exactly 6400 bytes triggers a send."""
-        from src.audio.volc_stt import VolcRealtimeSTT, _SEND_CHUNK_BYTES
+        from src.audio.volc_stt import _SEND_CHUNK_BYTES, VolcRealtimeSTT
 
         stt = VolcRealtimeSTT(channel="candidate")
         stt._connected = True
@@ -281,7 +282,7 @@ class TestVolcRealtimeSTTSendAudio:
     @pytest.mark.asyncio
     async def test_send_audio_retains_remainder(self):
         """Bytes beyond 6400 remain in the buffer."""
-        from src.audio.volc_stt import VolcRealtimeSTT, _SEND_CHUNK_BYTES
+        from src.audio.volc_stt import _SEND_CHUNK_BYTES, VolcRealtimeSTT
 
         stt = VolcRealtimeSTT(channel="candidate")
         stt._connected = True
@@ -339,11 +340,12 @@ class TestVolcRealtimeSTTRecvLoop:
         """_recv_loop parses a binary frame and puts a final TranscriptSegment in the queue."""
         import json
         import struct
+
         from src.audio.volc_stt import VolcRealtimeSTT
 
-        payload = json.dumps({
-            "result": {"utterances": [{"text": "你好世界", "definite": True}]}
-        }).encode()
+        payload = json.dumps(
+            {"result": {"utterances": [{"text": "你好世界", "definite": True}]}}
+        ).encode()
         header = bytes([0x11, 0x90, 0x10, 0x00])
         frame = header + struct.pack(">I", len(payload)) + payload
 
@@ -367,11 +369,12 @@ class TestVolcRealtimeSTTRecvLoop:
         """_recv_loop emits is_final=False for definite=False utterances."""
         import json
         import struct
+
         from src.audio.volc_stt import VolcRealtimeSTT
 
-        payload = json.dumps({
-            "result": {"utterances": [{"text": "正在识别", "definite": False}]}
-        }).encode()
+        payload = json.dumps(
+            {"result": {"utterances": [{"text": "正在识别", "definite": False}]}}
+        ).encode()
         header = bytes([0x11, 0x90, 0x10, 0x00])
         frame = header + struct.pack(">I", len(payload)) + payload
 
@@ -392,11 +395,12 @@ class TestVolcRealtimeSTTRecvLoop:
         """_recv_loop ignores utterances with empty text."""
         import json
         import struct
+
         from src.audio.volc_stt import VolcRealtimeSTT
 
-        payload = json.dumps({
-            "result": {"utterances": [{"text": "", "definite": True}]}
-        }).encode()
+        payload = json.dumps(
+            {"result": {"utterances": [{"text": "", "definite": True}]}}
+        ).encode()
         header = bytes([0x11, 0x90, 0x10, 0x00])
         frame = header + struct.pack(">I", len(payload)) + payload
 

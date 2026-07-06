@@ -1,30 +1,30 @@
 """Unit tests — LLM 客户端模块：OpenAICompatibleClient 静态方法 + count_tokens + 异常。"""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.llm.protocol import ChatResponse, StreamChunk, ToolFunction, ToolSchema
+from src.llm.protocol import ChatResponse, ToolFunction, ToolSchema
 from src.models.exceptions import (
-    LLMConnectionError,
     LLMRateLimitError,
     LLMResponseError,
     LLMRetryExhaustedError,
-    LLMTimeoutError,
 )
 from src.models.message import FunctionCallInfo, Message, ToolCallInfo
-
 
 # ── 辅助构造 ──────────────────────────────────────────────────────────────────
 
 
 def _make_client():
     """构建 OpenAICompatibleClient（mock openai.AsyncOpenAI）。"""
-    from src.llm.config import LLMConfig
     from src.llm.client import OpenAICompatibleClient
+    from src.llm.config import LLMConfig
 
-    config = LLMConfig(api_key="test-key", model="test-model", base_url="http://fake/v1")
+    config = LLMConfig(
+        api_key="test-key", model="test-model", base_url="http://fake/v1"
+    )
     with patch("src.llm.client.openai.AsyncOpenAI"):
         client = OpenAICompatibleClient(config)
     return client
@@ -37,6 +37,7 @@ def _make_client():
 class TestMessageToDict:
     def test_basic_user_message(self):
         from src.llm.client import OpenAICompatibleClient
+
         m = Message(role="user", content="你好")
         d = OpenAICompatibleClient._message_to_dict(m)
         assert d["role"] == "user"
@@ -45,6 +46,7 @@ class TestMessageToDict:
 
     def test_message_with_tool_calls(self):
         from src.llm.client import OpenAICompatibleClient
+
         tc = ToolCallInfo(
             id="call-001",
             type="function",
@@ -58,6 +60,7 @@ class TestMessageToDict:
 
     def test_tool_result_message(self):
         from src.llm.client import OpenAICompatibleClient
+
         m = Message(role="tool", content='{"result": "ok"}', tool_call_id="call-001")
         d = OpenAICompatibleClient._message_to_dict(m)
         assert d["role"] == "tool"
@@ -65,6 +68,7 @@ class TestMessageToDict:
 
     def test_none_content_not_included(self):
         from src.llm.client import OpenAICompatibleClient
+
         m = Message(role="assistant", content=None)
         d = OpenAICompatibleClient._message_to_dict(m)
         assert "content" not in d
@@ -77,6 +81,7 @@ class TestMessageToDict:
 class TestToolToDict:
     def test_converts_tool_schema(self):
         from src.llm.client import OpenAICompatibleClient
+
         schema = ToolSchema(
             function=ToolFunction(
                 name="my_func",
@@ -114,6 +119,7 @@ class TestBuildChatResponse:
 
     def test_basic_response_parsed(self):
         from src.llm.client import OpenAICompatibleClient
+
         raw = self._make_raw_response("测试回复")
         result = OpenAICompatibleClient._build_chat_response(raw)
         assert isinstance(result, ChatResponse)
@@ -123,6 +129,7 @@ class TestBuildChatResponse:
 
     def test_empty_choices_raises(self):
         from src.llm.client import OpenAICompatibleClient
+
         raw = MagicMock()
         raw.choices = []
         with pytest.raises(LLMResponseError):
@@ -149,6 +156,7 @@ class TestBuildChatResponse:
 
     def test_no_usage_defaults_to_zero(self):
         from src.llm.client import OpenAICompatibleClient
+
         raw = self._make_raw_response()
         raw.usage = None
         result = OpenAICompatibleClient._build_chat_response(raw)
@@ -210,6 +218,7 @@ class TestChatRetry:
     @pytest.mark.asyncio
     async def test_chat_raises_retry_exhausted_after_max_retries(self):
         import openai
+
         client = _make_client()
         client._config.max_retries = 2
         client._client.chat.completions.create = AsyncMock(
@@ -223,6 +232,7 @@ class TestChatRetry:
     @pytest.mark.asyncio
     async def test_chat_rate_limit_retries(self):
         import openai
+
         client = _make_client()
         client._config.max_retries = 2
 
@@ -279,6 +289,7 @@ class TestChatStream:
         client._client.chat.completions.create = AsyncMock(return_value=_fake_stream())
 
         from src.models.message import Message
+
         messages = [Message(role="user", content="say hi")]
         chunks = []
         async for chunk in client.chat_stream(messages):
@@ -291,6 +302,7 @@ class TestChatStream:
     @pytest.mark.asyncio
     async def test_chat_stream_raises_on_rate_limit(self):
         import openai
+
         client = _make_client()
 
         async def _fail_stream(*args, **kwargs):
@@ -302,6 +314,7 @@ class TestChatStream:
 
         client._client.chat.completions.create = AsyncMock(return_value=_fail_stream())
         from src.models.message import Message
+
         messages = [Message(role="user", content="hi")]
         with pytest.raises(LLMRateLimitError):
             async for _ in client.chat_stream(messages):
@@ -342,6 +355,7 @@ class TestChatStream:
         client._client.chat.completions.create = AsyncMock(return_value=_fake_stream())
 
         from src.models.message import Message
+
         messages = [Message(role="user", content="use tool")]
         final = None
         async for chunk in client.chat_stream(messages):

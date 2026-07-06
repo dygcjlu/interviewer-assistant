@@ -6,8 +6,8 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import AsyncIterator, Optional
 
 import websockets
 
@@ -20,10 +20,10 @@ BAIDU_CHUNK_BYTES = 5120  # 160ms at 16kHz 16-bit mono
 @dataclass
 class TranscriptSegment:
     text: str
-    source: str                # "candidate" | "interviewer" | "mixed"
-    is_final: bool             # MID_TEXT=False, FIN_TEXT=True
-    start_time: Optional[int]  # ms, only present in FIN_TEXT
-    end_time: Optional[int]    # ms, only present in FIN_TEXT
+    source: str  # "candidate" | "interviewer" | "mixed"
+    is_final: bool  # MID_TEXT=False, FIN_TEXT=True
+    start_time: int | None  # ms, only present in FIN_TEXT
+    end_time: int | None  # ms, only present in FIN_TEXT
     timestamp: float
 
 
@@ -49,14 +49,14 @@ class BaiduRealtimeSTT:
         appkey: str,
         dev_pid: int,
         source_label: str,
-        cuid: Optional[str] = None,
+        cuid: str | None = None,
     ) -> None:
         self._appid = appid
         self._appkey = appkey
         self._dev_pid = dev_pid
         self._source_label = source_label
         self._cuid = cuid or uuid.uuid4().hex
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws: websockets.WebSocketClientProtocol | None = None
         self._sn: str = ""
 
     async def connect(self) -> None:

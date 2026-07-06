@@ -1,4 +1,5 @@
 """register_all — 将所有 LLM 工具注册到 ToolRegistry。"""
+
 from __future__ import annotations
 
 import importlib
@@ -18,7 +19,7 @@ _LLM_TOOLS = [
 ]
 
 
-def register_all(registry: "ToolRegistry") -> None:
+def register_all(registry: ToolRegistry) -> None:
     """将 _LLM_TOOLS 中的所有工具注册到 registry。"""
     for name in _LLM_TOOLS:
         mod = importlib.import_module(f".{name}", package=__package__)
