@@ -37,7 +37,7 @@ base-ref: 5494466abf92d32b5f602c6ccaaacec1d9f3bc10
 **Files:**
 - Modify: `requirements-dev.txt`
 
-- [ ] **Step 1: 追加四个 dev 依赖**
+- [x] **Step 1: 追加四个 dev 依赖**
 
 在 `requirements-dev.txt` 末尾追加（不固定次要版本，只锁大版本下限，随后 `pip install` 取最新）：
 
@@ -48,7 +48,7 @@ isort>=5.13
 pytest-cov>=5.0
 ```
 
-- [ ] **Step 2: 安装并验证可用**
+- [x] **Step 2: 安装并验证可用**
 
 Run:
 ```powershell
@@ -60,7 +60,7 @@ Run:
 ```
 Expected: 四条命令均打印版本号，无 `ModuleNotFoundError`。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add requirements-dev.txt
@@ -75,7 +75,7 @@ git commit -m "chore: add ruff/black/isort/pytest-cov dev dependencies"
 **Interfaces:**
 - Produces: 供 Task 1.3（格式化）、Task 1.4（CI lint）、Task 1.5（覆盖率门禁）共用的 ruff/black/isort/pytest/coverage 配置。
 
-- [ ] **Step 1: 写配置文件**
+- [x] **Step 1: 写配置文件**
 
 创建 `pyproject.toml`（若已存在则合并，勿覆盖已有 build 段）：
 
@@ -111,7 +111,7 @@ source = ["src"]
 branch = true
 ```
 
-- [ ] **Step 2: 验证配置被识别**
+- [x] **Step 2: 验证配置被识别**
 
 Run:
 ```powershell
@@ -119,7 +119,7 @@ Run:
 ```
 Expected: 命令成功执行（可能报若干 lint 问题，但不报 "no configuration found" / 解析错误）。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add pyproject.toml
@@ -131,7 +131,7 @@ git commit -m "chore: configure ruff/black/isort/pytest/coverage in pyproject.to
 **Files:**
 - Modify: 全仓库 `src/`、`tests/`（由工具自动改写）
 
-- [ ] **Step 1: 先跑一次基线测试，记录通过状态**
+- [x] **Step 1: 先跑一次基线测试，记录通过状态**
 
 Run:
 ```powershell
@@ -139,7 +139,7 @@ Run:
 ```
 Expected: 记录当前通过/失败数（作为格式化后回归对比基线；`test_volc_stt` 的失败留待 Task 1.6 修复）。
 
-- [ ] **Step 2: 执行格式化三连**
+- [x] **Step 2: 执行格式化三连**
 
 Run:
 ```powershell
@@ -149,7 +149,7 @@ Run:
 ```
 Expected: 打印被修改的文件数。此步骤**只做格式化 / import 排序 / 安全自动修复**，不得手工掺入任何行为改动。
 
-- [ ] **Step 3: 复跑测试确认无回归**
+- [x] **Step 3: 复跑测试确认无回归**
 
 Run:
 ```powershell
@@ -157,7 +157,7 @@ Run:
 ```
 Expected: 通过数与 Step 1 一致（格式化不改变行为）。
 
-- [ ] **Step 4: 单独提交格式化**
+- [x] **Step 4: 单独提交格式化**
 
 ```bash
 git add -A
