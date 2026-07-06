@@ -384,7 +384,6 @@ class TestMemoryModuleInterviews:
 class TestMemoryModuleBrief:
     def test_save_and_get_brief(self, tmp_path):
         module = _make_module(tmp_path)
-        profile = _make_profile()
         # save_brief/get_brief are sync
         (tmp_path / "candidates" / "c-001").mkdir(parents=True, exist_ok=True)
         module.save_brief("c-001", "面试重点：分布式系统")

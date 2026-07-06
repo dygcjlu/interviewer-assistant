@@ -76,7 +76,7 @@ class MockSTTEngine:
         # 内部 async generator 函数确保调用方可以 `async for` 迭代（永不产出片段）。
         async def _empty() -> AsyncIterator[TranscriptSegment]:
             return
-            yield  # noqa: unreachable — 使 _empty 成为 async generator 而非 coroutine
+            yield  # noqa: F841 — 使 _empty 成为 async generator 而非 coroutine
 
         return _empty()
 

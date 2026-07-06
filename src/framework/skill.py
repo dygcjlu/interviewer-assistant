@@ -70,7 +70,9 @@ class SkillLoader:
         lines = text.split("\n")
         if lines[0].strip() != "---":
             raise ValueError("SKILL.md does not start with '---' frontmatter")
-        end = next((i for i, l in enumerate(lines[1:], 1) if l.strip() == "---"), None)
+        end = next(
+            (i for i, line in enumerate(lines[1:], 1) if line.strip() == "---"), None
+        )
         if end is None:
             raise ValueError("SKILL.md frontmatter not closed with '---'")
         frontmatter_text = "\n".join(lines[1:end])

@@ -77,7 +77,7 @@ async def test_interview_state_machine_idle_to_interviewing(client):
     """状态机：idle → interviewing。"""
     cid = await _seed(client, "cid-sm-001", "状态机候选人")
 
-    r_session = await client.get("/api/session/current")
+    await client.get("/api/session/current")
     # 初始可能无 session 或 idle
     controller = client._transport.app.state.controller
     session = await controller.get_session()

@@ -563,6 +563,7 @@ async def index() -> None:
                 tx_col,
                 tx_scroll,
                 q_col,
+                qs_col,
                 r_col,
                 panels,
                 tab_r,
@@ -586,6 +587,7 @@ async def _dispatch(
     tx_col,
     tx_scroll,
     q_col,
+    qs_col,
     r_col,
     panels,
     tab_r,
@@ -1229,7 +1231,7 @@ def _render_candidate_list(
                     ]
                     ui.table(
                         columns=[{"name": h, "label": h, "field": h} for h in headers],
-                        rows=[dict(zip(headers, r)) for r in rows_ui],
+                        rows=[dict(zip(headers, r, strict=False)) for r in rows_ui],
                     ).classes("w-full text-sm")
                 summary = data.get("llm_summary", "")
                 if summary:

@@ -14,6 +14,11 @@ target-version = "py312"
 select = ["E", "F", "I", "W", "UP", "B"]
 ignore = ["E501"]  # 行宽交由 black 负责
 
+[tool.ruff.lint.per-file-ignores]
+# 模块级常量/类型别名需在部分 import 之前定义
+"src/agents/base.py" = ["E402"]
+"src/web/routes.py" = ["E402", "B008"]  # FastAPI Depends/File 默认参数为惯用法
+
 [tool.ruff.format]
 quote-style = "double"
 

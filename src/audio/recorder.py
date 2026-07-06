@@ -189,7 +189,7 @@ class AudioRecorder:
         boundaries = self._round_boundaries + [(-1, total_duration)]
         prev_time = 0.0
 
-        for i, (round_num, end_time) in enumerate(boundaries[:-1]):
+        for i, (round_num, _end_time) in enumerate(boundaries[:-1]):
             start_time = prev_time
             slice_end = boundaries[i + 1][1]
 

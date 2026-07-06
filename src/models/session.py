@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from .candidate import CandidateProfile
 
 
-class InterviewStage(str, Enum):
+class InterviewStage(StrEnum):
     """面试会话的生命周期阶段"""
 
     IDLE = "idle"

@@ -645,11 +645,8 @@ class TestMainAgentDateInjection:
         assert role_pos < date_pos
 
     def test_build_system_prompt_date_not_stored_in_cache(self, tmp_path):
-        from datetime import date
-
         agent = self._make_main_agent(tmp_path)
         agent._build_system_prompt()  # warm up cache
-        today = date.today().strftime("%Y-%m-%d")
         assert agent._cached_system_prompt is not None
         # The cache itself should NOT start with the date prefix —
         # the date is prepended dynamically at return time.

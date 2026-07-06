@@ -6,7 +6,7 @@ import io
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -69,7 +69,6 @@ def build_report_pdf(report: EvalReport, candidate_name: str = "") -> bytes:
         bottomMargin=20 * mm,
     )
 
-    styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", fontName=font, fontSize=18, leading=24, spaceAfter=6)
     h2 = ParagraphStyle(
         "h2",

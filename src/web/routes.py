@@ -121,7 +121,7 @@ async def select_candidate(request: Request, body: CandidateSelectRequest):
             try:
                 session = await controller.create_session(body.candidate_id)
             except SessionError as exc:
-                raise _session_err(exc)
+                raise _session_err(exc) from None
 
     # Load interview brief
     brief: str = ""
@@ -243,14 +243,14 @@ async def upload_resume(
         except SessionError as exc:
             raise HTTPException(
                 status_code=404, detail={"code": "not_found", "message": str(exc)}
-            )
+            ) from None
     elif session is not None and candidate_id and session.candidate.id != candidate_id:
         try:
             session = await controller.create_session(candidate_id)
         except SessionError as exc:
             raise HTTPException(
                 status_code=404, detail={"code": "not_found", "message": str(exc)}
-            )
+            ) from None
     elif session is not None and not candidate_id:
         # 仅当当前 session 已绑定其它候选人（有姓名或 PDF 路径）时才重建，
         # 否则复用现有空 session 避免清空已积累的对话上下文。
@@ -390,7 +390,7 @@ async def start_interview(
             session = await controller.create_session(body.candidate_id)
         await controller.start_interview()
     except SessionError as exc:
-        raise _session_err(exc)
+        raise _session_err(exc) from None
 
     session.metadata.trigger_mode = body.trigger_mode
     if body.trigger_mode != "auto":
@@ -425,7 +425,7 @@ async def stop_interview(controller=Depends(_require_controller)):
     try:
         await controller.stop_interview()
     except SessionError as exc:
-        raise _session_err(exc)
+        raise _session_err(exc) from None
     bind_session_id(session.id)
     total_rounds = len(session.rounds)
     logger.info(
@@ -454,7 +454,7 @@ async def switch_agent(
         else:
             raise SessionError(f"不支持的目标 Agent: {body.target_agent!r}")
     except SessionError as exc:
-        raise _session_err(exc)
+        raise _session_err(exc) from None
     return {"stage": controller.stage.value, "active_agent": "main"}
 
 

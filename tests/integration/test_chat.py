@@ -32,7 +32,7 @@ async def test_chat_returns_sse_format(client, mock_llm):
     assert "text/event-stream" in r.headers["content-type"]
 
     lines = [line for line in r.text.split("\n") if line.strip()]
-    data_lines = [l for l in lines if l.startswith("data: ")]
+    data_lines = [line for line in lines if line.startswith("data: ")]
     assert len(data_lines) >= 1
     # 最后一条是 [DONE]
     assert data_lines[-1] == "data: [DONE]"
@@ -52,7 +52,7 @@ async def test_chat_delta_events_have_type_field(client, mock_llm):
     r = await client.post("/api/chat", json={"message": "测试"})
     lines = r.text.split("\n")
     delta_lines = [
-        l[6:] for l in lines if l.startswith("data: ") and l != "data: [DONE]"
+        line[6:] for line in lines if line.startswith("data: ") and line != "data: [DONE]"
     ]
     for raw in delta_lines:
         event = json.loads(raw)

@@ -171,7 +171,6 @@ async def test_dispatch_generate_questions_uses_injected_llm(
 
     controller = client._transport.app.state.controller
     await controller.create_session("test-002")
-    session = await controller.get_session()
 
     # 预设 mock 响应：返回结构化问题
     questions_json = json.dumps(

@@ -201,4 +201,4 @@ def _extract_json(text: str) -> dict | list:
         end = max(end_obj, end_arr)
         if end > start:
             return json.loads(text[start : end + 1])
-        raise json.JSONDecodeError("no valid JSON found", text, start)
+        raise json.JSONDecodeError("no valid JSON found", text, start) from None
