@@ -213,12 +213,16 @@ class TestParseServerResponse:
 @pytest.mark.unit
 class TestVolcRealtimeSTTCredentialCheck:
     @pytest.mark.asyncio
-    async def test_connect_silent_when_no_credentials(self):
+    async def test_connect_silent_when_no_credentials(self, monkeypatch):
         """connect() returns without connecting when credentials are absent."""
+        monkeypatch.setenv("VOLC_APP_KEY", "")
+        monkeypatch.setenv("VOLC_ACCESS_KEY", "")
+        from src import config
+
+        monkeypatch.setattr(config, "_settings", None)
         from src.audio.volc_stt import VolcRealtimeSTT
 
         stt = VolcRealtimeSTT(channel="candidate")
-        # No credentials set (defaults to empty strings in test environment)
         with patch("src.audio.volc_stt.ws_connect") as mock_connect:
             await stt.connect()
             mock_connect.assert_not_called()
