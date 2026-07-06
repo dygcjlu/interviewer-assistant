@@ -1,0 +1,29 @@
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501"]  # 行宽交由 black 负责
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: 单元测试",
+    "integration: 集成测试",
+    "asyncio: 异步测试",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
