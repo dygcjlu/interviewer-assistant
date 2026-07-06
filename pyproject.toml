@@ -17,13 +17,6 @@ ignore = ["E501"]  # 行宽交由 black 负责
 [tool.ruff.format]
 quote-style = "double"
 
-[tool.pytest.ini_options]
-markers = [
-    "unit: 单元测试",
-    "integration: 集成测试",
-    "asyncio: 异步测试",
-]
-
 [tool.coverage.run]
 source = ["src"]
 branch = true
