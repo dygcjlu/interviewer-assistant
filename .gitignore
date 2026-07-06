@@ -243,3 +243,6 @@ openspec/
 # LLM benchmark output
 scripts/benchmark_results.csv
 .claude/
+
+# Git worktrees (Comet build isolation)
+.worktrees/
