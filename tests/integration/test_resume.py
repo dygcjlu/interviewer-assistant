@@ -262,6 +262,46 @@ async def test_resolve_duplicate_cancel_does_not_save(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_resolve_duplicate_overwrite_save_failure_preserves_pending(
+    client, monkeypatch
+):
+    """save_candidate 失败时应返回 500，且 pending 记录必须原样保留：
+    new_profile.id 不能被污染为 existing_candidate_id，否则用户用相同
+    pending_id 重试（例如改选 keep_both）会静默保存成 existing 的 ID。"""
+    memory = client._transport.app.state.memory_module
+    existing = CandidateProfile(id="cid-existing-004", name="老赵")
+    await memory.save_candidate(existing, "# 老赵旧简历\n")
+
+    pending_id = _register_pending(
+        client._transport.app,
+        existing_id="cid-existing-004",
+        new_id="cid-new-004",
+        name="老赵",
+    )
+
+    from src.tools._context import ctx as tool_ctx
+
+    original_new_profile_id = tool_ctx.pending_duplicates[pending_id].new_profile.id
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(memory, "save_candidate", _boom)
+
+    r = await client.post(
+        "/api/resume/resolve-duplicate",
+        json={"pending_id": pending_id, "action": "overwrite"},
+    )
+    assert r.status_code == 500
+
+    assert pending_id in tool_ctx.pending_duplicates
+    pending = tool_ctx.pending_duplicates[pending_id]
+    assert pending.new_profile.id == original_new_profile_id
+    assert pending.new_profile.id == "cid-new-004"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_resolve_duplicate_unknown_pending_id_returns_404(client):
     r = await client.post(
         "/api/resume/resolve-duplicate",

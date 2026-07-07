@@ -374,7 +374,8 @@ async def resolve_duplicate(request: Request, body: ResolveDuplicateRequest):
         tool_ctx.pending_duplicates.pop(body.pending_id, None)
         return {"action": "cancel", "pending_id": body.pending_id}
 
-    profile = pending.new_profile
+    # 拷贝而非引用，避免 save 失败时污染 ctx.pending_duplicates 里的活跃对象
+    profile = dataclasses.replace(pending.new_profile)
     if body.action == "overwrite":
         profile.id = pending.existing_candidate_id
 
