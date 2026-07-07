@@ -79,13 +79,18 @@ _summary    = "早期 R1/R2 的摘要"
 
 #### Phase 3：可行性检查 + LLM 摘要
 
-在发送给 LLM 压缩之前，估算请求的 token 数：
+在发送给 LLM 压缩之前，用 `llm_client.count_tokens()` 精确估算压缩请求的 token 数（系统提示 + 对话文本拼成虚拟消息列表，整体调用一次）：
 
 ```python
-estimated_tokens = len(conversation_text) / 1.5 + 2000
+estimated_tokens = self._llm_client.count_tokens([
+    Message(role="system", content=_COMPRESSION_SYSTEM_PROMPT),
+    Message(role="user", content=conversation_text),
+])
 ```
 
 若估算超过 `model_context_limit × 0.7`（即 22400），则强制只保留 head 的第 1 轮，防止压缩请求本身超过上下文窗口。
+
+Phase 2 的 tail 边界截断同样使用 `count_tokens`：从后往前扩大 tail 候选窗口时，对整份虚拟消息列表整体计数（而非逐轮 `len//3` 累加）。
 
 最终以独立 LLM 调用生成摘要：
 
@@ -102,11 +107,16 @@ self._summary = "[以下为早期面试对话的压缩摘要，非原始记录]\
 
 ### 1.5 Token 预算监控
 
-`token_usage` 属性实时估算当前 prompt 的 token 消耗，供监控使用（未阻断流程）：
+`token_usage` 属性通过 `llm_client.count_tokens()` 精确估算当前 prompt 的 token 消耗，供监控使用（未阻断流程）：
+
+- **固定区**：占位 system 文本单独计数
+- **摘要区**：`_summary` 作为一条 system 消息计数
+- **窗口区**：每轮 `interviewer_text + candidate_text` 拼成一条 user 消息计数
+
+`_estimate_tokens()` 则将固定区 + 摘要 + 全部轮次拼成**一份虚拟消息列表**，整体调用一次 `count_tokens()`（避免逐段分别计数导致 overhead 与安全余量重复叠加）。
 
 ```
-total = fixed_zone(1500) + summary(len/3) + window_rounds(sum(len/3))
-utilization = total / (token_budget × 0.8)
+utilization = total_used / (token_budget × (1 - token_safety_margin))
 ```
 
 ### 1.6 生命周期

@@ -65,3 +65,18 @@ Task 7.5: complete (Step D found zero gaps, no 4th commit needed; independent re
 Task 7.6: complete (no code commit, verification-only; 530 passed matching Task 7.1 baseline exactly, coverage gate --cov-fail-under=60 passed at 62.42%)
 
 ## Phase 3 — 拆分 memory_module.py sub-phase complete (Tasks 7.1-7.6). Phase 3 fully complete.
+
+Task 8.1: complete (commit 0d24a3f, batch review with 8.2-8.6 Approved; _summarize_tool_result handles dispatch_to_agent type-based errors via data.get("type") == "error", manage_user_memory success/error shapes; tool_call_id added to tool_call event)
+Task 8.2: complete (commit fc943c2, batch review Approved; api.md documents tool_result + duplicate_candidate SSE events)
+Task 8.3: complete (commit 825389d, batch review Approved; _render_tool_call_card/_update_tool_call_card with ui.expansion.set_text)
+Task 8.4: complete (commit 825389d, see 8.3)
+Task 8.5: complete (commit 825389d, see 8.3; tool_cards dict correlates tool_call_id)
+Task 8.6: complete (commit 0d24a3f + 825389d, batch review Approved; 18 new unit tests, 548/548 pass, main_agent 77% coverage)
+
+## Phase 4 — Agent 工具调用可视化 sub-phase: Tasks 8.1-8.6 complete; Task 8.7 (e2e browser) pending — blocked on cursor-ide-browser MCP unavailable
+
+Task 9.1: complete (no code commit, verification-only; ruff clean, 548 passed, coverage 62.44% >= 60% gate)
+Task 9.2: complete (commit pending; updated context-memory.md, flows.md, storage.md for token count / streaming / dedup / store split)
+Task 9.3: complete (commit pending; updated docs/todo/05-ci-complete.md coverage status)
+
+## Phase 5 — 收尾验证: Tasks 9.1-9.3 complete. Rollout build phase complete except 3 blocked e2e browser tasks (3.5, 4.6, 8.7).

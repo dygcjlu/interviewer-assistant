@@ -73,7 +73,7 @@ sequenceDiagram
 - 解析由面试官聊天触发 MainAgent，MainAgent 通过 `dispatch_to_agent` 工具委托 ResumeAgent 执行
 - 解析完成后 MainAgent 进入两阶段引导：① 呈现分析 + 风险信号；② 对话收集关注点后生成简报
 - `dispatch_to_agent` 自动注入 session 上下文（候选人 ID、profile.md 路径、brief.md 路径等）
-- `parse_done` 副作用：读取临时 Markdown → `save_candidate()` → 删除临时文件；若解析出的真实姓名与已有候选人重名，写入 `duplicate_warning` 字段（不阻断）
+- `parse_done` 副作用：解析出 `real_name` 后**先判重再落盘**；若与已有候选人同名，将 profile + resume_markdown 暂存到进程内 `PendingStore`，通过 SSE `duplicate_candidate` 事件通知前端三选一（覆盖 / 保留两份 / 取消），由 `POST /api/resume/resolve-duplicate` 执行决议；未命中重名则正常 `save_candidate()`
 - `brief_done` 副作用：`save_brief()` 落盘 → 更新 `session.interview_brief` → 刷新 MainAgent Layer 3；**`session.stage` 维持 IDLE**，不自动切换为 `interviewing`；用户需显式点击「开始面试」触发 `POST /api/interview/start` → `stage=INTERVIEWING`
 
 ---
@@ -162,6 +162,7 @@ sequenceDiagram
 - `TranscriptionManager` 是 STT 结果和上层 Agent 的缓冲层：累积转写文本，管理轮次归档
 - 轮次归档触发条件：面试官新 segment 到来且候选人已有文字时，自动调用 `finalize_round()`
 - 追问建议基于 `session.rounds[-1]`（最近一轮的面试官问题 + 候选人回答）生成
+- `InterviewAgent.generate_suggestion()` 通过 `chat_stream()` 逐 token yield，WebSocket 推送 `suggestion_delta` 事件实现前端逐段展示；中途切换触发模式或新触发会取消上一次流
 
 ---
 

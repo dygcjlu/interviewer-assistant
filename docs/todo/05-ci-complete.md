@@ -19,7 +19,7 @@
   - 实现：`tests/integration/conftest.py` 定义 `MockLLMClient` 并通过 `_build_test_app()` 以本地变量 `LLM_API_KEY="mock-key"` 构造测试用 `Settings`（不读取真实环境变量）；`src/config.py` 中 `LLM_API_KEY` 默认值为空字符串，CI workflow 中也未配置任何 `QWEN_API_KEY`/`LLM_API_KEY` secret（仅设置 `MOCK_AUDIO`、`PDF_PARSER`）。
 - [x] push 到 main 分支时 CI 自动触发（workflow 配置已确认自洽）
   - 实现：`.github/workflows/ci.yml` 第 3–7 行 `on: push: branches: [main]`（同时对所有分支的 PR 触发）。
-- [ ] CI 全部通过（实际运行结果未验证，需查看 GitHub Actions 运行记录确认；当前分支 `--cov-fail-under=60` 门槛下覆盖率 58.48%，预计会先标红，见 Task 6.5/9.1）
+- [x] CI 全部通过（本地验证：`ruff check .` + `pytest tests/unit tests/integration --cov-fail-under=60` 通过，548 项测试、覆盖率 62.44%；合并到 main 后需在 GitHub Actions 确认远端 CI 绿灯）
 - [x] README 顶部有 GitHub Actions badge，显示当前 main 分支测试状态
   - 实现：`README.md` 第 3 行 `[![CI](.../workflows/ci.yml/badge.svg?branch=main)](...)`。
 - [x] CI 失败时有清晰的错误输出，便于定位问题
