@@ -40,6 +40,8 @@ canonical_spec: openspec
 
 **关键实现约束**（brainstorming 阶段代码调研确认）：`count_tokens()` 要求 `Message` 对象列表输入，且每条消息叠加 `_PER_MESSAGE_OVERHEAD_TOKENS`。`_estimate_tokens()` 原先直接对裸字符串（`self._summary`、各轮 `interviewer_text`/`candidate_text`）计数，若逐段各自包一层 `Message` 再分别调用 `count_tokens()`，会导致 overhead 被重复叠加、计数虚高于预期。因此改造时需要在 `ContextManager` 内部构造一份"虚拟消息列表"（summary 一条 + 每轮一条），整体调用一次 `count_tokens()`。
 
+**已记录的例外**：`ContextManager.token_usage` 属性对 fixed/summary/window 三个预算分区分别调用一次 `count_tokens()`（而非合并为一份虚拟消息列表整体调用一次），这是刻意的设计选择而非对上述约束的违反：三次调用面向三个相互独立的预算分区展示（用于 UI/日志的分区占比展示），不是对同一预算的重复计数。由于 `count_tokens()` 的每消息 overhead 是线性可加的、安全余量是末尾统一乘的标量，三次独立调用求和与合并为一份列表整体调用一次在数值上等价（仅有可忽略的 `int()` 截断误差），因此不会造成约束描述的"计数虚高"问题。`_estimate_tokens()`（用于压缩触发判断的单一预算总量）仍严格遵守"整体调用一次"的约束。
+
 精确计数后数值通常小于原估算（尤其中文场景），原有"8 轮触发压缩"等阈值需要用中英混杂真实对话数据回归验证，若触发时机明显偏移则同步调整常量并在改动说明中记录原因。
 
 ### 3. 追问建议真流式输出（阶段二）
