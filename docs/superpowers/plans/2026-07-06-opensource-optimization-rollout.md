@@ -1288,18 +1288,18 @@ git add src/web/ui.py
 git commit -m "feat: three-way dedup dialog after resume parse (overwrite/keep both/cancel)"
 ```
 
-### Task 4.5: 补充去重识别场景单元/集成测试
+### Task 4.5: 补充去重识别场景单元/集成测试（已完成，随 Task 4.2/4.4 的 TDD 过程一并交付，见其 commit `1040a5b`/`a2654e3`）
 
 **Files:**
 - Test: `tests/unit/test_dispatch_to_agent.py`、`tests/integration/test_routes.py`
 
-- [ ] **Step 1: 覆盖两种识别场景 + 三分支执行结果**
+- [x] **Step 1: 覆盖两种识别场景 + 三分支执行结果**（实际测试文件为 `tests/integration/test_resume.py`，非本节假设的 `test_dispatch_to_agent.py`；覆盖判重命中/未命中/自我覆盖 + 三个 resolve-duplicate action + 404 + 失败路径回归。前端 `ui.py` 部分未新增专门单测，为项目对该文件近 0% 覆盖率的既有接受状态）
 
 - 「不同文件名、同真实姓名」：上传 `zhangsan_v2.pdf`，解析出姓名"张三"，命中已有"张三" → 触发 `duplicate_pending`。
 - 「同文件名、不同真实姓名」：不应误判为重复（解析姓名不同 → 正常 save，不触发 pending）。
 - 三分支执行结果（overwrite/keep_both/cancel）落库效果（复用/扩展 Task 4.3 的断言）。
 
-- [ ] **Step 2: 运行 + Commit**
+- [x] **Step 2: 运行 + Commit**（随 4.2/4.4 一并验证与提交）
 
 Run:
 ```powershell
@@ -1330,7 +1330,7 @@ git commit -m "test: cover real-name dedup detection and three resolution branch
 
 ## Phase 2 — PDF 导出中文渲染测试（阶段二）
 
-### Task 5.1: `pdf_export.py` 生成→回读校验集成测试
+### Task 5.1: `pdf_export.py` 生成→回读校验集成测试（已完成，commit `2ed6301`，单任务审查 Approved）
 
 **Files:**
 - Test: `tests/integration/test_pdf_export.py`（新建）
@@ -1341,7 +1341,7 @@ git commit -m "test: cover real-name dedup detection and three resolution branch
 
 **Context:** 生成用 reportlab（注册系统 CJK 字体，Windows 下 simhei/msyh/simsun）。回读用 pymupdf 提取文本断言中文正确、无乱码。**注意跨平台**：`_ensure_cjk_font` 在非 Windows 无 CJK 字体时回退 Helvetica，中文可能无法渲染；测试需对"字体不可用"做条件跳过或断言降级行为，避免在 CI（Linux）误报。
 
-- [ ] **Step 1: 写测试**
+- [x] **Step 1: 写测试**（实际实现与本节示例代码基本一致，仅对 `# noqa: E402` 两处后置 import 做了必要的 lint 抑制；`pymupdf` 已在 `requirements.txt` 声明（`pymupdf>=1.24.0`），无需新增依赖）
 
 ```python
 import pytest
@@ -1388,7 +1388,7 @@ def test_build_report_pdf_roundtrip_chinese():
         pytest.skip("无可用 CJK 字体（非 Windows CI），跳过中文断言")
 ```
 
-- [ ] **Step 2: 运行**
+- [x] **Step 2: 运行**（本机 Windows 环境 SimHei 字体可用，实际 PASS 而非 SKIP，4 项中文断言真实执行；reviewer 独立重跑确认一致，且 `_ensure_cjk_font()` 无字体回退 Helvetica 路径经代码追踪确认不会在 Linux CI 误报）
 
 Run:
 ```powershell
@@ -1396,7 +1396,7 @@ Run:
 ```
 Expected: 本地 Windows PASS（含中文断言）；无 CJK 字体环境 SKIP。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**（`2ed6301`，单任务审查 Approved，全量 505 项通过，无 Critical/Important 发现）
 
 ```bash
 git add tests/integration/test_pdf_export.py

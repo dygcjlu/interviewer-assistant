@@ -44,3 +44,7 @@ Task 4.4: complete (commit 1040a5b + fix a2654e3, batch review with 4.2 — see 
 Task 4.3: complete (commit 06e8921, individual review Approved; corrected implementer's brief in-flight — threaded new `state` param through `_chat_stream`/`_trigger_parse` since plan's sample code assumed access that didn't exist; removed dead `_confirm_overwrite_dialog`/`_conflict` upload-time 409 path; 2 accepted Minor findings, neither blocking)
 
 ## Phase 2 — 候选人去重改为按真实姓名 sub-phase: Tasks 4.1, 4.2, 4.3, 4.4 complete (backend + frontend); Task 4.6 (e2e browser, likely blocked same as 3.5) still pending; Task 4.5 (tests) backend portion covered via TDD in 4.2/4.4, frontend portion has no dedicated automated test (ui.py near-zero coverage is a pre-existing accepted state) — real UX validation deferred to Task 4.6
+
+Task 5.1: complete (commit 2ed6301, individual review Approved; CJK assertions genuinely executed — not skipped — on this Windows machine via SimHei font; pymupdf already a declared dependency, no new deps added)
+
+## Phase 2 — PDF 导出中文渲染测试 sub-phase complete (Task 5.1). Phase 2 as a whole now only missing the two blocked e2e browser tasks (3.5, 4.6).
