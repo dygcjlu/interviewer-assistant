@@ -21,7 +21,7 @@
   - 实现：`src/web/routes.py` `compare_candidates()`（约第 766–886 行）：id 不存在返回 404（`{"code": "not_found", ...}`）；无 EvalReport 的候选人不报错，而是在返回结果的 `missing_report` 列表中明确列出（见下一条）。
 - [x] 对比结果包含：各候选人维度评分对比表格、LLM 生成的文字总结（优劣势对比、岗位匹配度排序）
   - 实现：同上，返回体含 `score_table`（各候选人各维度评分）与 `llm_summary`（LLM 根据 prompt 生成排序/优劣势/岗位匹配度建议的文字总结）；前端表格与摘要渲染见 `src/web/ui.py` 约第 1213–1241 行。集成测试 `tests/integration/test_llm_injection.py::test_compare_candidates_uses_injected_llm` 覆盖该接口的基本流程。
-- [x] 对比最多支持 5 名候选人（超出时提示）
-  - 实现：`compare_candidates()` 中 `len(id_list) > 5` 时返回 422 `{"code": "too_many", "message": "最多对比 5 名候选人"}`；前端 `_do_compare()`（`src/web/ui.py` 约第 1197–1212 行）未在选择阶段主动限制勾选数量，超出后端限制时依赖 `httpx` 的 `raise_for_status()` 异常并以 `ui.notify(f"对比失败：{exc}", type="negative")` 提示，能提示但未直接展示后端的友好错误文案。
+- [x] 对比最多支持 5 名候选人（部分达标：后端 422 限制生效，超出时前端展示原始 httpx 异常文本而非后端友好文案「最多对比 5 名候选人」）
+  - 实现：`compare_candidates()` 中 `len(id_list) > 5` 时返回 422 `{"code": "too_many", "message": "最多对比 5 名候选人"}`；前端 `_do_compare()`（`src/web/ui.py` 约第 1197–1212 行）未在选择阶段主动限制勾选数量，超出时以 `ui.notify(f"对比失败：{exc}", type="negative")` 提示。
 - [x] 无 EvalReport 的候选人在对比中有明确提示（"暂无评价报告"）
   - 实现：`compare_candidates()` 收集 `missing_report` 列表，前端弹窗中渲染"以下候选人暂无评价报告：..."（`src/web/ui.py` 约第 1215–1219 行）。
