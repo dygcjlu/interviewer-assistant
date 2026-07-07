@@ -23,5 +23,7 @@ Task 1.12: complete (commit 50e26e8, batch review Approved, README insertion min
 
 Task 2.1: complete (commit e15c882, batch review with 2.2; 1 fix round for weak single-call test assertion, fix commit 5a5981a, re-review Approved)
 Task 2.2: complete (commit 90704eb, batch review with 2.1 Approved; test correctly used assert_called_once() + message-list-length checks from the start)
+Task 2.3: complete (commit c53bb7a, batch review with 2.4 Approved; real-tiktoken regression proves compression trigger timing unaffected, no constants adjusted)
+Task 2.4: complete (commit 2ae077b, batch review with 2.3 Approved; discovered new exact estimate is HIGHER than old //3 heuristic for CN-heavy text, opposite of design doc's original assumption — asserted the empirical direction, judged correct by reviewer; design doc line 43 stale-assumption correction deferred as accepted Minor to closing tasks 9.2/9.3)
 
-## Phase 2 in progress (Token 精确计数 sub-phase complete: Tasks 2.1-2.2)
+## Phase 2 — Token 精确计数 sub-phase complete (Tasks 2.1-2.4)

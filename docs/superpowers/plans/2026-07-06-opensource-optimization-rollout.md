@@ -683,11 +683,11 @@ git commit -m "feat: use count_tokens for eval single/chunked path decision"
 
 **Context:** 精确计数后数值通常小于旧 `//3` 估算（尤其中文），`compression_round_threshold=8`、`over_budget>0.65` 等触发时机可能偏移。
 
-- [ ] **Step 1: 构造中英混杂真实规模数据回归**
+- [x] **Step 1: 构造中英混杂真实规模数据回归**（用真实 `OpenAICompatibleClient`(tiktoken，`_make_real_llm_client()` 辅助函数，无网络) 构造 10 轮真实规模后端面试问答）
 
 在 `tests/unit/test_context.py` 增加一个用例：注入 ~10 轮中英混杂对话，断言 `add_round` 在预期轮次触发压缩（观察 `_estimate_tokens` 相对 budget 的比值）。用真实 `OpenAICompatibleClient.count_tokens`（tiktoken 可用时）或贴近真实的 `_FakeLLM`。
 
-- [ ] **Step 2: 运行并观测触发时机**
+- [x] **Step 2: 运行并观测触发时机**（`over_rounds` 第 9 轮准时触发；`over_budget` 10 轮内利用率仅 5.14%，从未触发，与预期一致）
 
 Run:
 ```powershell
@@ -695,27 +695,28 @@ Run:
 ```
 Expected: 明确压缩是否在预期轮次触发。
 
-- [ ] **Step 3: 按需调整常量（如触发时机明显偏移）**
+- [x] **Step 3: 按需调整常量（如触发时机明显偏移）**（结论：验证通过，无需调整；`over_budget` 距 0.65 阈值相差一个数量级，`over_rounds` 完全不受 token 计数方式影响）
 
 若触发明显偏早/偏晚，调整 `ContextConfig` 中 `compression_round_threshold` 或 `0.65` 比值，并在提交信息与 report 记录**调整原因与前后对比数值**；若无需调整，也在 report 明确记录"验证通过，无需调整"。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/framework/context.py tests/unit/test_context.py
 git commit -m "test: regression-verify compression thresholds under exact token count"
 ```
+（提交 c53bb7a；批次审查（与 2.4 一起）Approved）
 
 ### Task 2.4: 补充中英混杂新旧估算差异单测
 
 **Files:**
 - Test: `tests/unit/test_context.py`
 
-- [ ] **Step 1: 写用例覆盖"中文场景精确计数明显低于旧字符估算"**
+- [x] **Step 1: 写用例覆盖"中文场景精确计数明显低于旧字符估算"**（**实测发现方向与假设相反**：新 tiktoken 精确计数因 CJK 约 1 汉字≈1 token + `_PER_MESSAGE_OVERHEAD_TOKENS` + 20% 安全余量叠加，反而明显**高于**旧 `//3` 估算；已按实测方向如实断言并在测试 docstring 中详细记录该发现，批次审查确认此为正确工程判断，未强行凑合原假设）
 
 断言：对同一段以中文为主的对话，`_estimate_tokens()`（新，tiktoken）返回值与旧 `//3` 口径存在方向性差异（中文通常更低），保证改造后行为可解释、可回归。
 
-- [ ] **Step 2: 运行 + Commit**
+- [x] **Step 2: 运行 + Commit**
 
 Run:
 ```powershell
@@ -725,6 +726,7 @@ Run:
 git add tests/unit/test_context.py
 git commit -m "test: cover cn/en mixed token estimation difference"
 ```
+（提交 2ae077b；批次审查（与 2.3 一起）Approved，接受的 Minor 事项：design doc 第 43 行"精确计数后数值通常小于原估算（尤其中文场景）"的过时假设描述留待收尾阶段（Task 9.2/9.3）一并更正；测试间小幅循环重复亦记录为 Minor 不阻塞）
 
 ---
 
