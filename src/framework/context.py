@@ -57,6 +57,10 @@ class ContextData:
 class ContextManager:
     """上下文管理器 — 存储对话轮次，后台异步压缩超出窗口的早期内容。"""
 
+    # 固定区（候选人信息、岗位要求等）token 占用的稳定占位文本，
+    # 用于 count_tokens 统一计数；约等于原硬编码 1500 token 估算。
+    _FIXED_ZONE_SYSTEM_TEXT = "[固定区占位]" * 120
+
     def __init__(
         self,
         config: ContextConfig,
@@ -136,11 +140,23 @@ class ContextManager:
 
     @property
     def token_usage(self) -> TokenUsageInfo:
-        fixed_tokens = 1500  # rough estimate for fixed zone
-        summary_tokens = len(self._summary) // 3
-        window_tokens = sum(
-            (len(r.interviewer_text) + len(r.candidate_text)) // 3
+        # 三个分区各自构造一份虚拟消息列表并单独调用 count_tokens；
+        # 分区之间相互独立，不违反"同一份预算多段文本需合并计数"的约束。
+        summary_msgs = (
+            [Message(role="system", content=self._summary)] if self._summary else []
+        )
+        window_msgs = [
+            Message(role="user", content=f"{r.interviewer_text}\n{r.candidate_text}")
             for r in self._all_rounds
+        ]
+        fixed_tokens = self._llm_client.count_tokens(
+            [Message(role="system", content=self._FIXED_ZONE_SYSTEM_TEXT)]
+        )
+        summary_tokens = (
+            self._llm_client.count_tokens(summary_msgs) if summary_msgs else 0
+        )
+        window_tokens = (
+            self._llm_client.count_tokens(window_msgs) if window_msgs else 0
         )
         total = fixed_tokens + summary_tokens + window_tokens
         budget = int(
@@ -175,14 +191,28 @@ class ContextManager:
 
     # ── internals ─────────────────────────────────────────────────────────────
 
+    def _build_virtual_messages(self) -> list[Message]:
+        """把固定区占位 + summary + 各轮拼成一份虚拟消息列表，供 count_tokens 一次性计数。
+
+        关键约束：禁止逐段各自包 Message 分别调用 count_tokens——那样
+        每条消息的 overhead 与整体安全余量会被重复叠加，导致计数虚高。
+        """
+        msgs: list[Message] = [
+            Message(role="system", content=self._FIXED_ZONE_SYSTEM_TEXT),
+        ]
+        if self._summary:
+            msgs.append(Message(role="system", content=self._summary))
+        for r in self._all_rounds:
+            msgs.append(
+                Message(
+                    role="user",
+                    content=f"{r.interviewer_text}\n{r.candidate_text}",
+                )
+            )
+        return msgs
+
     def _estimate_tokens(self) -> int:
-        fixed = 1500
-        summary = len(self._summary) // 3
-        window_t = sum(
-            (len(r.interviewer_text) + len(r.candidate_text)) // 3
-            for r in self._all_rounds
-        )
-        return fixed + summary + window_t
+        return self._llm_client.count_tokens(self._build_virtual_messages())
 
     async def _compress_async(self) -> None:
         """后台三阶段压缩：Phase1 剪枝 → Phase2 token-budget tail → Phase3 LLM 摘要。"""
@@ -212,17 +242,28 @@ class ContextManager:
             )
             tail_token_budget = budget * 0.4
 
-            # 从后往前累加估算 token，找出 tail 边界
-            tail_tokens = 0
+            # 从后往前逐轮扩大候选 tail 窗口，每次对整份虚拟消息列表整体调用一次
+            # count_tokens（而非逐轮分别调用再在 Python 里累加求和），避免
+            # overhead 与安全余量随调用次数重复叠加导致计数虚高。
+            tail_candidates: list[ConversationRound] = []
             tail_count = 0
             for r in reversed(pruned):
-                round_tokens = (len(r.interviewer_text) + len(r.candidate_text)) // 3
+                candidate = [r] + tail_candidates
+                tail_tokens = self._llm_client.count_tokens(
+                    [
+                        Message(
+                            role="user",
+                            content=f"{rr.interviewer_text}\n{rr.candidate_text}",
+                        )
+                        for rr in candidate
+                    ]
+                )
                 if (
-                    tail_tokens + round_tokens > tail_token_budget * 1.5
+                    tail_tokens > tail_token_budget * 1.5
                     and tail_count >= _MIN_TAIL
                 ):
                     break
-                tail_tokens += round_tokens
+                tail_candidates = candidate
                 tail_count += 1
             tail_count = max(tail_count, _MIN_TAIL)
             _TAIL = min(tail_count, max(0, len(pruned) - _HEAD))
@@ -241,7 +282,12 @@ class ContextManager:
                 f"面试官: {r.interviewer_text}\n候选人: {r.candidate_text}"
                 for r in pruned
             )
-            estimated_tokens = int(len(conversation_text) / 1.5) + 2000
+            estimated_tokens = self._llm_client.count_tokens(
+                [
+                    Message(role="system", content=_COMPRESSION_SYSTEM_PROMPT),
+                    Message(role="user", content=conversation_text),
+                ]
+            )
             if estimated_tokens > self._config.model_context_limit * 0.7:
                 pruned = pruned[:1]
                 conversation_text = f"面试官: {pruned[0].interviewer_text}\n候选人: {pruned[0].candidate_text}"

@@ -56,6 +56,9 @@ def _make_llm_mock(content: str = "摘要内容") -> AsyncMock:
             content=content, prompt_tokens=10, completion_tokens=5
         )
     )
+    # count_tokens 是同步方法（LLMClient Protocol），AsyncMock 的子属性默认也是
+    # AsyncMock，直接调用会返回未 await 的 coroutine；显式配置为同步 MagicMock。
+    mock.count_tokens = MagicMock(return_value=100)
     return mock
 
 
