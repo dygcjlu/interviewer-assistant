@@ -67,6 +67,45 @@ def _extract_duplicate_candidate_event(tool_result: str) -> dict | None:
     return {"type": "duplicate_candidate", **dup}
 
 
+def _summarize_tool_result(result_str: str) -> tuple[bool, str]:
+    """从工具结果 JSON 生成 (success, 简短摘要)。
+
+    兼容 dispatch_to_agent 的 type-based 形态（如 {"type": "parse_done", ...}、
+    {"type": "error", "message": ...}）与 manage_user_memory 的 success/error-based
+    形态（如 {"success": True, "message": ...}、{"error": "..."}）。
+    """
+    if not result_str:
+        return True, ""
+    try:
+        data = json.loads(result_str)
+    except Exception:
+        return True, result_str[:80]
+    if not isinstance(data, dict):
+        return True, str(data)[:80]
+
+    is_failure = (
+        data.get("error")
+        or data.get("user_facing")
+        or data.get("success") is False
+        or data.get("type") == "error"
+    )
+    if is_failure:
+        msg = data.get("message") or data.get("error") or data.get("user_facing") or "执行失败"
+        return False, str(msg)[:120]
+
+    rtype = data.get("type", "")
+    warning = data.get("warning")
+    if warning:
+        return True, f"{rtype} · {str(warning)[:80]}" if rtype else str(warning)[:100]
+    if rtype:
+        return True, rtype
+    if data.get("message"):
+        return True, str(data["message"])[:100]
+    if "entries" in data:
+        return True, f"共 {len(data['entries'])} 条"
+    return True, "完成"
+
+
 _LAYER1_ROLE = """你是一位专业的面试助手 Agent，帮助面试官管理候选人、准备面试、支持面试流程。
 
 你的能力：
@@ -220,7 +259,10 @@ class MainAgent:
         """处理用户消息（用 `_chat_lock` 串行化，避免并发撞坏 `_history`），流式返回 LLM 回复。
 
         yield str  → 文字 delta，前端直接追加到气泡
-        yield dict → 结构化事件，目前支持 {"type": "tool_call", "name": ..., "args": ...}
+        yield dict → 结构化事件，目前支持：
+          - {"type": "tool_call", "tool_call_id": ..., "name": ..., "args": ...}
+          - {"type": "tool_result", "tool_call_id": ..., "name": ...,
+             "result_summary": ..., "success": ...}
         """
         self._bind_log_context("chat")
         async with self._chat_lock:
@@ -314,12 +356,21 @@ class MainAgent:
                 # 通知前端工具调用开始
                 yield {
                     "type": "tool_call",
+                    "tool_call_id": tc.id,
                     "name": tc.function.name,
                     "args": tc.function.arguments,
                 }
                 result_str = await self._tools.dispatch(
                     tc.function.name, tc.function.arguments
                 )
+                success, summary = _summarize_tool_result(result_str)
+                yield {
+                    "type": "tool_result",
+                    "tool_call_id": tc.id,
+                    "name": tc.function.name,
+                    "result_summary": summary,
+                    "success": success,
+                }
                 tool_msg = Message(role="tool", content=result_str, tool_call_id=tc.id)
                 self._history.append(tool_msg)
                 new_messages.append(tool_msg)

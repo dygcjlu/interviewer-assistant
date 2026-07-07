@@ -32,6 +32,7 @@ from src.agents.main_agent import (
     MainAgent,
     _extract_duplicate_candidate_event,
     _extract_user_facing_error,
+    _summarize_tool_result,
 )
 from src.framework.tool_registry import ToolRegistry
 from src.llm.protocol import ChatResponse, StreamChunk
@@ -42,9 +43,9 @@ from src.storage.user_memory import UserMemoryStore
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 
-def _make_tc(name: str, arguments: str = "{}") -> ToolCallInfo:
+def _make_tc(name: str, arguments: str = "{}", tc_id: str = "tc-001") -> ToolCallInfo:
     return ToolCallInfo(
-        id="tc-001",
+        id=tc_id,
         type="function",
         function=FunctionCallInfo(name=name, arguments=arguments),
     )
@@ -282,6 +283,304 @@ class TestMainAgentToolLoop:
         assert "操作完成" in "".join(str_chunks)
         # chat() should have been called (not short-circuited)
         llm.chat.assert_awaited_once()
+
+
+# ── Task 8.1 — tool_result SSE event ─────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestSummarizeToolResult:
+    """Unit tests for ``_summarize_tool_result``, covering both the type-based
+    shape used by ``dispatch_to_agent`` and the success/error-based shape used
+    by ``manage_user_memory``."""
+
+    # ── dispatch_to_agent shape (type-based) ─────────────────────────────────
+
+    def test_dispatch_to_agent_success_with_type(self):
+        result = json.dumps({"type": "parse_done", "markdown_path": "resumes/a.md"})
+        success, summary = _summarize_tool_result(result)
+        assert success is True
+        assert summary == "parse_done"
+
+    def test_dispatch_to_agent_success_with_warning_includes_type_and_warning(self):
+        result = json.dumps(
+            {"type": "brief_done", "warning": "简历内容较短"}, ensure_ascii=False
+        )
+        success, summary = _summarize_tool_result(result)
+        assert success is True
+        assert "brief_done" in summary
+        assert "简历内容较短" in summary
+
+    def test_dispatch_to_agent_error_uses_message_field(self):
+        result = json.dumps(
+            {"type": "error", "message": "候选人不存在"}, ensure_ascii=False
+        )
+        success, summary = _summarize_tool_result(result)
+        assert success is False
+        assert summary == "候选人不存在"
+
+    def test_dispatch_to_agent_user_facing_error_is_failure(self):
+        result = json.dumps(
+            {"error": "PDF 已损坏", "user_facing": True}, ensure_ascii=False
+        )
+        success, summary = _summarize_tool_result(result)
+        assert success is False
+        assert summary == "PDF 已损坏"
+
+    # ── manage_user_memory shape (success/error-based) ───────────────────────
+
+    def test_manage_user_memory_success_uses_message_field(self):
+        result = json.dumps(
+            {"success": True, "message": "已添加为条目 3", "index": 3}, ensure_ascii=False
+        )
+        success, summary = _summarize_tool_result(result)
+        assert success is True
+        assert summary == "已添加为条目 3"
+
+    def test_manage_user_memory_error_uses_error_field(self):
+        result = json.dumps({"error": "add 操作需要提供 content"}, ensure_ascii=False)
+        success, summary = _summarize_tool_result(result)
+        assert success is False
+        assert summary == "add 操作需要提供 content"
+
+    def test_manage_user_memory_explicit_success_false_is_failure(self):
+        result = json.dumps({"success": False, "message": "未知错误"}, ensure_ascii=False)
+        success, summary = _summarize_tool_result(result)
+        assert success is False
+        assert summary == "未知错误"
+
+    def test_manage_user_memory_list_entries_reports_count(self):
+        result = json.dumps(
+            {"entries": ["岗位：后端", "技术栈：Python"]}, ensure_ascii=False
+        )
+        success, summary = _summarize_tool_result(result)
+        assert success is True
+        assert summary == "共 2 条"
+
+    # ── edge cases ────────────────────────────────────────────────────────────
+
+    def test_empty_string_is_success_with_empty_summary(self):
+        assert _summarize_tool_result("") == (True, "")
+
+    def test_invalid_json_falls_back_to_raw_text(self):
+        success, summary = _summarize_tool_result("not json")
+        assert success is True
+        assert summary == "not json"
+
+    def test_non_dict_json_falls_back_to_str_repr(self):
+        success, summary = _summarize_tool_result("[1, 2, 3]")
+        assert success is True
+        assert summary == "[1, 2, 3]"
+
+    def test_dict_with_no_recognizable_fields_defaults_to_done(self):
+        success, summary = _summarize_tool_result(json.dumps({"foo": "bar"}))
+        assert success is True
+        assert summary == "完成"
+
+
+@pytest.mark.unit
+class TestMainAgentToolResultEvent:
+    """Integration tests for the ``tool_result`` event through ``handle_chat``."""
+
+    @pytest.mark.asyncio
+    async def test_tool_call_event_includes_tool_call_id(self):
+        """tool_call event carries a tool_call_id matching ToolCallInfo.id."""
+        tc = _make_tc("dispatch_to_agent")
+
+        async def _stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(delta="", is_final=True, tool_calls=[tc])
+
+        agent, llm, tools = _make_agent(
+            _stream,
+            chat_response=ChatResponse(content="完成。", tool_calls=None),
+            dispatch_result=json.dumps({"type": "parse_done"}),
+        )
+
+        chunks = [c async for c in agent.handle_chat("解析简历")]
+        tool_call_events = [
+            c for c in chunks if isinstance(c, dict) and c.get("type") == "tool_call"
+        ]
+
+        assert len(tool_call_events) == 1
+        assert tool_call_events[0]["tool_call_id"] == "tc-001"
+
+    @pytest.mark.asyncio
+    async def test_tool_result_event_emitted_after_success(self):
+        """A successful dispatch yields a matching tool_result event, success=True."""
+        tc = _make_tc("dispatch_to_agent")
+
+        async def _stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(delta="", is_final=True, tool_calls=[tc])
+
+        dispatch_result = json.dumps(
+            {"type": "parse_done", "markdown_path": "resumes/a.md"}
+        )
+        agent, llm, tools = _make_agent(
+            _stream,
+            chat_response=ChatResponse(content="完成。", tool_calls=None),
+            dispatch_result=dispatch_result,
+        )
+
+        chunks = [c async for c in agent.handle_chat("解析简历")]
+        dict_chunks = [c for c in chunks if isinstance(c, dict)]
+
+        tool_call_events = [c for c in dict_chunks if c["type"] == "tool_call"]
+        tool_result_events = [c for c in dict_chunks if c["type"] == "tool_result"]
+
+        assert len(tool_call_events) == 1
+        assert len(tool_result_events) == 1
+        assert tool_result_events[0]["tool_call_id"] == tool_call_events[0]["tool_call_id"]
+        assert tool_result_events[0]["name"] == "dispatch_to_agent"
+        assert tool_result_events[0]["success"] is True
+        assert "parse_done" in tool_result_events[0]["result_summary"]
+
+    @pytest.mark.asyncio
+    async def test_tool_result_event_emitted_on_user_facing_error_short_circuit(self):
+        """Even when the tool result triggers the user_facing short-circuit, a
+        tool_result event (success=False) is still emitted, and Task 6.1's
+        existing assertion (exactly one tool_call event) still holds — tool_result
+        is a distinct event ``type`` and does not affect that count.
+        """
+        tc = _make_tc("dispatch_to_agent")
+
+        async def _stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(delta="", is_final=True, tool_calls=[tc])
+
+        error_message = "PDF 文件已损坏，无法解析"
+        error_result = json.dumps(
+            {"error": error_message, "user_facing": True}, ensure_ascii=False
+        )
+        agent, llm, tools = _make_agent(_stream, dispatch_result=error_result)
+
+        chunks = [c async for c in agent.handle_chat("解析损坏的PDF")]
+        dict_chunks = [c for c in chunks if isinstance(c, dict)]
+
+        tool_call_events = [c for c in dict_chunks if c["type"] == "tool_call"]
+        tool_result_events = [c for c in dict_chunks if c["type"] == "tool_result"]
+
+        assert len(tool_call_events) == 1, "Task 6.1 assertion must still hold"
+        assert len(tool_result_events) == 1
+        assert tool_result_events[0]["success"] is False
+        assert tool_result_events[0]["result_summary"] == error_message
+        assert tool_result_events[0]["tool_call_id"] == tool_call_events[0]["tool_call_id"]
+
+    @pytest.mark.asyncio
+    async def test_manage_user_memory_success_shape_via_handle_chat(self):
+        """manage_user_memory's {"success": true, ...} shape produces a
+        success=True tool_result when routed through the real dispatch loop."""
+        tc = _make_tc(
+            "manage_user_memory", '{"action": "add", "content": "岗位：后端"}'
+        )
+
+        async def _stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(delta="", is_final=True, tool_calls=[tc])
+
+        success_result = json.dumps(
+            {"success": True, "message": "已添加为条目 3", "index": 3}, ensure_ascii=False
+        )
+        agent, llm, tools = _make_agent(
+            _stream,
+            chat_response=ChatResponse(content="已保存。", tool_calls=None),
+            dispatch_result=success_result,
+        )
+
+        chunks = [c async for c in agent.handle_chat("记住岗位要求")]
+        tool_result_events = [
+            c for c in chunks if isinstance(c, dict) and c.get("type") == "tool_result"
+        ]
+
+        assert len(tool_result_events) == 1
+        assert tool_result_events[0]["success"] is True
+        assert tool_result_events[0]["result_summary"] == "已添加为条目 3"
+
+    @pytest.mark.asyncio
+    async def test_manage_user_memory_error_shape_via_handle_chat(self):
+        """manage_user_memory's {"error": ...} shape (no user_facing flag) produces
+        a success=False tool_result without short-circuiting the normal flow."""
+        tc = _make_tc("manage_user_memory", '{"action": "add"}')
+
+        async def _stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(delta="", is_final=True, tool_calls=[tc])
+
+        error_result = json.dumps(
+            {"error": "add 操作需要提供 content"}, ensure_ascii=False
+        )
+        agent, llm, tools = _make_agent(
+            _stream,
+            chat_response=ChatResponse(content="记录失败，请提供内容。", tool_calls=None),
+            dispatch_result=error_result,
+        )
+
+        chunks = [c async for c in agent.handle_chat("记住这个")]
+        tool_result_events = [
+            c for c in chunks if isinstance(c, dict) and c.get("type") == "tool_result"
+        ]
+
+        assert len(tool_result_events) == 1
+        assert tool_result_events[0]["success"] is False
+        assert tool_result_events[0]["result_summary"] == "add 操作需要提供 content"
+        # No user_facing flag → does not short-circuit, follow-up LLM call still happens.
+        llm.chat.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_multi_tool_call_pairs_tool_call_id_correctly(self):
+        """Two tool calls in the same round each get their own tool_call/tool_result
+        pair, matched by tool_call_id, without cross-contamination."""
+        tc1 = _make_tc(
+            "dispatch_to_agent",
+            '{"agent": "resume", "task": "t1"}',
+            tc_id="tc-aaa",
+        )
+        tc2 = _make_tc(
+            "manage_user_memory",
+            '{"action": "add", "content": "c"}',
+            tc_id="tc-bbb",
+        )
+
+        async def _stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(delta="", is_final=True, tool_calls=[tc1, tc2])
+
+        results_by_name = {
+            "dispatch_to_agent": json.dumps({"type": "parse_done"}),
+            "manage_user_memory": json.dumps(
+                {"success": True, "message": "已添加为条目 1"}, ensure_ascii=False
+            ),
+        }
+
+        async def _dispatch(name, arguments):
+            return results_by_name[name]
+
+        llm = MagicMock()
+        llm.chat_stream = _stream
+        llm.chat = AsyncMock(return_value=ChatResponse(content="完成。", tool_calls=None))
+
+        tools = MagicMock(spec=ToolRegistry)
+        tools.get_schemas.return_value = []
+        tools.dispatch = AsyncMock(side_effect=_dispatch)
+
+        memory = MagicMock(spec=MemoryModule)
+        user_memory = MagicMock(spec=UserMemoryStore)
+        user_memory.render.return_value = ""
+
+        agent = MainAgent(llm, tools, memory, user_memory)
+
+        chunks = [c async for c in agent.handle_chat("解析并记住偏好")]
+        dict_chunks = [c for c in chunks if isinstance(c, dict)]
+
+        tool_call_events = [c for c in dict_chunks if c["type"] == "tool_call"]
+        tool_result_events = [c for c in dict_chunks if c["type"] == "tool_result"]
+
+        assert len(tool_call_events) == 2
+        assert len(tool_result_events) == 2
+        assert {e["tool_call_id"] for e in tool_call_events} == {"tc-aaa", "tc-bbb"}
+
+        by_id = {e["tool_call_id"]: e for e in tool_result_events}
+        assert by_id["tc-aaa"]["name"] == "dispatch_to_agent"
+        assert by_id["tc-aaa"]["success"] is True
+        assert "parse_done" in by_id["tc-aaa"]["result_summary"]
+        assert by_id["tc-bbb"]["name"] == "manage_user_memory"
+        assert by_id["tc-bbb"]["success"] is True
+        assert by_id["tc-bbb"]["result_summary"] == "已添加为条目 1"
 
 
 # ── Helpers for Tasks 6.2 / 6.3 ──────────────────────────────────────────────
