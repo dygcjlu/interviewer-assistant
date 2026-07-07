@@ -1564,18 +1564,20 @@ git commit -m "test: raise main_agent/routes coverage to 70%+"
 
 > **顺序约束：** 必须在 Task 4.2（去重涉及 `get_candidate_by_name`/`save_candidate` 的改动）完成并稳定后再做，避免同文件并行改动。拆分为纯结构重构，**对外接口零变化**。
 
-### Task 7.1: 建立拆分前回归基线
+### Task 7.1: 建立拆分前回归基线（已完成，无代码提交，纯验证）
 
 **Files:**
 - 验证: 完整测试套件
 
-- [ ] **Step 1: 跑全量单元 + 集成测试，记录通过基线**
+- [x] **Step 1: 跑全量单元 + 集成测试，记录通过基线**
 
 Run:
 ```powershell
 .venv\Scripts\python -m pytest tests\unit tests\integration -q
 ```
 Expected: 全绿。记录测试数与耗时，作为拆分后对比基线（同名快照）。
+
+实际结果：**530 passed, 1 warning in 16.73s**（无失败）。此为 Task 7.6 拆分后回归对比基线。
 
 ### Task 7.2: 新建 `candidate_store.py` 并迁移候选人相关方法
 

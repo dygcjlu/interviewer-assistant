@@ -56,3 +56,5 @@ Task 6.4: complete (commit efe01b5, individual review Approved, zero findings; s
 Task 6.5: complete (commit 5edda17, individual review Approved, zero Critical/Important; routes.py already 71% with no changes needed, main_agent.py raised 67% -> 74% via 10 targeted unit tests, reviewer verified each was a meaningful assertion not padding; full suite 530 passed, ruff clean)
 
 ## Phase 3 — MainAgent + routes 测试补齐 sub-phase complete (Tasks 6.1-6.5)
+
+Task 7.1: complete (no code commit, verification-only; baseline recorded: 530 passed, 16.73s, 0 failures — reference snapshot for Task 7.6 post-split regression check)
