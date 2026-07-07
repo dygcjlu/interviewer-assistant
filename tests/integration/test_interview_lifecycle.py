@@ -183,3 +183,24 @@ async def test_get_eval_no_session_returns_409(client):
     r = await client.get("/api/interview/eval")
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "no_session"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_eval_nonexistent_interview_id_returns_404(client):
+    """interview_id 分支在 session 检查之前执行：不存在的 ID 应返回 404 not_found。"""
+    r = await client.get("/api/interview/eval", params={"interview_id": "nonexistent-id"})
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "not_found"
+
+
+# ── POST /api/interview/suggest ───────────────────────────────────────────────
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_suggest_without_session_returns_409(client):
+    """无活跃会话时调用 trigger_suggest 应返回 409 no_session。"""
+    r = await client.post("/api/interview/suggest")
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "no_session"
