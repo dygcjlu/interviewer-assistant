@@ -73,10 +73,12 @@ Task 8.4: complete (commit 825389d, see 8.3)
 Task 8.5: complete (commit 825389d, see 8.3; tool_cards dict correlates tool_call_id)
 Task 8.6: complete (commit 0d24a3f + 825389d, batch review Approved; 18 new unit tests, 548/548 pass, main_agent 77% coverage)
 
-## Phase 4 — Agent 工具调用可视化 sub-phase: Tasks 8.1-8.6 complete; Task 8.7 (e2e browser) pending — blocked on cursor-ide-browser MCP unavailable
+## Phase 4 — Agent 工具调用可视化 sub-phase complete (Tasks 8.1-8.7)
+
+Task 8.7: complete (e2e browser verification 2026-07-07; report .superpowers/sdd/briefs/task-8.7-report.md; manage_user_memory ✅ card + dispatch_to_agent ❌/⏳ cards verified via cursor-ide-browser on :8088)
 
 Task 9.1: complete (no code commit, verification-only; ruff clean, 548 passed, coverage 62.44% >= 60% gate)
 Task 9.2: complete (commit pending; updated context-memory.md, flows.md, storage.md for token count / streaming / dedup / store split)
 Task 9.3: complete (commit pending; updated docs/todo/05-ci-complete.md coverage status)
 
-## Phase 5 — 收尾验证: Tasks 9.1-9.3 complete. Rollout build phase complete except 3 blocked e2e browser tasks (3.5, 4.6, 8.7).
+## Phase 5 — 收尾验证: Tasks 9.1-9.3 complete. Rollout build phase complete except 2 blocked e2e browser tasks (3.5, 4.6).
