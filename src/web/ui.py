@@ -395,7 +395,7 @@ async def index() -> None:
 
         # Call /api/chat with SSE streaming
         await _chat_stream(
-            text, chat_col, chat_scroll, on_complete=_sync_candidate_panel
+            text, chat_col, chat_scroll, on_complete=_sync_candidate_panel, state=state
         )
 
     send_btn.on("click", lambda: asyncio.create_task(_do_send()))
@@ -919,23 +919,13 @@ async def _handle_upload(
     _bubble(chat_col, f"正在上传简历：{filename}…", sent=False, name="Agent")
     await _scroll(chat_scroll)
 
-    async def _do_upload_request(
-        candidate_id: str | None = None, overwrite: bool = False
-    ) -> dict | None:
-        params: dict[str, Any] = {}
-        if candidate_id:
-            params["candidate_id"] = candidate_id
-        if overwrite:
-            params["overwrite"] = "true"
+    async def _do_upload_request() -> dict | None:
         try:
             async with httpx.AsyncClient(timeout=180) as client:
                 r = await client.post(
                     f"{_base_url}/api/resume/upload",
                     files={"file": (filename, content, "application/pdf")},
-                    params=params,
                 )
-                if r.status_code == 409:
-                    return {"_conflict": r.json()}
                 r.raise_for_status()
                 return r.json()
         except Exception as exc:
@@ -947,21 +937,6 @@ async def _handle_upload(
     data = await _do_upload_request()
     if data is None:
         return
-
-    if "_conflict" in data:
-        conflict = data["_conflict"].get("detail", {})
-        existing_name = conflict.get("existing_candidate_name", filename)
-        existing_id = conflict.get("existing_candidate_id", "")
-        confirmed = await _confirm_overwrite_dialog(existing_name)
-        if not confirmed:
-            _bubble(
-                chat_col, "已取消导入，保留原有候选人数据。", sent=False, name="Agent"
-            )
-            await _scroll(chat_scroll)
-            return
-        data = await _do_upload_request(candidate_id=existing_id, overwrite=True)
-        if data is None:
-            return
 
     file_path = data.get("file_path", "")
     safe_stem = data.get("safe_stem", "")
@@ -984,6 +959,7 @@ async def _handle_upload(
                         chat_col,
                         chat_scroll,
                         on_complete=on_chat_complete,
+                        state=state,
                     )
                 ),
             ).classes("q-mt-xs")
@@ -997,6 +973,7 @@ async def _trigger_parse(
     chat_col,
     chat_scroll,
     on_complete=None,
+    state: dict | None = None,
 ) -> None:
     """用户点击「解析简历」按钮后触发的解析请求。"""
     btn.disable()
@@ -1005,15 +982,18 @@ async def _trigger_parse(
         f"简历 {file_path} 已就绪，请解析为 Markdown 并保存为 {md_path}，"
         f"解析完成后提取候选人基本信息（姓名、邮箱、电话、技能、工作年限、职位等）"
     )
-    await _chat_stream(parse_msg, chat_col, chat_scroll, on_complete=on_complete)
+    await _chat_stream(parse_msg, chat_col, chat_scroll, on_complete=on_complete, state=state)
 
 
-async def _chat_stream(text: str, chat_col, chat_scroll, on_complete=None) -> None:
+async def _chat_stream(
+    text: str, chat_col, chat_scroll, on_complete=None, state: dict | None = None
+) -> None:
     """调用 /api/chat SSE 接口，流式展示回复。
 
     SSE 事件类型：
     - {"type": "delta", "delta": "..."}  → 追加到回复气泡
     - {"type": "tool_call", "name": "...", "args": "..."}  → 工具调用行
+    - {"type": "duplicate_candidate", ...}  → 三选一去重弹窗
     """
     reply_text = ""
     reply_label = None
@@ -1044,6 +1024,45 @@ async def _chat_stream(text: str, chat_col, chat_scroll, on_complete=None) -> No
                         _render_tool_call_row(
                             chat_col, chunk.get("name", ""), chunk.get("args", "")
                         )
+                        await _scroll(chat_scroll)
+
+                    elif chunk_type == "duplicate_candidate":
+                        existing_name = chunk.get(
+                            "existing_candidate_name", chunk.get("new_name", "")
+                        )
+                        action = await _confirm_dedup_dialog(existing_name)
+                        resolved = None
+                        try:
+                            async with httpx.AsyncClient(timeout=60) as dedup_client:
+                                r = await dedup_client.post(
+                                    f"{_base_url}/api/resume/resolve-duplicate",
+                                    json={
+                                        "pending_id": chunk.get("pending_id", ""),
+                                        "action": action,
+                                    },
+                                )
+                                r.raise_for_status()
+                                resolved = r.json()
+                        except Exception as exc:
+                            logger.exception("resolve-duplicate failed")
+                            _error(chat_col, f"去重处理失败：{exc}")
+                        if resolved and resolved.get("action") == "cancel":
+                            _bubble(
+                                chat_col,
+                                "已取消本次上传，未创建候选人档案。",
+                                sent=False,
+                                name="Agent",
+                            )
+                        elif resolved:
+                            if state is not None:
+                                state["candidate_id"] = resolved.get(
+                                    "candidate_id", state.get("candidate_id")
+                                )
+                                if resolved.get("candidate_name"):
+                                    state["candidate_name"] = resolved["candidate_name"]
+                            _bubble(
+                                chat_col, "候选人档案已保存。", sent=False, name="Agent"
+                            )
                         await _scroll(chat_scroll)
 
                     elif chunk_type == "delta":
@@ -1122,33 +1141,34 @@ def _tool_args_summary(tool_name: str, args_str: str) -> str:
     return "  ".join(parts)
 
 
-async def _confirm_overwrite_dialog(candidate_name: str) -> bool:
-    dialog_done: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
+async def _confirm_dedup_dialog(existing_name: str) -> str:
+    """显示三选一去重弹窗，返回 'overwrite' | 'keep_both' | 'cancel'。"""
+    done: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
     with ui.dialog() as dialog, ui.card().classes("p-4 gap-3"):
-        ui.label(f"候选人「{candidate_name}」已存在").classes("text-base font-semibold")
-        ui.label("是否覆盖现有数据（简历、题目将重新解析）？").classes(
+        ui.label(f"候选人「{existing_name}」已存在").classes("text-base font-semibold")
+        ui.label("解析出的姓名与已有候选人重名，请选择处理方式：").classes(
             "text-sm text-grey-7"
         )
+
+        def _choose(action: str) -> None:
+            if not done.done():
+                done.set_result(action)
+            dialog.close()
+
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
-
-            def _cancel():
-                if not dialog_done.done():
-                    dialog_done.set_result(False)
-                dialog.close()
-
-            def _confirm():
-                if not dialog_done.done():
-                    dialog_done.set_result(True)
-                dialog.close()
-
-            ui.button("取消", on_click=_cancel).props("flat dense")
-            ui.button("覆盖", on_click=_confirm).props(
+            ui.button("取消本次上传", on_click=lambda: _choose("cancel")).props(
+                "flat dense"
+            )
+            ui.button("保留两份独立档案", on_click=lambda: _choose("keep_both")).props(
+                "outline dense"
+            )
+            ui.button("覆盖已有档案", on_click=lambda: _choose("overwrite")).props(
                 "unelevated dense color=negative"
             )
 
     dialog.open()
-    return await dialog_done
+    return await done
 
 
 def _render_candidate_list(
