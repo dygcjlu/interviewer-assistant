@@ -1510,13 +1510,13 @@ git add tests/unit/test_main_agent.py
 git commit -m "test: cover MainAgent memory nudge trigger conditions"
 ```
 
-### Task 6.4: `routes.py` 剩余错误分支测试（404/409）
+### Task 6.4: `routes.py` 剩余错误分支测试（404/409）（已完成，commit `efe01b5`，单任务审查 Approved，零发现）
 
 **Files:**
-- Test: `tests/integration/test_routes.py`
+- Test: `tests/integration/test_interview_lifecycle.py`（本节假设的 `test_routes.py` 实际不存在，该文件从未建立，测试按功能域分散在多个文件中）
 - 被测: `src/web/routes.py`（404 `not_found`、409 `no_session`/`interview_in_progress`/`session_error` 等分支）
 
-- [ ] **Step 1: 写用例**
+- [x] **Step 1: 写用例**（实测发现本节 5 条场景中 3 条已被现有测试覆盖：`resume/profile` 404（`test_resume.py`）、`interview/stop` 409（`test_interview_lifecycle.py`）、上传期 `interview_in_progress` 409（`test_resume.py`），reviewer 抽查确认属实；实际新增仅针对真正缺失的 2 条，追加到 `test_interview_lifecycle.py`）
 
 覆盖：
 - `GET /api/resume/profile?candidate_id=<不存在>` → 404 `not_found`。
@@ -1525,7 +1525,7 @@ git commit -m "test: cover MainAgent memory nudge trigger conditions"
 - `GET /api/interview/eval?interview_id=<不存在>` → 404 `not_found`。
 - 面试进行中上传简历 → 409 `interview_in_progress`（构造 session.stage=INTERVIEWING）。
 
-- [ ] **Step 2: 运行 + Commit**
+- [x] **Step 2: 运行 + Commit**（`efe01b5`；reviewer 独立追踪确认 `get_eval` 先判 `interview_id` 后判 session，无 session 客户端确实命中 404 而非误判为 409；全量 520 项通过）
 
 Run:
 ```powershell
