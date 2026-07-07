@@ -955,15 +955,15 @@ Expected: `http://127.0.0.1:8000` 可访问。
 
 **建议方案（需实现者验证细化）：** 比照 `cancel_current_stream()` 的 cancel-and-await 模式，在 `_on_trigger_fired()` 创建新 task 前，先检查并取消/await 掉任何已存在、未完成的 `self._current_stream_task`（复用或提取一个共享的私有辅助方法，避免与 `cancel_current_stream()` 逻辑重复）。
 
-- [ ] **Step 1: 写失败测试复现重叠触发场景**
+- [x] **Step 1: 写失败测试复现重叠触发场景**（复用 `_SlowStreamLLM`；测试显式在第二次触发前断言 `not first_task.done()` 证明真正重叠；RED 阶段确认第一个 task 处于 `pending`）
 
 构造一个慢速 `_StreamLLM`（复用 Task 3.3+3.4 已有的 `_SlowStreamLLM` 辅助类），连续两次调用 `_on_trigger_fired()`（间隔小于第一次流完成所需时间），断言：第一次的 task 最终被取消/完成（不是"自然运行到底"），且不产生两份重叠的 `suggestion_delta`/`suggestion_final` 推送。
 
-- [ ] **Step 2: 实现修复**
+- [x] **Step 2: 实现修复**（在 `_on_trigger_fired()` 创建新 task 前复用 `cancel_current_stream()` 的 cancel-and-await-swallow 模式；reviewer 独立追踪调用序列确认新 task 运行 `generate_suggestion` 时 `previous_task is current_task` 恒成立、Task 3.3+3.4 的保护正确 no-op，两者无冲突）
 
 在 `_on_trigger_fired()` 创建新 task 前加入取消旧 task 的逻辑；确认不与 Task 3.3+3.4 修复的自我取消保护冲突（新 task 尚未创建时，`self._current_stream_task` 必然指向一个不同的、真正的旧 task，不存在自引用问题）。
 
-- [ ] **Step 3: 运行验证 + 回归**
+- [x] **Step 3: 运行验证 + 回归**（19/19 + 494/494 全过，5 次重跑非 flaky，ruff/black 干净；reviewer 独立重跑 11/11 + 5 次重复确认）
 
 Run:
 ```powershell
@@ -972,12 +972,13 @@ Run:
 ```
 Expected: 新测试 PASS，无回归。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/agents/interview_agent.py tests/unit/test_agents.py
 git commit -m "fix: cancel overlapping suggestion trigger task before starting a new one"
 ```
+（提交 e70b209；单任务审查 Approved，仅 2 项 Minor 不阻塞：cancel-await-swallow 模式三处重复、日志 request_id 记录不够精确）
 
 ---
 

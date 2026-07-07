@@ -33,4 +33,6 @@ Task 3.2: complete (commit 79c8e30, batch review with 3.1/3.3/3.4 Approved)
 Task 3.3: complete (commit 050f76f, batch review with 3.1/3.2/3.4 Approved; found and fixed a real self-cancellation race bug in generate_suggestion()'s cancel-previous-stream preamble, independently reproduced and verified correct by reviewer)
 Task 3.4: complete (commit 050f76f, batch review with 3.1-3.3 Approved; two tests covering direct-call and _runner-wrapped cancellation paths, 5x repeat runs non-flaky)
 
-## Phase 2 — 追问建议真流式输出 sub-phase complete (Tasks 3.1-3.4); Task 3.5 (e2e browser) and new backlog Task 3.6 (overlapping-trigger orphan task, Important, discovered during 3.3/3.4 review) still pending
+Task 3.6: complete (commit e70b209, individual review Approved; cancels genuinely-different pre-existing task before creating new one in _on_trigger_fired(), verified no conflict with Task 3.3/3.4's self-cancellation guard, inlined rather than extracted shared helper)
+
+## Phase 2 — 追问建议真流式输出 sub-phase: Tasks 3.1-3.4, 3.6 complete; Task 3.5 (e2e browser) still pending — blocked on cursor-ide-browser MCP unavailable this session
