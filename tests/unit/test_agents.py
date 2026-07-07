@@ -720,6 +720,51 @@ class TestInterviewAgent:
         # 被 _runner 吞掉，task 正常结束而非进入 cancelled 状态
         assert not task.cancelled()
 
+    @pytest.mark.asyncio
+    async def test_on_trigger_fired_overlapping_calls_cancels_previous_task(self):
+        """两次 `_on_trigger_fired` 调用在时间上真正重叠（第一次仍在流式生成
+        中途，尚未结束）时，第二次调用必须先取消并 await 掉第一次的 task，
+        而不是直接用新 task 覆盖 `self._current_stream_task` 引用、把第一次
+        的 task 变成无人持有、无法感知/取消的孤儿 task（Task 3.6）。
+        """
+        agent = self._make_interview_agent_with_llm()
+        agent.llm_client = self._SlowStreamLLM()
+        session = _make_session()
+        await agent.on_activate(session)
+
+        events: list[dict] = []
+
+        async def _record(event):
+            events.append(event)
+
+        agent.attach_ws_sender(_record)
+
+        await agent._on_trigger_fired(request_id=0)
+        first_task = agent._current_stream_task
+        assert first_task is not None and not first_task.done()
+
+        await asyncio.sleep(0.07)  # 第一个 delta 已到，第一次触发仍在流式生成中途
+        assert not first_task.done()  # 确认是真正的重叠，而非顺序触发
+
+        await agent._on_trigger_fired(request_id=1)
+        second_task = agent._current_stream_task
+
+        assert second_task is not first_task
+        # 核心断言：第二次触发返回时，第一次的 task 必须已被取消并 await 结束，
+        # 而不是被丢弃在后台继续运行、变成孤儿 task
+        assert first_task.done()
+        # 与 _runner 吞掉 CancelledError 的既有行为一致
+        assert not first_task.cancelled()
+
+        await second_task  # 等待第二次触发自然结束
+
+        final_events = [e for e in events if e["type"] == "suggestion_final"]
+        # 第一次触发被中途取消，不应产生自己的 suggestion_final 推送；
+        # 只有第二次触发的完整结果应被推送（否则即为孤儿 task 造成的重复推送）
+        assert len(final_events) == 1
+        assert final_events[0]["request_id"] == 1
+        assert final_events[0]["text"] == "一二三"
+
 
 # ── MainAgent._build_system_prompt date injection ─────────────────────────────
 

@@ -402,6 +402,29 @@ class InterviewAgent(BaseAgent):
         if self._ws_sender is None:
             logger.warning("InterviewAgent on_trigger_fired without ws_sender")
 
+        # Task 3.6: 若已存在一个真正意义上、仍在运行的旧 task（两次触发在时间上
+        # 发生重叠——手动连续触发或自动触发耗时超过 min_interval），必须先取消
+        # 并 await 掉它，再创建新 task；否则下面对 self._current_stream_task 的
+        # 直接覆盖赋值会让旧 task 的引用彻底丢失，变成无人持有、cancel_current_stream()
+        # 也无法感知的孤儿 task，导致其在后台跑到自然结束（多余的 LLM 调用 + 重复推送）。
+        # 注意：赋值尚未发生，此处的 previous_task 必然是与"即将创建的新 task"不同的
+        # 旧 task，不存在 generate_suggestion preamble 所防范的自我取消问题。
+        previous_task = self._current_stream_task
+        if previous_task is not None and not previous_task.done():
+            logger.info(
+                "InterviewAgent on_trigger_fired cancelling overlapping previous task request_id=%d",
+                request_id,
+            )
+            previous_task.cancel()
+            try:
+                await previous_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception(
+                    "InterviewAgent: overlapping previous stream task raised unexpected error"
+                )
+
         async def _runner() -> None:
             tokens_yielded = 0
             accumulated_text = ""
