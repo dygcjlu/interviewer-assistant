@@ -744,7 +744,7 @@ git commit -m "test: cover cn/en mixed token estimation difference"
 
 **Context:** 现状 `response = await self.llm_client.chat(messages)` 后一次性 `yield reply_text`。改为 `chat_stream` 逐 `delta` yield，`prompt_tokens`/`completion_tokens` 从 `is_final` chunk 累计结果取。
 
-- [ ] **Step 1: 写失败测试（多次 delta + 日志 token 来自流式结果）**
+- [x] **Step 1: 写失败测试（多次 delta + 日志 token 来自流式结果）**（真实测试文件是 `tests/unit/test_agents.py::TestInterviewAgent`，非本节假设的 `test_interview_agent.py`）
 
 在 `tests/unit/test_interview_agent.py` 新增：
 
@@ -781,7 +781,7 @@ async def test_generate_suggestion_streams_multiple_deltas(interview_agent_with_
 
 > `interview_agent_with_session` fixture：构造带激活 session 的 `InterviewAgent`（复用现有测试夹具或新建，注意 `on_activate` 需 session）。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**（RED 确认：`assert 1 >= 2` 失败，`len(['追问建议'])==1`）
 
 Run:
 ```powershell
@@ -789,7 +789,7 @@ Run:
 ```
 Expected: FAIL（现状只 yield 一段）。
 
-- [ ] **Step 3: 改写 `generate_suggestion` 的生成段（`interview_agent.py:266-306`）**
+- [x] **Step 3: 改写 `generate_suggestion` 的生成段（`interview_agent.py:266-306`）**（`accumulated_content` 兜底分支按 YAGNI 移除，核实真实 `OpenAICompatibleClient.chat_stream()` 该分支不可达，reviewer 复核确认判断正确）
 
 ```python
         try:
@@ -837,7 +837,7 @@ Expected: FAIL（现状只 yield 一段）。
 
 > 注意：删除原 `response = await self.llm_client.chat(messages)` 及 `response.prompt_tokens`/`content` 相关行；保留 `_enforce_token_budget` 与之前的取消/日志逻辑。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**（GREEN；因生产代码变更修复了 3 个既有测试缺失 `chat_stream` mock 的问题；491 unit+integration 全过）
 
 Run:
 ```powershell
@@ -845,12 +845,13 @@ Run:
 ```
 Expected: PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/agents/interview_agent.py tests/unit/test_interview_agent.py
 git commit -m "feat: stream follow-up suggestions token-by-token via chat_stream"
 ```
+（提交 79c8e30；批次审查（与 3.3+3.4 一起）Approved）
 
 ### Task 3.3 + 3.4: 流式场景下取消逻辑验证 + 取消/多 yield 单测
 
@@ -860,7 +861,7 @@ git commit -m "feat: stream follow-up suggestions token-by-token via chat_stream
 
 **Context:** `_current_stream_task` 取消路径原本针对非流式实现验证过；改流式后需确认取消不产生悬挂任务或状态不一致。
 
-- [ ] **Step 1: 写取消场景测试**
+- [x] **Step 1: 写取消场景测试**（**发现真实 bug**：`generate_suggestion()` 开头"取消上一次流"预处理存在自我取消竞态——`asyncio.create_task()` 同步赋值 `self._current_stream_task` 后，协程体首次调度时该预处理其实在取消/await 自己，导致该字段被无条件清空为 `None`，`cancel_current_stream()`/`on_deactivate()` 在流运行期间完全失效。写了两个测试分别覆盖直接调用路径与 `_runner` 包装路径）
 
 ```python
 @pytest.mark.unit
@@ -894,7 +895,7 @@ async def test_generate_suggestion_cancel_midstream(interview_agent_with_session
     assert agent._current_stream_task is None or agent._current_stream_task.done()
 ```
 
-- [ ] **Step 2: 运行**
+- [x] **Step 2: 运行**（修复前 `assert task.done()` 失败，证实 bug；修复后（`current_task is not previous_task` 判断 + 清空逻辑移入 if 块内）5 次重跑稳定通过，reviewer 独立复现验证修复正确无回归）
 
 Run:
 ```powershell
@@ -902,12 +903,13 @@ Run:
 ```
 Expected: PASS；若失败，检查 `generate_suggestion` 取消分支是否 `raise`（应保留 `raise`），以及 `_runner`（`:405`）对 `CancelledError` 的吞并是否正确。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/agents/interview_agent.py tests/unit/test_interview_agent.py
 git commit -m "test: verify suggestion stream cancellation has no dangling task"
 ```
+（实际提交为 `fix: prevent generate_suggestion self-cancellation from nulling _current_stream_task`（`050f76f`），因发现真实 bug 按惯例改用 `fix:` 前缀；批次审查（与 3.1+3.2 一起）Approved。审查中另发现一个范围外的关联问题并记录为新增 Task 3.6：`_on_trigger_fired()` 重叠调用会产生真正孤儿 task，不阻塞本批次）
 
 ### Task 3.5: 【端到端浏览器验证】追问流式展示 + 中途中止
 
@@ -936,6 +938,46 @@ Expected: `http://127.0.0.1:8000` 可访问。
 - [ ] **Step 4: 记录验收结果**
 
 将截图路径与结论写入本任务 report（通过/问题）。**不新增 CI 用例。**
+
+### Task 3.6：修复 `_on_trigger_fired()` 重叠调用产生孤儿 task（Task 3.3+3.4 批次审查中新发现，Important，非本次改动引入的回归）
+
+**背景：** Task 3.3+3.4 的批次审查（reviewer 独立复现验证）发现一个与已修复的自我取消 bug **同主题但触发场景不同**的关联问题：`_on_trigger_fired()`（`src/agents/interview_agent.py`，约第 446 行）创建新 task 时是**直接覆盖** `self._current_stream_task = asyncio.create_task(_runner())`，未在赋值前取消并 `await` 掉一个"真正意义上、仍在运行的上一次触发"的 task。
+
+**触发条件：** 两次 `_on_trigger_fired` 调用在时间上发生重叠——例如：
+- 手动触发 `trigger_suggestion` 连续快速调用两次（该分支目前没有 `min_interval` 限流）；
+- 自动触发时单次生成耗时超过 `SuggestionTrigger._silence_timer()`（`src/audio/trigger.py:98-118`）的 `min_interval_sec`（该计时是从上一次触发**开始**算起，不是从**结束**算起）。
+
+**后果：** 第一次触发的 task 因引用被覆盖而变成真正意义上的孤儿任务——无人再持有引用，`cancel_current_stream()` 无法感知/取消它，它会在后台继续运行到自然结束（浪费一次 LLM 调用、可能产生两份并发的 `suggestion_delta`/`suggestion_final` 事件推送到前端）。
+
+**Files:**
+- Modify: `src/agents/interview_agent.py`（`_on_trigger_fired()` 创建新 task 前的逻辑）
+- Test: `tests/unit/test_agents.py::TestInterviewAgent`
+
+**建议方案（需实现者验证细化）：** 比照 `cancel_current_stream()` 的 cancel-and-await 模式，在 `_on_trigger_fired()` 创建新 task 前，先检查并取消/await 掉任何已存在、未完成的 `self._current_stream_task`（复用或提取一个共享的私有辅助方法，避免与 `cancel_current_stream()` 逻辑重复）。
+
+- [ ] **Step 1: 写失败测试复现重叠触发场景**
+
+构造一个慢速 `_StreamLLM`（复用 Task 3.3+3.4 已有的 `_SlowStreamLLM` 辅助类），连续两次调用 `_on_trigger_fired()`（间隔小于第一次流完成所需时间），断言：第一次的 task 最终被取消/完成（不是"自然运行到底"），且不产生两份重叠的 `suggestion_delta`/`suggestion_final` 推送。
+
+- [ ] **Step 2: 实现修复**
+
+在 `_on_trigger_fired()` 创建新 task 前加入取消旧 task 的逻辑；确认不与 Task 3.3+3.4 修复的自我取消保护冲突（新 task 尚未创建时，`self._current_stream_task` 必然指向一个不同的、真正的旧 task，不存在自引用问题）。
+
+- [ ] **Step 3: 运行验证 + 回归**
+
+Run:
+```powershell
+.venv\Scripts\python -m pytest tests\unit\test_agents.py -k "trigger or cancel" -v
+.venv\Scripts\python -m pytest tests\unit tests\integration -q
+```
+Expected: 新测试 PASS，无回归。
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/agents/interview_agent.py tests/unit/test_agents.py
+git commit -m "fix: cancel overlapping suggestion trigger task before starting a new one"
+```
 
 ---
 

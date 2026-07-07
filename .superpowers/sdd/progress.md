@@ -27,3 +27,10 @@ Task 2.3: complete (commit c53bb7a, batch review with 2.4 Approved; real-tiktoke
 Task 2.4: complete (commit 2ae077b, batch review with 2.3 Approved; discovered new exact estimate is HIGHER than old //3 heuristic for CN-heavy text, opposite of design doc's original assumption — asserted the empirical direction, judged correct by reviewer; design doc line 43 stale-assumption correction deferred as accepted Minor to closing tasks 9.2/9.3)
 
 ## Phase 2 — Token 精确计数 sub-phase complete (Tasks 2.1-2.4)
+
+Task 3.1: complete (commit 79c8e30, batch review with 3.2/3.3/3.4 Approved)
+Task 3.2: complete (commit 79c8e30, batch review with 3.1/3.3/3.4 Approved)
+Task 3.3: complete (commit 050f76f, batch review with 3.1/3.2/3.4 Approved; found and fixed a real self-cancellation race bug in generate_suggestion()'s cancel-previous-stream preamble, independently reproduced and verified correct by reviewer)
+Task 3.4: complete (commit 050f76f, batch review with 3.1-3.3 Approved; two tests covering direct-call and _runner-wrapped cancellation paths, 5x repeat runs non-flaky)
+
+## Phase 2 — 追问建议真流式输出 sub-phase complete (Tasks 3.1-3.4); Task 3.5 (e2e browser) and new backlog Task 3.6 (overlapping-trigger orphan task, Important, discovered during 3.3/3.4 review) still pending
