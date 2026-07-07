@@ -19,7 +19,7 @@ from src.agents.resume_agent import (
 from src.framework.context import ContextConfig, ContextManager
 from src.framework.prompt_builder import AgentConfig, PromptBuilder
 from src.framework.tool_registry import ToolRegistry
-from src.llm.protocol import ChatResponse
+from src.llm.protocol import ChatResponse, StreamChunk
 from src.models.candidate import CandidateProfile
 from src.models.exceptions import LLMResponseError
 from src.models.message import FunctionCallInfo, Message, ToolCallInfo
@@ -491,10 +491,22 @@ class TestInterviewAgent:
     def _make_interview_agent_with_llm(self, content: str = "追问建议"):
         from src.agents.interview_agent import InterviewAgent
 
+        async def _chat_stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            if content:
+                yield StreamChunk(delta=content)
+            yield StreamChunk(
+                delta="",
+                is_final=True,
+                accumulated_content=content,
+                prompt_tokens=100,
+                completion_tokens=20,
+            )
+
         mock_llm = MagicMock()
         mock_llm.chat = AsyncMock(
             return_value=ChatResponse(content=content, tool_calls=None)
         )
+        mock_llm.chat_stream = _chat_stream
         mock_llm.count_tokens = MagicMock(return_value=100)
         registry = ToolRegistry()
         pb = _make_prompt_builder()
@@ -544,9 +556,14 @@ class TestInterviewAgent:
         from src.models.exceptions import LLMConnectionError
 
         agent = self._make_interview_agent_with_llm()
-        agent.llm_client.chat = AsyncMock(
-            side_effect=LLMConnectionError("connection failed")
-        )
+
+        async def _raising_chat_stream(
+            messages, tools=None, temperature=0.7, timeout_sec=None
+        ):
+            raise LLMConnectionError("connection failed")
+            yield  # pragma: no cover - unreachable, keeps this an async generator
+
+        agent.llm_client.chat_stream = _raising_chat_stream
         session = _make_session()
         await agent.on_activate(session)
         # Should not raise, just swallow the error
@@ -554,6 +571,30 @@ class TestInterviewAgent:
         async for token in agent.generate_suggestion(1):
             results.append(token)
         assert results == []
+
+    @pytest.mark.asyncio
+    async def test_generate_suggestion_streams_multiple_deltas(self):
+        """generate_suggestion 应逐 delta yield（真流式），而非一次性吐出整段文本。"""
+        agent = self._make_interview_agent_with_llm()
+        session = _make_session()
+        await agent.on_activate(session)
+
+        async def _chat_stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            for piece in ["建议", "：可", "追问项目细节"]:
+                yield StreamChunk(delta=piece)
+            yield StreamChunk(
+                delta="",
+                is_final=True,
+                accumulated_content="建议：可追问项目细节",
+                prompt_tokens=123,
+                completion_tokens=7,
+            )
+
+        agent.llm_client.chat_stream = _chat_stream
+
+        tokens = [t async for t in agent.generate_suggestion(request_id=0)]
+        assert len(tokens) >= 2  # 逐段而非一次性
+        assert "".join(tokens) == "建议：可追问项目细节"
 
     @pytest.mark.asyncio
     async def test_handle_request_trigger_suggestion_activated(self):

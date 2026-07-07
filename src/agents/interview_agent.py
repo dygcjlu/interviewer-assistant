@@ -276,11 +276,18 @@ class InterviewAgent(BaseAgent):
             return
 
         try:
-            response = await self.llm_client.chat(messages)
-            reply_text = (response.content or "").strip()
-            prompt_tokens = response.prompt_tokens
-            completion_tokens = response.completion_tokens
+            reply_text = ""
+            prompt_tokens = 0
+            completion_tokens = 0
+            async for chunk in self.llm_client.chat_stream(messages):
+                if chunk.delta:
+                    reply_text += chunk.delta
+                    yield chunk.delta
+                if chunk.is_final:
+                    prompt_tokens = chunk.prompt_tokens or 0
+                    completion_tokens = chunk.completion_tokens or 0
 
+            reply_text = reply_text.strip()
             assistant_msg = Message(role="assistant", content=reply_text)
             if self._logger is not None:
                 await self._logger.append([assistant_msg])
@@ -296,9 +303,6 @@ class InterviewAgent(BaseAgent):
                 elapsed_ms,
                 truncate(reply_text),
             )
-
-            if reply_text:
-                yield reply_text
 
         except asyncio.CancelledError:
             elapsed_ms = (time.perf_counter() - start) * 1000
