@@ -1050,7 +1050,9 @@ async def _chat_stream(
                         existing_name = chunk.get(
                             "existing_candidate_name", chunk.get("new_name", "")
                         )
-                        action = await _confirm_dedup_dialog(existing_name)
+                        action = await _confirm_dedup_dialog(
+                            existing_name, parent=chat_col
+                        )
                         resolved = None
                         try:
                             async with httpx.AsyncClient(timeout=60) as dedup_client:
@@ -1165,33 +1167,35 @@ def _tool_args_summary(tool_name: str, args_str: str) -> str:
     return "  ".join(parts)
 
 
-async def _confirm_dedup_dialog(existing_name: str) -> str:
+async def _confirm_dedup_dialog(existing_name: str, *, parent) -> str:
     """显示三选一去重弹窗，返回 'overwrite' | 'keep_both' | 'cancel'。"""
     done: asyncio.Future[str] = asyncio.get_event_loop().create_future()
 
-    with ui.dialog() as dialog, ui.card().classes("p-4 gap-3"):
-        ui.label(f"候选人「{existing_name}」已存在").classes("text-base font-semibold")
-        ui.label("解析出的姓名与已有候选人重名，请选择处理方式：").classes(
-            "text-sm text-grey-7"
-        )
-
-        def _choose(action: str) -> None:
-            if not done.done():
-                done.set_result(action)
-            dialog.close()
-
-        with ui.row().classes("w-full justify-end gap-2 mt-2"):
-            ui.button("取消本次上传", on_click=lambda: _choose("cancel")).props(
-                "flat dense"
-            )
-            ui.button("保留两份独立档案", on_click=lambda: _choose("keep_both")).props(
-                "outline dense"
-            )
-            ui.button("覆盖已有档案", on_click=lambda: _choose("overwrite")).props(
-                "unelevated dense color=negative"
+    # SSE 流回调中创建 UI 必须进入父容器 slot，否则会触发 NiceGUI slot stack 为空错误。
+    with parent:
+        with ui.dialog() as dialog, ui.card().classes("p-4 gap-3"):
+            ui.label(f"候选人「{existing_name}」已存在").classes("text-base font-semibold")
+            ui.label("解析出的姓名与已有候选人重名，请选择处理方式：").classes(
+                "text-sm text-grey-7"
             )
 
-    dialog.open()
+            def _choose(action: str) -> None:
+                if not done.done():
+                    done.set_result(action)
+                dialog.close()
+
+            with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                ui.button("取消本次上传", on_click=lambda: _choose("cancel")).props(
+                    "flat dense"
+                )
+                ui.button(
+                    "保留两份独立档案", on_click=lambda: _choose("keep_both")
+                ).props("outline dense")
+                ui.button("覆盖已有档案", on_click=lambda: _choose("overwrite")).props(
+                    "unelevated dense color=negative"
+                )
+
+        dialog.open()
     return await done
 
 

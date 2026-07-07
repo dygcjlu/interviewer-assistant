@@ -33,9 +33,13 @@ Task 3.2: complete (commit 79c8e30, batch review with 3.1/3.3/3.4 Approved)
 Task 3.3: complete (commit 050f76f, batch review with 3.1/3.2/3.4 Approved; found and fixed a real self-cancellation race bug in generate_suggestion()'s cancel-previous-stream preamble, independently reproduced and verified correct by reviewer)
 Task 3.4: complete (commit 050f76f, batch review with 3.1-3.3 Approved; two tests covering direct-call and _runner-wrapped cancellation paths, 5x repeat runs non-flaky)
 
-Task 3.6: complete (commit e70b209, individual review Approved; cancels genuinely-different pre-existing task before creating new one in _on_trigger_fired(), verified no conflict with Task 3.3/3.4's self-cancellation guard, inlined rather than extracted shared helper)
+Task 3.5: complete (E2E browser 2026-07-07; 5 suggestion_delta WS events; report .superpowers/sdd/briefs/task-3.5-report.md)
 
-## Phase 2 — 追问建议真流式输出 sub-phase: Tasks 3.1-3.4, 3.6 complete; Task 3.5 (e2e browser) still pending — blocked on cursor-ide-browser MCP unavailable this session
+Task 4.6: complete (E2E browser 2026-07-07; fixed ui.py dedup dialog parent slot bug; cancel branch verified; report .superpowers/sdd/briefs/task-4.6-report.md)
+
+## Phase 2 fully complete (including blocked e2e tasks 3.5, 4.6)
+
+## Build phase complete — all tasks.md items checked; final gate: ruff clean + 548 passed + 62.43% coverage
 
 Task 4.1: complete (design/investigation task, no code commit; report .superpowers/sdd/task-4.1-report.md; corrected brief's wrong assumption that dispatch_to_agent.py is an SSE generator, redesigned event short-circuit to live in main_agent.py tool loop; identified premature session.candidate mutation risk and designed dataclasses.replace-based fix)
 Task 4.2: complete (commit 1040a5b, batch review with 4.4 Approved after 1 fix round; fix commit a2654e3 for shared pending-object mutation bug in resolve_duplicate's overwrite branch, re-review Approved)
