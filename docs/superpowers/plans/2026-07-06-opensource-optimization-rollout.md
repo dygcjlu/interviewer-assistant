@@ -1001,11 +1001,13 @@ git commit -m "fix: cancel overlapping suggestion trigger task before starting a
 3. 命中重名时**不立即持久化**：把解析出的 `CandidateProfile` + `resume_markdown` 暂存到一个"待决议 pending"结构（内存字典，key=pending_id），并通过聊天 SSE 向前端 yield 一个新事件 `{"type":"duplicate_candidate", "pending_id":..., "existing_candidate_id":..., "existing_candidate_name":..., "new_name":...}`。
 4. 新增 REST 端点 `POST /api/resume/resolve-duplicate`，body `{pending_id, action}`（`action ∈ {overwrite, keep_both, cancel}`），执行对应持久化并清理 pending。
 
-- [ ] **Step 1: Read 三处代码确认接入点，产出接入设计说明**
+- [x] **Step 1: Read 三处代码确认接入点，产出接入设计说明**（`.superpowers/sdd/task-4.1-report.md`；**重大修正**：`dispatch_to_agent.py` 不是 SSE generator，无法直接 yield，真正需要新增短路分支的地方是 `main_agent.py` 工具循环——本节及下方 Task 4.2/4.3 的示例代码里"`dispatch_to_agent` 直接 yield"的写法已被证实不可行，实际实现以 4.1 报告 Section 2.4 为准；另发现"判重前 `session.candidate` 已被 `update_candidate_from_data` 原地污染"的坑，实际实现改用 `dataclasses.replace` 浅拷贝规避，详见 4.1 报告 Section 2.2）
 
 Read `routes.py`、`ui.py`、`dispatch_to_agent.py` 对应区间，确认上面 4 点的具体行号与数据可得性（`session.candidate` 是否已含 parse 后 profile；`resume_markdown` 从 `markdown_path` 读取），把最终接入方案（含 pending 存储位置、事件字段、端点签名）写入本任务 report。
 
 > 若发现更简方案（例如复用 `overwrite` query 参数 + 前端在 parse 前先查重），在 report 说明并据此调整 4.2-4.4；默认采用上文"pending + resolve 端点 + SSE 事件"方案。
+
+> **⚠️ 编号提醒**：本计划文档下方的 `### Task 4.2`/`### Task 4.3`/`### Task 4.4` 标题编号与 `openspec/changes/.../tasks.md` 的 4.2/4.3/4.4 编号**不一致**（本文档的"Task 4.3"实为 resolve 端点后端逻辑，对应 tasks.md 的 4.4；本文档的"Task 4.4"实为前端三选一弹窗，对应 tasks.md 的 4.3）。这是计划文档原有的编号错位，非本次执行引入。**实际派发与勾选一律以 tasks.md 的编号为准**（4.2=后端去重迁移、4.3=前端弹窗、4.4=resolve 端点后端处理、4.5=测试），下方各 Task 小节的勾选注记会明确标注对应的 tasks.md 编号，避免混淆。
 
 ### Task 4.2: 后端——去重判定后移 + pending 暂存
 
@@ -1021,7 +1023,7 @@ Read `routes.py`、`ui.py`、`dispatch_to_agent.py` 对应区间，确认上面 
   - `pending_uploads.PendingStore` 单例：`put(profile, resume_markdown, existing_id) -> str(pending_id)`、`pop(pending_id) -> PendingUpload | None`。
   - `dispatch_to_agent` parse_done 命中重名时在 `result` 写 `{"duplicate_pending": {"pending_id":..., "existing_candidate_id":..., "existing_candidate_name":..., "new_name":...}}`，且**不**调用 `save_candidate`。
 
-- [ ] **Step 1: 写 PendingStore + 失败测试**
+- [x] **Step 1: 写 PendingStore + 失败测试**（对应 tasks.md 4.2；**实现方式与本节示例代码不同**：未新建 `src/web/pending_uploads.py`，而是按 Task 4.1 报告决策，将 `PendingResumeDuplicate` dataclass + `pending_duplicates: dict` 字段直接加进已有的 `src/tools/_context.py::ToolContext` 单例，避免新增模块间接层；测试随 TDD 过程写在 `test_dispatch.py`/`test_resume.py`）
 
 `src/web/pending_uploads.py`：
 
@@ -1057,11 +1059,11 @@ class PendingStore:
 
 测试 `tests/unit/test_pending_uploads.py`：put 后 pop 返回同一对象、二次 pop 返回 None。
 
-- [ ] **Step 2: 删除上传期 safe_stem 去重**
+- [x] **Step 2: 删除上传期 safe_stem 去重**（提交 `1040a5b` 已删除 `upload_resume` 的 409 拦截块与 `overwrite` 参数）
 
 删除 `routes.py:189-200`（`if not candidate_id and not overwrite: existing = ... raise 409 duplicate_candidate`）整段。上传响应字段保持不变。
 
-- [ ] **Step 3: parse_done 改为 save 前判重 + 暂存 pending**
+- [x] **Step 3: parse_done 改为 save 前判重 + 暂存 pending**（提交 `1040a5b`；实际实现将判重放在读到 `resume_markdown` 之后、`update_candidate_from_data` 与 `save_candidate` 之前，命中重名时对 `session.candidate` 做 `dataclasses.replace` 浅拷贝再应用解析结果，不污染原对象，早退出）
 
 在 `dispatch_to_agent.py` parse_done 分支中，把当前"先 save 后 warning"改为"先判重"：
 
@@ -1100,7 +1102,7 @@ class PendingStore:
 
 > `get_pending_store()`：在 `pending_uploads.py` 提供模块级单例（`_store = PendingStore()` + `def get_pending_store(): return _store`）。
 
-- [ ] **Step 4: MainAgent 将 `duplicate_pending` 透传为 SSE 事件**
+- [x] **Step 4: MainAgent 将 `duplicate_pending` 透传为 SSE 事件**（提交 `1040a5b`；实际事件字段名为 `duplicate_candidate`，通过新增的 `_extract_duplicate_candidate_event()` 辅助函数在工具循环中短路，跳过后续 LLM 调用直接 yield 结构化事件 + 人类可读文案）
 
 `dispatch_to_agent` 是工具，结果通过工具结果 JSON 回到 MainAgent。需让前端拿到该事件：在 MainAgent 工具循环中，检测工具结果含 `duplicate_pending` 时 `yield {"type": "duplicate_candidate", **payload}`（与 Task 8 的 `tool_result` 事件推送位置相邻实现；本任务先接入 `duplicate_candidate` 事件）。用 Grep 定位 `main_agent.py:291`（`result_str = await self._tools.dispatch(...)`）后解析：
 
@@ -1115,7 +1117,7 @@ class PendingStore:
                     pass
 ```
 
-- [ ] **Step 5: 运行相关测试**
+- [x] **Step 5: 运行相关测试**（504 项全量单测/集成测试通过，含新增判重/pending 相关用例）
 
 Run:
 ```powershell
@@ -1123,14 +1125,14 @@ Run:
 ```
 Expected: PASS（新增去重逻辑不破坏原有 parse_done 正常保存路径）。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**（`1040a5b`，含本节 4.2 与下方 4.3(=tasks.md 4.4) 的合并实现；修复轮 `a2654e3`）
 
 ```bash
 git add src/web/pending_uploads.py src/web/routes.py src/tools/dispatch_to_agent.py src/agents/main_agent.py tests/unit/test_pending_uploads.py
 git commit -m "feat: move candidate dedup to post-parse real-name check with pending store"
 ```
 
-### Task 4.3: 后端——resolve 端点三分支处理逻辑
+### Task 4.3（对应 tasks.md 4.4）: 后端——resolve 端点三分支处理逻辑
 
 **Files:**
 - Modify: `src/web/routes.py`（新增 `POST /api/resume/resolve-duplicate`）
@@ -1144,7 +1146,7 @@ git commit -m "feat: move candidate dedup to post-parse real-name check with pen
   - `cancel`：不写任何数据，返回 `{"action":"cancel"}`。
   - pending 不存在：404 `{"code":"pending_not_found"}`。
 
-- [ ] **Step 1: 写失败集成测试（三分支各一 + pending 缺失）**
+- [x] **Step 1: 写失败集成测试（三分支各一 + pending 缺失）**（提交 `1040a5b`，测试落在 `tests/integration/test_resume.py`；构造 pending 直接写入 `ctx.pending_duplicates`，覆盖 overwrite/keep_both/cancel/404 四种场景）
 
 在 `tests/integration/test_routes.py` 新增：先构造一条 pending（可直接调用 `get_pending_store().put(...)`），再分别 POST 三种 action，断言：
 - overwrite → 旧 id 的 profile 内容被更新，候选人总数不变。
@@ -1152,7 +1154,7 @@ git commit -m "feat: move candidate dedup to post-parse real-name check with pen
 - cancel → 无新增、无修改。
 - 不存在的 pending_id → 404。
 
-- [ ] **Step 2: 实现端点**
+- [x] **Step 2: 实现端点**（提交 `1040a5b`；**修复轮 `a2654e3`**：`overwrite` 分支原直接在共享 `pending.new_profile` 上改 `.id`，`save_candidate` 失败时会永久污染仍在字典里的 pending 记录，导致用户重试时看到错误的候选人 id——改为 `profile = dataclasses.replace(pending.new_profile)` 操作副本，失败时原 pending 保持不变；新增失败路径回归测试）
 
 ```python
 @router.post("/resume/resolve-duplicate")
@@ -1187,7 +1189,7 @@ class ResolveDuplicateRequest(BaseModel):
 
 > 实现注意：确认 `save_candidate` 对 `profile.id` 为空时会生成 `c-<uuid>` 且不与既有 id 冲突（见 `memory_module.py:329`），对已存在 id 会更新 index（`:347-352`）。
 
-- [ ] **Step 3: 运行测试**
+- [x] **Step 3: 运行测试**（504 项全量通过，含 resolve-duplicate 各分支与失败路径回归）
 
 Run:
 ```powershell
@@ -1195,14 +1197,14 @@ Run:
 ```
 Expected: PASS。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**（`1040a5b` + 修复轮 `a2654e3`）
 
 ```bash
 git add src/web/routes.py tests/integration/test_routes.py
 git commit -m "feat: add resolve-duplicate endpoint (overwrite/keep_both/cancel)"
 ```
 
-### Task 4.4: 前端——三选一弹窗交互
+### Task 4.4（对应 tasks.md 4.3，尚未实现）: 前端——三选一弹窗交互
 
 **Files:**
 - Modify: `src/web/ui.py:548-566`（`_chat_stream` 的 WS/SSE 事件处理，或 `_chat_stream` 内 SSE 分支 `:940-944`）、新增 `_confirm_dedup_dialog`

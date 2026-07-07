@@ -36,3 +36,9 @@ Task 3.4: complete (commit 050f76f, batch review with 3.1-3.3 Approved; two test
 Task 3.6: complete (commit e70b209, individual review Approved; cancels genuinely-different pre-existing task before creating new one in _on_trigger_fired(), verified no conflict with Task 3.3/3.4's self-cancellation guard, inlined rather than extracted shared helper)
 
 ## Phase 2 — 追问建议真流式输出 sub-phase: Tasks 3.1-3.4, 3.6 complete; Task 3.5 (e2e browser) still pending — blocked on cursor-ide-browser MCP unavailable this session
+
+Task 4.1: complete (design/investigation task, no code commit; report .superpowers/sdd/task-4.1-report.md; corrected brief's wrong assumption that dispatch_to_agent.py is an SSE generator, redesigned event short-circuit to live in main_agent.py tool loop; identified premature session.candidate mutation risk and designed dataclasses.replace-based fix)
+Task 4.2: complete (commit 1040a5b, batch review with 4.4 Approved after 1 fix round; fix commit a2654e3 for shared pending-object mutation bug in resolve_duplicate's overwrite branch, re-review Approved)
+Task 4.4: complete (commit 1040a5b + fix a2654e3, batch review with 4.2 — see above; same fix round covers both)
+
+## Phase 2 — 候选人去重改为按真实姓名 sub-phase: Tasks 4.1, 4.2, 4.4 (backend) complete; Task 4.3 (frontend three-way dialog) and Task 4.6 (e2e browser, likely blocked same as 3.5) still pending; Task 4.5 (tests) backend portion covered via TDD in 4.2/4.4, frontend portion pending 4.3
