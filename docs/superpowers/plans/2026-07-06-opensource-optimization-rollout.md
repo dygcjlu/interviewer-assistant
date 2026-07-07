@@ -1409,7 +1409,7 @@ git commit -m "test: add pdf export chinese roundtrip integration test"
 
 > 阶段三先补测试，再拆分 `memory_module.py`（Task 7）。拆分依赖阶段二 Task 4.2 对 `memory_module` 的去重相关改动已完成并测试通过。
 
-### Task 6.1: MainAgent 工具调用循环单测
+### Task 6.1: MainAgent 工具调用循环单测（已完成，commit `6c721ab`，单任务审查 Approved）
 
 **Files:**
 - Test: `tests/unit/test_main_agent.py`
@@ -1418,7 +1418,7 @@ git commit -m "test: add pdf export chinese roundtrip integration test"
 **Interfaces:**
 - Consumes: `MainAgent.handle_chat(user_message) -> AsyncIterator[str|dict]`；需 mock `OpenAICompatibleClient.chat_stream`/`chat`、`ToolRegistry.dispatch`/`get_schemas`。
 
-- [ ] **Step 1: 写用例**
+- [x] **Step 1: 写用例**（实际实现共 7 个用例，比本节 3 条路径更细：路径 1/2 各 2 个、路径 3 覆盖 `error`/`message` 两种 key 变体 + 1 个"无 `user_facing` 正常继续"反例；**发现真实细节与本节假设不同**：`{"type":"tool_call"}` 事件在 `dispatch()` resolve 之前即已 yield，即使在路径 3 的错误短路场景下也会出现 1 次，而非本节假设的"无 dict 事件"，已按实测方向调整断言；`duplicate_candidate` 路径因 `tests/unit/test_agents.py::TestMainAgentDuplicateCandidateEvent` 已有等价覆盖而未重复编写）
 
 覆盖三条路径：
 1. 纯文本无工具（`chat_stream` 只出 delta，`is_final` 无 tool_calls）→ yield 文字、无 dict 事件。
@@ -1442,7 +1442,7 @@ async def test_handle_chat_single_tool_call(main_agent, fake_llm, fake_tools):
 
 > `main_agent`/`fake_llm`/`fake_tools` fixtures：mock `_llm`（提供 `chat_stream`/`chat`）、`_tools`（`get_schemas` 返回 None 或 schema、`dispatch` 返回脚本化结果）、`_memory_module`、`_user_memory_store.render()` 返回 ""。
 
-- [ ] **Step 2: 运行 + Commit**
+- [x] **Step 2: 运行 + Commit**（`6c721ab`，单任务审查 Approved，全量 512 项通过，无 Critical/Important 发现，仅 3 项不阻塞的风格性 Minor）
 
 Run:
 ```powershell

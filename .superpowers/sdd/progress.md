@@ -48,3 +48,5 @@ Task 4.3: complete (commit 06e8921, individual review Approved; corrected implem
 Task 5.1: complete (commit 2ed6301, individual review Approved; CJK assertions genuinely executed — not skipped — on this Windows machine via SimHei font; pymupdf already a declared dependency, no new deps added)
 
 ## Phase 2 — PDF 导出中文渲染测试 sub-phase complete (Task 5.1). Phase 2 as a whole now only missing the two blocked e2e browser tasks (3.5, 4.6).
+
+Task 6.1: complete (commit 6c721ab, individual review Approved; verified real {"type":"tool_call"} timing precedes dispatch() resolution even on error short-circuit path, adjusted assertions to match; skipped duplicating duplicate_candidate coverage already in test_agents.py)
