@@ -1713,12 +1713,12 @@ git add src/storage/memory_module.py
 git commit -m "refactor: keep MemoryModule facade signatures byte-compatible"
 ```
 
-### Task 7.6: 拆分后完整回归
+### Task 7.6: 拆分后完整回归（已完成，无代码提交，纯验证）
 
 **Files:**
 - 验证: 完整测试套件
 
-- [ ] **Step 1: 跑全量测试，与 Task 7.1 基线对比**
+- [x] **Step 1: 跑全量测试，与 Task 7.1 基线对比**
 
 Run:
 ```powershell
@@ -1726,13 +1726,19 @@ Run:
 ```
 Expected: 通过数 ≥ 基线，无新增失败。
 
-- [ ] **Step 2: 覆盖率复核不倒退**
+实际结果：**530 passed**，与 Task 7.1 基线（530 passed）完全一致，零回归。
+
+- [x] **Step 2: 覆盖率复核不倒退**
 
 Run:
 ```powershell
 .venv\Scripts\python -m pytest tests\unit tests\integration --cov=src --cov-report=term-missing --cov-fail-under=60
 ```
 Expected: 通过门禁。
+
+实际结果：门禁通过，总覆盖率 **62.42%**（≥ 60% 要求）。
+
+## Phase 3 — 拆分 `memory_module.py` sub-phase complete (Tasks 7.1-7.6)。Phase 3 全部完成。
 
 ---
 

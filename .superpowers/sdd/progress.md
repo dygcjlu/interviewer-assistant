@@ -62,3 +62,6 @@ Task 7.2: complete (commit 6ba12ff, batch review with 7.3/7.4/7.5 Approved, see 
 Task 7.3: complete (commit 6c1a65c, batch review with 7.2/7.4/7.5 Approved, see 7.5 note)
 Task 7.4: complete (commit 71fb285, batch review with 7.2/7.3/7.5 Approved, see 7.5 note)
 Task 7.5: complete (Step D found zero gaps, no 4th commit needed; independent review Approved, zero Critical/Important; 2 accepted Minor — asymmetric private-method access in rebuild_index, missing comment on re-export imports; InterviewStore/EvalStore cross-dependency resolved via Facade-level dataclasses.replace assembly rather than circular set_eval_store injection; reviewer independently re-ran full suite 530 passed + ruff clean, spot-checked WAL crash-recovery trio, get_candidate_history placement, eval orphan-fallback path, and all historical import compat sites)
+Task 7.6: complete (no code commit, verification-only; 530 passed matching Task 7.1 baseline exactly, coverage gate --cov-fail-under=60 passed at 62.42%)
+
+## Phase 3 — 拆分 memory_module.py sub-phase complete (Tasks 7.1-7.6). Phase 3 fully complete.
