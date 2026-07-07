@@ -1453,13 +1453,13 @@ git add tests/unit/test_main_agent.py
 git commit -m "test: cover MainAgent tool-call loop paths"
 ```
 
-### Task 6.2: `_trim_history` 边界（含孤儿 tool 消息）单测
+### Task 6.2: `_trim_history` 边界（含孤儿 tool 消息）单测（已完成，与 6.3 合并 commit `12c9168`，单任务审查 Approved）
 
 **Files:**
 - Test: `tests/unit/test_main_agent.py`
-- 被测: `src/agents/main_agent.py:411-418`
+- 被测: `src/agents/main_agent.py`（实际方法位于约 470-477 行，非本节假设的 411-418 行）
 
-- [ ] **Step 1: 写用例**
+- [x] **Step 1: 写用例**（实际实现 4 个用例：低于阈值不裁剪、恰好等于阈值不裁剪、裁剪后开头孤儿 tool 被跳过、无孤儿场景裁剪至恰好 24 条；reviewer 独立逐行追踪切片索引确认测试构造的"孤儿 tool 落在裁剪后头部"场景与真实切片逻辑完全吻合）
 
 ```python
 @pytest.mark.unit
@@ -1475,7 +1475,7 @@ def test_trim_history_drops_leading_orphan_tool_messages(main_agent):
     assert main_agent._history[0].role != "tool"  # 开头孤儿 tool 已被跳过
 ```
 
-- [ ] **Step 2: 运行 + Commit**
+- [x] **Step 2: 运行 + Commit**（`12c9168`，与 6.3 合并提交，见下）
 
 Run:
 ```powershell
@@ -1486,20 +1486,20 @@ git add tests/unit/test_main_agent.py
 git commit -m "test: cover MainAgent _trim_history orphan tool boundary"
 ```
 
-### Task 6.3: Memory Nudge 触发条件单测
+### Task 6.3: Memory Nudge 触发条件单测（已完成，与 6.2 合并 commit `12c9168`，单任务审查 Approved）
 
 **Files:**
 - Test: `tests/unit/test_main_agent.py`
-- 被测: `src/agents/main_agent.py:209-213, 260-264, 396-409`（`_NUDGE_INTERVAL=10` 计数、`_should_nudge`、`_background_memory_review` 触发）
+- 被测: `src/agents/main_agent.py`（`_should_nudge` 实为实例布尔属性而非方法；实际逻辑分布在约 233-291 行的计数/置位与约 455-468 行的重置/调度，非本节假设的行号）
 
-- [ ] **Step 1: 写用例**
+- [x] **Step 1: 写用例**（实际实现 2 个用例：驱动恰好 `_NUDGE_INTERVAL`=10 轮纯文本对话后 `await asyncio.sleep(0)` 确定性等待，断言 `_background_memory_review`（AsyncMock）被调度且 `_nudge_task` 非空；直接预置 `_turns_since_nudge=9` 后触发一次 `manage_user_memory` 工具调用，断言重置逻辑生效、不重复调度。reviewer 独立追踪确认预置计数的"快捷方式"未跳过任何跨轮次副作用，且异步调度断言在无内部 await 的 mock 场景下确定性成立，连续跑 8 次无 flaky）
 
 - 连续 `_NUDGE_INTERVAL` 轮对话后 `_should_nudge` 触发后台 review（mock `_background_memory_review` 断言被调度）。
 - 若本轮 LLM 主动调用了 `manage_user_memory`（`tool_called_memory=True`），则重置计数、不重复触发 nudge。
 
 > 用 monkeypatch 把 `_background_memory_review` 替换为记录调用次数的 AsyncMock；用 `asyncio` 让 `create_task` 可被观测。
 
-- [ ] **Step 2: 运行 + Commit**
+- [x] **Step 2: 运行 + Commit**（`12c9168`；单任务审查 Approved，全量 518 项通过，无 Critical/High 发现，仅 1 项信息性 Minor：测试内部 helper `_make_tc` 固定返回同一 `id`，非缺陷）
 
 Run:
 ```powershell

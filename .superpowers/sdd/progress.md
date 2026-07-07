@@ -50,3 +50,5 @@ Task 5.1: complete (commit 2ed6301, individual review Approved; CJK assertions g
 ## Phase 2 — PDF 导出中文渲染测试 sub-phase complete (Task 5.1). Phase 2 as a whole now only missing the two blocked e2e browser tasks (3.5, 4.6).
 
 Task 6.1: complete (commit 6c721ab, individual review Approved; verified real {"type":"tool_call"} timing precedes dispatch() resolution even on error short-circuit path, adjusted assertions to match; skipped duplicating duplicate_candidate coverage already in test_agents.py)
+Task 6.2: complete (commit 12c9168, batch review with 6.3 Approved; reviewer independently traced slice-index arithmetic for orphan-tool-at-head scenario against real _trim_history logic, confirmed exact)
+Task 6.3: complete (commit 12c9168, batch review with 6.2 Approved; deterministic asyncio.sleep(0) task-scheduling assertion verified non-flaky across 8 consecutive reviewer re-runs; pre-set _turns_since_nudge shortcut confirmed faithful to real cumulative logic)
