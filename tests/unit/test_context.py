@@ -210,3 +210,75 @@ def test_compression_threshold_trigger_timing_regression_exact_token_counting():
     )
     final_ratio = observations[-1][2]
     assert final_ratio < 0.65, f"第 10 轮 budget 利用率应远低于 0.65，实际：{final_ratio:.4f}"
+
+
+# ── Task 2.4: 中英混杂场景新旧估算方式差异验证 ─────────────────────────────────
+
+
+@pytest.mark.unit
+def test_new_exact_token_estimate_higher_than_old_char_heuristic_for_cn_heavy_text():
+    """验证：对同一段中英混杂（以中文为主）的真实规模面试对话，新的
+    `_estimate_tokens()`（tiktoken 精确计数）与 Task 2.1 改造前的旧 `//3` 字符数
+    估算口径之间存在明显的方向性差异——且实测方向与设计文档最初的预期相反。
+
+    旧口径复刻自改造前的真实实现（`git show e15c882^:src/framework/context.py`）：
+        fixed = 1500
+        summary = len(self._summary) // 3
+        window_t = sum(
+            (len(r.interviewer_text) + len(r.candidate_text)) // 3
+            for r in self._all_rounds
+        )
+        return fixed + summary + window_t
+
+    **重要发现（与设计文档假设相反）**：`docs/superpowers/specs/2026-07-06-
+    opensource-optimization-rollout-design.md` 第 43 行原本预期"精确计数后数值
+    通常小于原估算（尤其中文场景）"。但用真实 tiktoken（cl100k_base）编码实测
+    后发现，对中文为主的文本，方向恰恰相反：新估算明显**高于**旧 `//3` 估算。
+
+    原因：
+    1. `//3` 是按"英文场景约 3~4 字符 = 1 token"标定的经验值，但中文场景下
+       cl100k_base 编码通常约 1 个汉字 ≈ 1 个 token（远高于 1/3），因此 `//3`
+       对中文文本是系统性**低估**而非高估。
+    2. 新实现 `count_tokens()` 还叠加了每条消息 `_PER_MESSAGE_OVERHEAD_TOKENS`
+       固定开销，以及整体 20% 的 `_TOKEN_SAFETY_MARGIN` 安全余量放大系数
+       （见 `src/llm/client.py`），进一步拉大了新旧估算的差距。
+
+    结论：改造后的精确计数对中文/中英混杂场景反而更"保守"（估算值更高），
+    这在 token 预算防超限的意义上是更安全的方向，但与设计文档最初的直觉假设
+    相反，因此本用例按实测方向断言，并在此记录该发现供后续参考，而非强行
+    按最初假设的方向断言。
+    """
+    llm = _make_real_llm_client()
+    cm = ContextManager(ContextConfig(), llm)
+    for i, (interviewer_text, candidate_text) in enumerate(
+        _REALISTIC_INTERVIEW_ROUNDS, start=1
+    ):
+        cm._all_rounds.append(
+            ConversationRound(
+                round_number=i,
+                interviewer_text=interviewer_text,
+                candidate_text=candidate_text,
+            )
+        )
+
+    new_estimate = cm._estimate_tokens()
+
+    old_fixed = 1500
+    old_summary = len(cm._summary) // 3
+    old_window = sum(
+        (len(r.interviewer_text) + len(r.candidate_text)) // 3
+        for r in cm._all_rounds
+    )
+    old_estimate = old_fixed + old_summary + old_window
+
+    print(
+        f"[task-2.4] new(tiktoken exact, incl. 20% safety margin)={new_estimate} "
+        f"old(//3 char heuristic)={old_estimate} "
+        f"diff={new_estimate - old_estimate} "
+        f"ratio={new_estimate / old_estimate:.4f}"
+    )
+
+    assert new_estimate > old_estimate, (
+        f"中英混杂（中文为主）内容下，tiktoken 精确计数（含安全余量）应明显高于"
+        f"旧 //3 字符估算，实际观测：new={new_estimate} old={old_estimate}"
+    )
