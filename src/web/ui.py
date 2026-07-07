@@ -992,11 +992,14 @@ async def _chat_stream(
 
     SSE 事件类型：
     - {"type": "delta", "delta": "..."}  → 追加到回复气泡
-    - {"type": "tool_call", "name": "...", "args": "..."}  → 工具调用行
+    - {"type": "tool_call", "tool_call_id": "...", "name": "...", "args": "..."}  → 渲染"进行中"工具调用卡片
+    - {"type": "tool_result", "tool_call_id": "...", "name": "...",
+       "result_summary": "...", "success": ...}  → 按 tool_call_id 原地更新对应卡片
     - {"type": "duplicate_candidate", ...}  → 三选一去重弹窗
     """
     reply_text = ""
     reply_label = None
+    tool_cards: dict[str, dict] = {}
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10, read=300, write=30, pool=10)
@@ -1021,9 +1024,26 @@ async def _chat_stream(
                     chunk_type = chunk.get("type", "")
 
                     if chunk_type == "tool_call":
-                        _render_tool_call_row(
+                        tcid = chunk.get("tool_call_id", "")
+                        handle = _render_tool_call_card(
                             chat_col, chunk.get("name", ""), chunk.get("args", "")
                         )
+                        if tcid:
+                            tool_cards[tcid] = handle
+                        await _scroll(chat_scroll)
+
+                    elif chunk_type == "tool_result":
+                        tcid = chunk.get("tool_call_id", "")
+                        handle = tool_cards.get(tcid)
+                        if handle is not None:
+                            _update_tool_call_card(
+                                handle,
+                                chunk.get("success", True),
+                                chunk.get("result_summary", ""),
+                            )
+                        else:
+                            # 容错：未匹配到对应 tool_call（理论上不应发生），新建一张已完成卡片
+                            _render_tool_call_card(chat_col, chunk.get("name", ""), "")
                         await _scroll(chat_scroll)
 
                     elif chunk_type == "duplicate_candidate":
@@ -1101,21 +1121,25 @@ async def _chat_stream(
     await _scroll(chat_scroll)
 
 
-def _render_tool_call_row(col, tool_name: str, args_str: str) -> None:
-    """在聊天流中渲染一行工具调用信息（小型系统行）。"""
-    # 解析 args_str，提取关键字段用于摘要显示
+def _render_tool_call_card(col, tool_name: str, args_str: str) -> dict:
+    """渲染"进行中"工具调用折叠卡片，返回句柄字典供 tool_result 原地更新。"""
     args_summary = _tool_args_summary(tool_name, args_str)
-    display = f"⚙ {tool_name}"
-    if args_summary:
-        display += f"  ·  {args_summary}"
     with col:
         with ui.row().classes("w-full justify-center py-1"):
-            ui.label(display).style(
-                "background:#F3F4F6; color:#6B7280; padding:3px 12px;"
-                "border-radius:999px; font-size:11px; max-width:85%;"
-                "white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
-                "border:1px solid #E5E7EB;"
-            )
+            exp = ui.expansion(f"⏳ {tool_name}").classes("w-full").style("max-width:85%")
+            with exp:
+                status = ui.label("执行中…").classes("text-xs text-grey-6")
+                ui.label(args_summary or "(无参数摘要)").classes(
+                    "text-xs text-grey-5 whitespace-pre-wrap"
+                )
+    return {"exp": exp, "status": status, "name": tool_name}
+
+
+def _update_tool_call_card(handle: dict, success: bool, result_summary: str) -> None:
+    """收到匹配的 tool_result 事件后，原地更新卡片标题和状态文字。"""
+    icon = "✅" if success else "❌"
+    handle["exp"].set_text(f"{icon} {handle['name']}")
+    handle["status"].set_text(result_summary or ("完成" if success else "失败"))
 
 
 def _tool_args_summary(tool_name: str, args_str: str) -> str:
