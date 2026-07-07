@@ -1536,12 +1536,12 @@ git add tests/integration/test_routes.py
 git commit -m "test: cover routes 404/409 error branches"
 ```
 
-### Task 6.5: 复核 `main_agent.py`/`routes.py` 覆盖率达 70%+
+### Task 6.5: 复核 `main_agent.py`/`routes.py` 覆盖率达 70%+（已完成，commit `5edda17`，单任务审查 Approved，零 Critical/Important）
 
 **Files:**
 - 验证: 覆盖率报告
 
-- [ ] **Step 1: 跑针对性覆盖率**
+- [x] **Step 1: 跑针对性覆盖率**
 
 Run:
 ```powershell
@@ -1549,7 +1549,9 @@ Run:
 ```
 Expected: `main_agent.py` 与 `routes.py` 覆盖率均 ≥ 70%；对 term-missing 报出的未覆盖关键行补测试直至达标。
 
-- [ ] **Step 2: Commit（如补了测试）**
+实际结果：`routes.py` 无需改动即已 71%；`main_agent.py` 原 67%，新增 10 个针对性单测（覆盖 `_extract_user_facing_error`、`_extract_duplicate_candidate_event`、`reload_user_memory`、`clear_candidate_context`、`set_candidate_context`、`_build_system_prompt` 等）后提升到 74%。全量测试 530 passed，`ruff` clean。
+
+- [x] **Step 2: Commit（如补了测试）**
 
 ```bash
 git add tests/

@@ -53,3 +53,6 @@ Task 6.1: complete (commit 6c721ab, individual review Approved; verified real {"
 Task 6.2: complete (commit 12c9168, batch review with 6.3 Approved; reviewer independently traced slice-index arithmetic for orphan-tool-at-head scenario against real _trim_history logic, confirmed exact)
 Task 6.3: complete (commit 12c9168, batch review with 6.2 Approved; deterministic asyncio.sleep(0) task-scheduling assertion verified non-flaky across 8 consecutive reviewer re-runs; pre-set _turns_since_nudge shortcut confirmed faithful to real cumulative logic)
 Task 6.4: complete (commit efe01b5, individual review Approved, zero findings; scope narrowed from brief's 5 scenarios to the 2 genuinely uncovered ones after confirming 3 already had test coverage elsewhere; brief's assumed test_routes.py file never existed, added to test_interview_lifecycle.py instead)
+Task 6.5: complete (commit 5edda17, individual review Approved, zero Critical/Important; routes.py already 71% with no changes needed, main_agent.py raised 67% -> 74% via 10 targeted unit tests, reviewer verified each was a meaningful assertion not padding; full suite 530 passed, ruff clean)
+
+## Phase 3 — MainAgent + routes 测试补齐 sub-phase complete (Tasks 6.1-6.5)
