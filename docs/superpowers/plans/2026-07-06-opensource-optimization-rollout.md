@@ -283,11 +283,11 @@ git commit -m "test: isolate volc stt credential test from local .env"
 **Files:**
 - Modify: `docs/todo/01-readme-demo.md`、`docs/todo/02-report-export-pdf.md`、`docs/todo/03-structured-interview-mode.md`、`docs/todo/04-candidate-comparison.md`、`docs/todo/05-ci-complete.md`、`docs/todo/06-observability.md`
 
-- [ ] **Step 1: 逐文件核对实际代码进度**
+- [x] **Step 1: 逐文件核对实际代码进度**
 
 对每个文件：用 Grep/Read 核对其列出的 TODO 项是否已在代码中实现，勾选已完成项（`- [ ]` → `- [x]`），对未完成项补一行"实际进度"说明。**重点核对 `03-structured-interview-mode.md`**（结构化面试模式涉及 `save_questions`/`get_questions`/`update_question_coverage` 已存在，需确认覆盖到哪一步）。
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/todo/
@@ -299,7 +299,7 @@ git commit -m "docs: sync docs/todo status with actual implementation progress"
 **Files:**
 - Create: `CHANGELOG.md`
 
-- [ ] **Step 1: 按 Keep a Changelog 格式创建**
+- [x] **Step 1: 按 Keep a Changelog 格式创建**（实际内容仅含 Phase 1 已完成条目，未照抄本步骤模板中 Phase 2-4 未实现条目——协调者已批准的偏差）
 
 ```markdown
 # Changelog
@@ -325,7 +325,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `test_volc_stt` 对本地 `.env` 环境变量的隐式依赖
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add CHANGELOG.md
@@ -338,7 +338,7 @@ git commit -m "docs: add CHANGELOG.md (Keep a Changelog format)"
 - Create: `.github/ISSUE_TEMPLATE/bug_report.md`
 - Create: `.github/ISSUE_TEMPLATE/feature_request.md`
 
-- [ ] **Step 1: 写 bug_report.md**
+- [x] **Step 1: 写 bug_report.md**
 
 ```markdown
 ---
@@ -366,7 +366,7 @@ labels: bug
 ## 日志片段（logs/app.log）
 ```
 
-- [ ] **Step 2: 写 feature_request.md**
+- [x] **Step 2: 写 feature_request.md**
 
 ```markdown
 ---
@@ -385,7 +385,7 @@ labels: enhancement
 ## 补充说明
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add .github/ISSUE_TEMPLATE/
