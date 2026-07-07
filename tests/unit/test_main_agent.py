@@ -20,15 +20,16 @@ at the same abstraction level.  No duplication added here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.main_agent import MainAgent
+from src.agents.main_agent import _HISTORY_LIMIT, _NUDGE_INTERVAL, MainAgent
 from src.framework.tool_registry import ToolRegistry
 from src.llm.protocol import ChatResponse, StreamChunk
-from src.models.message import FunctionCallInfo, ToolCallInfo
+from src.models.message import FunctionCallInfo, Message, ToolCallInfo
 from src.storage.memory_module import MemoryModule
 from src.storage.user_memory import UserMemoryStore
 
@@ -275,3 +276,136 @@ class TestMainAgentToolLoop:
         assert "操作完成" in "".join(str_chunks)
         # chat() should have been called (not short-circuited)
         llm.chat.assert_awaited_once()
+
+
+# ── Helpers for Tasks 6.2 / 6.3 ──────────────────────────────────────────────
+
+
+async def _pure_text_stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+    """Reusable pure-text stream: yields one delta then a final chunk (no tool calls)."""
+    yield StreamChunk(delta="ok")
+    yield StreamChunk(delta="", is_final=True, accumulated_content="ok", tool_calls=None)
+
+
+def _minimal_agent() -> MainAgent:
+    """Create a MainAgent instance for direct method tests (no handle_chat needed)."""
+    agent, _, _ = _make_agent(_pure_text_stream)
+    return agent
+
+
+# ── Task 6.2 — _trim_history boundary tests ───────────────────────────────────
+
+
+@pytest.mark.unit
+class TestMainAgentTrimHistory:
+    def test_no_trim_when_history_below_limit(self):
+        """History shorter than _HISTORY_LIMIT is left entirely unchanged."""
+        agent = _minimal_agent()
+        msgs = [Message(role="user", content=f"msg {i}") for i in range(5)]
+        agent._history = list(msgs)
+        agent._trim_history()
+
+        assert agent._history == msgs, "Short history must not be modified"
+        assert len(agent._history) == 5
+
+    def test_no_trim_at_exact_limit(self):
+        """History of exactly _HISTORY_LIMIT messages is left unchanged."""
+        agent = _minimal_agent()
+        msgs = [Message(role="user", content=f"msg {i}") for i in range(_HISTORY_LIMIT)]
+        agent._history = list(msgs)
+        agent._trim_history()
+
+        assert agent._history == msgs
+        assert len(agent._history) == _HISTORY_LIMIT
+
+    def test_trim_drops_orphan_tool_at_head(self):
+        """After truncation, a tool message at the head (whose assistant tool_call was cut
+        off) is dropped, producing a history shorter than _HISTORY_LIMIT."""
+        agent = _minimal_agent()
+        tc = _make_tc("manage_user_memory")
+        # Position 0: assistant with tool_call → will be cut by truncation to last 24
+        # Position 1: tool response for that call → becomes orphaned head after truncation
+        # Positions 2…_HISTORY_LIMIT: regular user messages to reach _HISTORY_LIMIT + 1 total
+        msgs: list[Message] = [
+            Message(role="assistant", content=None, tool_calls=[tc]),
+            Message(role="tool", content='{"ok":true}', tool_call_id="tc-001"),
+        ]
+        msgs += [
+            Message(role="user", content=f"msg {i}") for i in range(_HISTORY_LIMIT - 1)
+        ]
+        # Total: _HISTORY_LIMIT + 1 messages; last 24 start with the tool message
+        assert len(msgs) == _HISTORY_LIMIT + 1
+        agent._history = msgs
+
+        agent._trim_history()
+
+        assert agent._history[0].role != "tool", "Orphan tool message must be dropped from head"
+        assert len(agent._history) < _HISTORY_LIMIT, (
+            "Dropping the orphan should reduce length below _HISTORY_LIMIT"
+        )
+
+    def test_trim_preserves_exactly_limit_when_no_orphan(self):
+        """When no orphan tool at head, trim leaves exactly _HISTORY_LIMIT messages."""
+        agent = _minimal_agent()
+        # All user messages: no orphan after truncation
+        msgs = [
+            Message(role="user", content=f"msg {i}") for i in range(_HISTORY_LIMIT + 1)
+        ]
+        agent._history = msgs
+
+        agent._trim_history()
+
+        assert len(agent._history) == _HISTORY_LIMIT
+        assert agent._history[0].content == "msg 1"  # msg 0 was cut
+        assert agent._history[-1].content == f"msg {_HISTORY_LIMIT}"
+
+
+# ── Task 6.3 — Memory nudge trigger tests ────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestMainAgentNudgeTrigger:
+    @pytest.mark.asyncio
+    async def test_nudge_triggers_background_review_after_interval_rounds(self):
+        """After exactly _NUDGE_INTERVAL pure-text rounds, _background_memory_review
+        is scheduled (via asyncio.create_task) and invoked once."""
+        agent, _, _ = _make_agent(_pure_text_stream)
+        agent._background_memory_review = AsyncMock(return_value=None)
+
+        for _ in range(_NUDGE_INTERVAL):
+            async for _chunk in agent.handle_chat("hello"):
+                pass
+
+        # Yield to the event loop so the scheduled task can execute.
+        await asyncio.sleep(0)
+
+        assert agent._nudge_task is not None, "_nudge_task must be assigned after interval"
+        agent._background_memory_review.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_nudge_does_not_trigger_when_memory_tool_called(self):
+        """When manage_user_memory is called in the triggering round, the nudge
+        counter/flag resets and no background review task is created that round."""
+        tc = _make_tc("manage_user_memory", '{"action": "add", "key": "k", "value": "v"}')
+
+        async def _memory_tool_stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(delta="", is_final=True, accumulated_content="", tool_calls=[tc])
+
+        agent, _, _ = _make_agent(
+            _memory_tool_stream,
+            chat_response=ChatResponse(content="已保存。", tool_calls=None),
+        )
+        agent._background_memory_review = AsyncMock(return_value=None)
+        # Pre-advance counter to one below the trigger threshold.
+        agent._turns_since_nudge = _NUDGE_INTERVAL - 1
+
+        async for _chunk in agent.handle_chat("记住这个偏好"):
+            pass
+        await asyncio.sleep(0)
+
+        # tool_called_memory path must reset both flag and counter
+        assert agent._should_nudge is False, "_should_nudge must be reset when memory tool ran"
+        assert agent._turns_since_nudge == 0, "_turns_since_nudge must be reset to 0"
+        # Crucially, no background review task should have been created
+        assert agent._nudge_task is None, "No nudge task when memory tool already ran this round"
+        agent._background_memory_review.assert_not_called()
