@@ -642,6 +642,84 @@ class TestInterviewAgent:
             tokens.append(t)
         assert any("流式" in t for t in tokens)
 
+    class _SlowStreamLLM:
+        """逐 delta 延迟下发的假 LLM，用于可靠地在流中途触发取消。"""
+
+        def count_tokens(self, messages):
+            return 10
+
+        async def chat_stream(
+            self, messages, tools=None, temperature=0.7, timeout_sec=None
+        ):
+            for piece in ["一", "二", "三"]:
+                await asyncio.sleep(0.05)
+                yield StreamChunk(delta=piece)
+            yield StreamChunk(
+                delta="",
+                is_final=True,
+                accumulated_content="一二三",
+                prompt_tokens=1,
+                completion_tokens=1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_suggestion_direct_call_cancellation_propagates(self):
+        """直接消费 generate_suggestion（未经 _on_trigger_fired/_runner 包装）时，
+        中途取消消费者 task 应让 CancelledError 正确从生成器传播出来（不被 generate_suggestion
+        自身的 except 吞掉），且已产生的 delta 不受影响。
+
+        注意：此路径下 `agent._current_stream_task` 并非本次调用对应的 task
+        （它只在 `_on_trigger_fired` 中被赋值），因此这里不对其做"是否悬挂"断言 ——
+        该断言的意义留给下面走 `_runner` 路径的测试来验证。
+        """
+        agent = self._make_interview_agent_with_llm()
+        agent.llm_client = self._SlowStreamLLM()
+        session = _make_session()
+        await agent.on_activate(session)
+
+        received: list[str] = []
+
+        async def _consume():
+            async for delta in agent.generate_suggestion(request_id=0):
+                received.append(delta)
+
+        task = asyncio.create_task(_consume())
+        await asyncio.sleep(0.07)  # 第一个 delta（0.05s）已到，第二个（0.10s）尚未到
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert received == ["一"]  # 确认是中途取消，而非取消前/流结束后
+        assert agent._current_stream_task is None  # 该路径未设置此字段，无残留状态
+
+    @pytest.mark.asyncio
+    async def test_on_trigger_fired_cancel_midstream_no_dangling_task(self):
+        """经 _on_trigger_fired 触发（_current_stream_task 即被取消的 task 本身）时，
+        中途调用 cancel_current_stream 应等待该 task 结束、清空 `_current_stream_task`，
+        不留下悬挂任务。
+
+        `_runner` 自身捕获了从 generate_suggestion 传播出的 CancelledError 且不再抛出
+        （避免无人 await 时出现 "Task exception was never retrieved"），因此该 task
+        最终以正常完成（非 cancelled）状态结束 —— 这是预期行为，而非 bug。
+        """
+        agent = self._make_interview_agent_with_llm()
+        agent.llm_client = self._SlowStreamLLM()
+        session = _make_session()
+        await agent.on_activate(session)
+        agent.attach_ws_sender(AsyncMock())
+
+        await agent._on_trigger_fired(request_id=0)
+        task = agent._current_stream_task
+        assert task is not None and not task.done()
+
+        await asyncio.sleep(0.07)  # 确保中途（已收到至少一个 delta）
+        await agent.cancel_current_stream()
+
+        assert agent._current_stream_task is None
+        assert task.done()
+        # 被 _runner 吞掉，task 正常结束而非进入 cancelled 状态
+        assert not task.cancelled()
+
 
 # ── MainAgent._build_system_prompt date injection ─────────────────────────────
 

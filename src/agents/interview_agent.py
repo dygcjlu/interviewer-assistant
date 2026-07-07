@@ -221,15 +221,26 @@ class InterviewAgent(BaseAgent):
         )
 
         # 取消上一次进行中的流式请求（候选人继续说话 → 旧建议作废）
-        if self._current_stream_task and not self._current_stream_task.done():
-            self._current_stream_task.cancel()
+        # 注意：经 _on_trigger_fired 调用时，self._current_stream_task 在本次调用
+        # 真正开始执行前就已被赋值为"当前这个 task 自身"——若不排除自身，会触发
+        # task 自我 cancel + 自我 await（结果是被立即吞掉的 CancelledError），进而把
+        # self._current_stream_task 误清空为 None，导致正在正常运行的流从此无法再被
+        # cancel_current_stream()/on_deactivate() 感知和取消（悬挂状态不一致）。
+        current_task = asyncio.current_task()
+        previous_task = self._current_stream_task
+        if (
+            previous_task is not None
+            and previous_task is not current_task
+            and not previous_task.done()
+        ):
+            previous_task.cancel()
             try:
-                await self._current_stream_task
+                await previous_task
             except asyncio.CancelledError:
                 pass
             except Exception:
                 logger.exception("InterviewAgent: previous stream task error")
-        self._current_stream_task = None
+            self._current_stream_task = None
         self._request_counter = request_id + 1
 
         messages = self.prompt_builder.build(self._session, self.config)
