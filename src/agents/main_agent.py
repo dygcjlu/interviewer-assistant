@@ -51,6 +51,22 @@ def _extract_user_facing_error(tool_result: str) -> str | None:
     return str(data.get("message") or data.get("error") or "")
 
 
+def _extract_duplicate_candidate_event(tool_result: str) -> dict | None:
+    """检测 dispatch_to_agent 返回结果里的 duplicate_candidate 标记（parse_done 判重命中）。"""
+    if not tool_result or "duplicate_candidate" not in tool_result:
+        return None
+    try:
+        data = json.loads(tool_result)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    dup = data.get("duplicate_candidate")
+    if not isinstance(dup, dict):
+        return None
+    return {"type": "duplicate_candidate", **dup}
+
+
 _LAYER1_ROLE = """你是一位专业的面试助手 Agent，帮助面试官管理候选人、准备面试、支持面试流程。
 
 你的能力：
@@ -288,6 +304,7 @@ class MainAgent:
         loop_rounds = 0
 
         user_facing_error: str | None = None
+        duplicate_event: dict | None = None
         while current_tool_calls and loop_rounds < _TOOL_LOOP_MAX_ROUNDS:
             loop_rounds += 1
 
@@ -308,12 +325,17 @@ class MainAgent:
                 new_messages.append(tool_msg)
                 if user_facing_error is None:
                     user_facing_error = _extract_user_facing_error(result_str)
+                if duplicate_event is None:
+                    duplicate_event = _extract_duplicate_candidate_event(result_str)
 
             if user_facing_error is not None:
                 logger.warning(
                     "MainAgent: tool returned user_facing error, short-circuiting ReAct: %s",
                     user_facing_error[:200],
                 )
+                break
+            if duplicate_event is not None:
+                # parse_done 判重命中：等待面试官在前端三选一决议，跳过继续调用 LLM
                 break
 
             # 下一轮：检查是否还需继续调用工具（非流式）
@@ -362,6 +384,18 @@ class MainAgent:
             self._history.append(err_msg)
             new_messages.append(err_msg)
             yield user_facing_error
+        elif duplicate_event is not None:
+            # parse_done 判重命中 → 结构化事件 + 一句人话提示，跳过 LLM 自由发挥，
+            # 等待前端弹窗决议后调用 POST /api/resume/resolve-duplicate
+            assistant_text = (
+                f"检测到候选人「{duplicate_event['new_name']}」与已有候选人"
+                f"「{duplicate_event['existing_candidate_name']}」重名，请选择处理方式。"
+            )
+            dup_msg = Message(role="assistant", content=assistant_text)
+            self._history.append(dup_msg)
+            new_messages.append(dup_msg)
+            yield duplicate_event
+            yield assistant_text
         elif current_tool_calls is None and loop_rounds > 0:
             # 工具循环正常结束，检查 history 里最后一条 assistant 消息是否已有内容
             last = self._history[-1] if self._history else None
@@ -383,7 +417,12 @@ class MainAgent:
             yield warn
 
         # 工具循环结束后，流式输出最终回复（若上面没有提前 yield 完整回复）
-        if user_facing_error is None and loop_rounds > 0 and not current_tool_calls:
+        if (
+            user_facing_error is None
+            and duplicate_event is None
+            and loop_rounds > 0
+            and not current_tool_calls
+        ):
             # 检查最后一条 assistant 消息是否已 yield 过
             last = self._history[-1] if self._history else None
             need_final_stream = not (last and last.role == "assistant" and last.content)

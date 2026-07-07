@@ -868,3 +868,105 @@ class TestMainAgentSetCandidateContext:
         prompt = agent._build_system_prompt()
 
         assert "历史面试记录" not in prompt
+
+
+# ── MainAgent 工具循环：duplicate_candidate 短路事件（Task 4.4）────────────────
+
+
+@pytest.mark.unit
+class TestMainAgentDuplicateCandidateEvent:
+    def _make_agent(self, dispatch_result: str):
+        """构造一个 MainAgent：第一次 chat_stream 直接返回一个 dispatch_to_agent
+        工具调用；tools.dispatch 被 mock 为返回传入的 JSON 字符串。"""
+        from src.agents.main_agent import MainAgent
+        from src.framework.tool_registry import ToolRegistry
+        from src.storage.memory_module import MemoryModule
+        from src.storage.user_memory import UserMemoryStore
+
+        tc = ToolCallInfo(
+            id="tc-dup",
+            type="function",
+            function=FunctionCallInfo(name="dispatch_to_agent", arguments="{}"),
+        )
+
+        async def _chat_stream(messages, tools=None, temperature=0.7, timeout_sec=None):
+            yield StreamChunk(
+                delta="", is_final=True, accumulated_content="", tool_calls=[tc]
+            )
+
+        llm = MagicMock()
+        llm.chat_stream = _chat_stream
+        # 不应被调用：短路后不再有下一轮 LLM 调用；给出合法返回值，
+        # 这样若短路未生效，失败信息是清晰的断言失败而非无关的序列化错误。
+        llm.chat = AsyncMock(return_value=ChatResponse(content="", tool_calls=None))
+
+        tools = MagicMock(spec=ToolRegistry)
+        tools.get_schemas.return_value = []
+        tools.dispatch = AsyncMock(return_value=dispatch_result)
+
+        memory = MagicMock(spec=MemoryModule)
+        user_memory = MagicMock(spec=UserMemoryStore)
+        user_memory.render.return_value = ""
+
+        agent = MainAgent(llm, tools, memory, user_memory)
+        return agent, tools, llm
+
+    @pytest.mark.asyncio
+    async def test_yields_duplicate_candidate_event_and_stops_early(self):
+        dup_payload = json.dumps(
+            {
+                "type": "parse_done",
+                "duplicate_candidate": {
+                    "pending_id": "p-1",
+                    "existing_candidate_id": "c-existing",
+                    "existing_candidate_name": "张三",
+                    "new_name": "张三",
+                },
+            },
+            ensure_ascii=False,
+        )
+        agent, tools, llm = self._make_agent(dup_payload)
+
+        chunks = [c async for c in agent.handle_chat("解析简历")]
+
+        dict_chunks = [c for c in chunks if isinstance(c, dict)]
+        dup_events = [c for c in dict_chunks if c.get("type") == "duplicate_candidate"]
+        assert len(dup_events) == 1
+        assert dup_events[0]["pending_id"] == "p-1"
+        assert dup_events[0]["existing_candidate_id"] == "c-existing"
+        assert dup_events[0]["existing_candidate_name"] == "张三"
+        assert dup_events[0]["new_name"] == "张三"
+
+        # 循环提前终止：不应再发起下一轮 LLM 调用（chat_stream 已由 async 生成器
+        # 提供，只能靠 llm.chat 未被调用来验证"未继续 ReAct 循环"）。
+        llm.chat.assert_not_called()
+
+        # 工具只被 dispatch 一次（未继续第二轮工具调用）
+        tools.dispatch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_candidate_event_followed_by_human_readable_text(self):
+        dup_payload = json.dumps(
+            {
+                "duplicate_candidate": {
+                    "pending_id": "p-2",
+                    "existing_candidate_id": "c-existing-2",
+                    "existing_candidate_name": "李四",
+                    "new_name": "李四",
+                }
+            },
+            ensure_ascii=False,
+        )
+        agent, tools, llm = self._make_agent(dup_payload)
+
+        chunks = [c async for c in agent.handle_chat("解析简历")]
+
+        # 结构化事件之后应紧跟一条文字提示（str chunk），供聊天气泡展示
+        dup_idx = next(
+            i
+            for i, c in enumerate(chunks)
+            if isinstance(c, dict) and c.get("type") == "duplicate_candidate"
+        )
+        assert dup_idx + 1 < len(chunks)
+        assert isinstance(chunks[dup_idx + 1], str)
+        assert "李四" in chunks[dup_idx + 1]

@@ -27,6 +27,7 @@ from ..models.session import InterviewStage
 from .schemas import (
     CandidateSelectRequest,
     ChatRequest,
+    ResolveDuplicateRequest,
     StartInterviewRequest,
     SwitchAgentRequest,
 )
@@ -187,14 +188,17 @@ async def upload_resume(
     request: Request,
     file: UploadFile = File(...),
     candidate_id: str | None = None,
-    overwrite: bool = False,
 ):
-    """上传 PDF 简历：仅保存文件，返回 file_path 和 safe_stem。解析由前端确认后触发。"""
+    """上传 PDF 简历：仅保存文件，返回 file_path 和 safe_stem。解析由前端确认后触发。
+
+    不做候选人去重检查——去重已迁移到解析完成后按真实姓名比对
+    （见 `src.tools.dispatch_to_agent._apply_side_effects` 的 parse_done 分支
+    与 `POST /api/resume/resolve-duplicate`）。
+    """
     bind_op("upload_resume")
     start = time.perf_counter()
     filename = file.filename or "resume.pdf"
     controller = _controller(request)
-    memory = _memory(request)
 
     suffix = os.path.splitext(filename)[1].lower() or ".pdf"
     if suffix not in {".pdf"}:
@@ -207,19 +211,6 @@ async def upload_resume(
         )
 
     safe_stem = _safe_stem(filename)
-
-    if not candidate_id and not overwrite:
-        existing = await memory.get_candidate_by_name(safe_stem)
-        if existing is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "duplicate_candidate",
-                    "message": f"候选人「{safe_stem}」已存在，请确认是否覆盖",
-                    "existing_candidate_id": existing.id,
-                    "existing_candidate_name": existing.name,
-                },
-            )
 
     # Ensure session exists
     session = await controller.get_session() if controller else None
@@ -264,11 +255,10 @@ async def upload_resume(
         bind_session_id(session.id)
 
     logger.info(
-        "upload_resume start filename=%r safe_stem=%r candidate_id=%s overwrite=%s",
+        "upload_resume start filename=%r safe_stem=%r candidate_id=%s",
         filename,
         safe_stem,
         candidate_id or (session.candidate.id if session else ""),
-        overwrite,
     )
 
     # M9-2: 流式写入 + 限制 20MB —— 防止恶意/异常大文件 OOM
@@ -353,6 +343,69 @@ async def get_profile(request: Request, candidate_id: str = Query(...)):
         "profile": _to_dict(candidate),
         "brief": brief,
         "resume_markdown": resume_markdown,
+    }
+
+
+@router.post("/resume/resolve-duplicate")
+async def resolve_duplicate(request: Request, body: ResolveDuplicateRequest):
+    """处理 parse_done 判重命中后的面试官决议：覆盖 / 同时保留两份 / 取消本次导入。
+
+    `pending_id` 来自 `/api/chat` SSE 流中的 `duplicate_candidate` 事件。
+    """
+    bind_op("resolve_duplicate")
+    from ..tools._context import ctx as tool_ctx
+
+    pending = tool_ctx.pending_duplicates.get(body.pending_id)
+    if pending is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "pending_not_found",
+                "message": "待处理的重名候选人记录不存在或已处理",
+            },
+        )
+
+    memory = _memory(request)
+    controller = _controller(request)
+    session = await controller.get_session() if controller else None
+    same_session = session is not None and session.id == pending.session_id
+
+    if body.action == "cancel":
+        tool_ctx.pending_duplicates.pop(body.pending_id, None)
+        return {"action": "cancel", "pending_id": body.pending_id}
+
+    profile = pending.new_profile
+    if body.action == "overwrite":
+        profile.id = pending.existing_candidate_id
+
+    try:
+        candidate_id = await memory.save_candidate(profile, pending.resume_markdown)
+    except Exception as exc:
+        logger.exception("resolve_duplicate: save_candidate failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "save_failed", "message": f"保存候选人档案失败：{exc}"},
+        ) from exc
+
+    profile.resume_content = pending.resume_markdown
+    if same_session:
+        session.candidate = profile
+        session.metadata.candidate_id = candidate_id
+        main_agent = _main_agent(request)
+        if main_agent is not None:
+            main_agent.set_candidate_context(
+                profile, interview_brief=session.interview_brief
+            )
+
+    tool_ctx.pending_duplicates.pop(body.pending_id, None)
+    logger.info(
+        "resolve_duplicate done action=%s candidate_id=%s", body.action, candidate_id
+    )
+    return {
+        "action": body.action,
+        "candidate_id": candidate_id,
+        "candidate_name": profile.name,
+        "session_id": session.id if same_session else None,
     }
 
 

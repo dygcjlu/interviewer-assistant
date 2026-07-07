@@ -233,6 +233,7 @@ def _build_test_app(tmp_path: Path, mock_llm: MockLLMClient):
         tool_ctx.user_memory_store = None
         tool_ctx.prompt_builder = None
         tool_ctx.skill_loader = None
+        tool_ctx.pending_duplicates.clear()
 
     return create_app(lifespan=test_lifespan)
 

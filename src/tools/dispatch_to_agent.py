@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
+import uuid
 from pathlib import Path
 
 from ..logging import truncate
-from ._context import ctx
+from ._context import PendingResumeDuplicate, ctx
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +128,7 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
 
     if result_type == "parse_done":
         profile_data = result.get("profile") or {}
-        if profile_data:
-            update_candidate_from_data(session.candidate, profile_data)
+        real_name = str(profile_data.get("name") or "").strip()
 
         # 读取 ResumeAgent 写出的 Markdown 文件内容，读取成功后删除临时文件
         resume_markdown = ""
@@ -153,31 +154,57 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
                 session.candidate.id,
             )
             result["warning"] = "简历正文为空，未写入候选人档案；请检查 PDF 解析结果"
-        elif ctx.memory_module is not None:
-            try:
-                await ctx.memory_module.save_candidate(
-                    session.candidate, resume_markdown
-                )
-                session.candidate.resume_content = resume_markdown
-            except Exception as exc:
-                logger.exception("dispatch_to_agent: save_candidate failed")
-                result["user_facing"] = (
-                    f"候选人档案保存失败：{exc}。简历内容未持久化，请重试。"
-                )
-                return
-            # 检查是否已存在同名候选人（解析出真实姓名后再去重）
-            real_name = session.candidate.name
-            if real_name:
-                existing = await ctx.memory_module.get_candidate_by_name(real_name)
-                if existing is not None and existing.id != session.candidate.id:
-                    result["duplicate_warning"] = (
-                        f"候选人「{real_name}」已存在（ID: {existing.id}），"
-                        f"当前解析结果已另存为新档案。如需覆盖，请手动删除旧档案。"
-                    )
-            if ctx.main_agent is not None:
-                ctx.main_agent.set_candidate_context(
-                    session.candidate, interview_brief=session.interview_brief
-                )
+            return
+
+        if ctx.memory_module is None:
+            return
+
+        # ── 判重：在 mutate session.candidate / save_candidate 之前，用解析出
+        # 的真实姓名比对已持久化候选人（而不是上传时的 PDF 文件名）──
+        existing = None
+        if real_name:
+            existing = await ctx.memory_module.get_candidate_by_name(real_name)
+        if existing is not None and existing.id != session.candidate.id:
+            pending_id = str(uuid.uuid4())
+            pending_profile = dataclasses.replace(session.candidate)
+            if profile_data:
+                update_candidate_from_data(pending_profile, profile_data)
+            # 同一 session 只保留最新一条待决议，避免旧的被遗忘上传堆积
+            for pid, pending in list(ctx.pending_duplicates.items()):
+                if pending.session_id == session.id:
+                    ctx.pending_duplicates.pop(pid, None)
+            ctx.pending_duplicates[pending_id] = PendingResumeDuplicate(
+                pending_id=pending_id,
+                session_id=session.id,
+                new_profile=pending_profile,
+                resume_markdown=resume_markdown,
+                existing_candidate_id=existing.id,
+                existing_candidate_name=existing.name,
+            )
+            result["duplicate_candidate"] = {
+                "pending_id": pending_id,
+                "existing_candidate_id": existing.id,
+                "existing_candidate_name": existing.name,
+                "new_name": real_name,
+            }
+            return
+
+        # ── 无重复：走原逻辑 ──
+        if profile_data:
+            update_candidate_from_data(session.candidate, profile_data)
+        try:
+            await ctx.memory_module.save_candidate(session.candidate, resume_markdown)
+            session.candidate.resume_content = resume_markdown
+        except Exception as exc:
+            logger.exception("dispatch_to_agent: save_candidate failed")
+            result["user_facing"] = (
+                f"候选人档案保存失败：{exc}。简历内容未持久化，请重试。"
+            )
+            return
+        if ctx.main_agent is not None:
+            ctx.main_agent.set_candidate_context(
+                session.candidate, interview_brief=session.interview_brief
+            )
 
     elif result_type == "brief_done":
         cid = session.candidate.id

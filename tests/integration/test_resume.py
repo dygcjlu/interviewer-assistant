@@ -68,32 +68,31 @@ async def test_upload_non_pdf_returns_400(client):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_upload_duplicate_name_returns_409(client):
-    """已存在同名候选人时（已在 memory 中），上传同名 PDF 返回 409 duplicate_candidate。"""
-    # 先通过 memory 直接保存候选人（模拟已完成解析的候选人）
+async def test_upload_duplicate_filename_no_longer_returns_409(client):
+    """去重迁移到解析后按真实姓名判定（Task 4.1/4.2）：上传时仅按 PDF 文件名
+    识别候选人，即使已存在同名候选人档案，上传本身也不再检测/阻断，返回 200。
+    （真正的判重发生在 dispatch_to_agent 的 parse_done 分支，见 test_dispatch.py。）"""
     memory = client._transport.app.state.memory_module
     candidate = CandidateProfile(id="cid-dup-001", name="李四")
     await memory.save_candidate(candidate, "# 李四简历\n")
 
-    # 上传同名 PDF（不带 overwrite）
     r = await _upload(client, filename="李四.pdf")
-    assert r.status_code == 409
-    detail = r.json()["detail"]
-    assert detail["code"] == "duplicate_candidate"
-    assert "existing_candidate_id" in detail
+    assert r.status_code == 200
+    data = r.json()
+    assert "candidate_id" in data
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_upload_overwrite_replaces_existing(client):
-    """overwrite=true 时不报 409。"""
-    await _upload(client, filename="王五.pdf")
-    r = await client.post(
+async def test_upload_same_filename_twice_succeeds(client):
+    """上传接口不再做去重检查：同一文件名重复上传两次均应成功（覆盖同一 PDF 文件）。"""
+    r1 = await _upload(client, filename="王五.pdf")
+    assert r1.status_code == 200
+    r2 = await client.post(
         "/api/resume/upload",
         files={"file": ("王五.pdf", _pdf_bytes(), "application/pdf")},
-        params={"overwrite": "true"},
     )
-    assert r.status_code == 200
+    assert r2.status_code == 200
 
 
 @pytest.mark.integration
@@ -146,3 +145,127 @@ async def test_get_profile_nonexistent_returns_404(client):
     r = await client.get("/api/resume/profile", params={"candidate_id": "nonexistent"})
     assert r.status_code == 404
     assert r.json()["detail"]["code"] == "not_found"
+
+
+# ── POST /api/resume/resolve-duplicate（Task 4.4）─────────────────────────────
+
+
+def _register_pending(app, *, existing_id: str, new_id: str, name: str) -> str:
+    """在 tool_ctx.pending_duplicates 里手工插入一条待决议记录，模拟判重命中后的状态。"""
+    from src.tools._context import PendingResumeDuplicate
+    from src.tools._context import ctx as tool_ctx
+
+    pending_id = f"pending-{new_id}"
+    tool_ctx.pending_duplicates[pending_id] = PendingResumeDuplicate(
+        pending_id=pending_id,
+        session_id="s-irrelevant",
+        new_profile=CandidateProfile(
+            id=new_id, name=name, current_position="后端工程师"
+        ),
+        resume_markdown=f"# {name} 新简历\n",
+        existing_candidate_id=existing_id,
+        existing_candidate_name=name,
+    )
+    return pending_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_resolve_duplicate_overwrite_sets_existing_id(client):
+    """overwrite：应把 profile.id 改写为 existing_candidate_id 后保存，
+    即覆盖旧档案，而不是新建一条记录。"""
+    memory = client._transport.app.state.memory_module
+    existing = CandidateProfile(id="cid-existing-001", name="老王")
+    await memory.save_candidate(existing, "# 老王旧简历\n")
+
+    pending_id = _register_pending(
+        client._transport.app,
+        existing_id="cid-existing-001",
+        new_id="cid-new-001",
+        name="老王",
+    )
+
+    r = await client.post(
+        "/api/resume/resolve-duplicate",
+        json={"pending_id": pending_id, "action": "overwrite"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["action"] == "overwrite"
+    assert data["candidate_id"] == "cid-existing-001"
+    assert data["candidate_name"] == "老王"
+
+    saved = await memory.get_candidate("cid-existing-001")
+    assert saved is not None
+    assert saved.current_position == "后端工程师"
+
+    from src.tools._context import ctx as tool_ctx
+
+    assert pending_id not in tool_ctx.pending_duplicates
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_resolve_duplicate_keep_both_creates_new_record(client):
+    """keep_both：existing 与 new_profile 均保留为独立档案。"""
+    memory = client._transport.app.state.memory_module
+    existing = CandidateProfile(id="cid-existing-002", name="老李")
+    await memory.save_candidate(existing, "# 老李旧简历\n")
+
+    pending_id = _register_pending(
+        client._transport.app,
+        existing_id="cid-existing-002",
+        new_id="cid-new-002",
+        name="老李",
+    )
+
+    r = await client.post(
+        "/api/resume/resolve-duplicate",
+        json={"pending_id": pending_id, "action": "keep_both"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["action"] == "keep_both"
+    assert data["candidate_id"] == "cid-new-002"
+
+    assert await memory.get_candidate("cid-existing-002") is not None
+    new_saved = await memory.get_candidate("cid-new-002")
+    assert new_saved is not None
+    assert new_saved.current_position == "后端工程师"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_resolve_duplicate_cancel_does_not_save(client):
+    """cancel：不落盘任何新档案，仅清理 pending 记录。"""
+    memory = client._transport.app.state.memory_module
+    pending_id = _register_pending(
+        client._transport.app,
+        existing_id="cid-existing-003",
+        new_id="cid-new-003",
+        name="老张",
+    )
+
+    r = await client.post(
+        "/api/resume/resolve-duplicate",
+        json={"pending_id": pending_id, "action": "cancel"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"action": "cancel", "pending_id": pending_id}
+
+    assert await memory.get_candidate("cid-new-003") is None
+
+    from src.tools._context import ctx as tool_ctx
+
+    assert pending_id not in tool_ctx.pending_duplicates
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_resolve_duplicate_unknown_pending_id_returns_404(client):
+    r = await client.post(
+        "/api/resume/resolve-duplicate",
+        json={"pending_id": "does-not-exist", "action": "cancel"},
+    )
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "pending_not_found"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -20,3 +22,8 @@ class ChatRequest(BaseModel):
 
 class CandidateSelectRequest(BaseModel):
     candidate_id: str
+
+
+class ResolveDuplicateRequest(BaseModel):
+    pending_id: str
+    action: Literal["overwrite", "keep_both", "cancel"]
