@@ -118,9 +118,11 @@ class EvalAgent(BaseAgent):
             text_summary(full_text, preview_len=80),
         )
 
-        # 中文每字约 1 token；同时计入系统消息开销，避免漏判超窗口情况
-        system_text_len = sum(len(m.content or "") for m in base_messages)
-        estimated_tokens = len(full_text) + system_text_len
+        # 精确计数：把系统消息 + 完整对话文本拼成虚拟消息列表整体计数，
+        # 避免逐段字符启发式估算与系统消息开销分别累加导致的重复计数。
+        estimated_tokens = self.llm_client.count_tokens(
+            base_messages + [Message(role="user", content=full_text)]
+        )
         if estimated_tokens <= _TOKEN_THRESHOLD:
             logger.info(
                 "EvalAgent generate_eval using single-call path estimated_tokens=%d",

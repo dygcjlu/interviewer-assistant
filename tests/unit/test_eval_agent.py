@@ -54,6 +54,9 @@ def _make_eval_agent(
 ) -> EvalAgent:
     mock_llm = AsyncMock()
     mock_llm.chat = AsyncMock(return_value=ChatResponse(content=llm_content))
+    # count_tokens 是同步 Protocol 方法；AsyncMock 未显式配置的子属性默认也是
+    # AsyncMock，同步调用会拿到未 await 的 coroutine，需显式配置为 MagicMock。
+    mock_llm.count_tokens = MagicMock(return_value=100)
     candidates_dir = tmp_path / "candidates"
     candidates_dir.mkdir()
     memory_module = MemoryModule(candidates_dir=str(candidates_dir))
@@ -208,3 +211,65 @@ class TestEvalAgentHandleRequest:
         resp = await agent.handle_request(req)
         # LLM 两次（retry）都返回无效 JSON，应该 failure
         assert not resp.success or "report" in (resp.data or {})
+
+
+# ── EvalAgent 单次/分块路径选择（token 精确计数）────────────────────────────
+
+
+@pytest.mark.unit
+class TestEvalAgentTokenThreshold:
+    """estimated_tokens 必须通过 count_tokens() 精确计数，而非字符数估算。"""
+
+    @pytest.mark.asyncio
+    async def test_small_conversation_routes_to_single_call(self, tmp_path, monkeypatch):
+        agent = _make_eval_agent(tmp_path)
+        await agent._memory_module.save_candidate(
+            CandidateProfile(id="c-001", name="张三"), ""
+        )
+        session = _make_session_with_rounds(n=2)
+
+        agent.llm_client.count_tokens = MagicMock(return_value=100)
+        single_mock = AsyncMock(
+            return_value='{"overall_score": 7.0, "summary": "候选人表现良好，技术能力扎实，沟通清晰，符合岗位要求，建议录用。"}'
+        )
+        chunked_mock = AsyncMock()
+        monkeypatch.setattr(agent, "_eval_single", single_mock)
+        monkeypatch.setattr(agent, "_eval_chunked", chunked_mock)
+
+        req = AgentRequest(type="generate_eval", payload={}, session=session)
+        resp = await agent.handle_request(req)
+
+        assert resp.success is True
+        single_mock.assert_called_once()
+        chunked_mock.assert_not_called()
+        # 精确计数：整个预算判断只能对合并后的虚拟消息列表调用一次 count_tokens，
+        # 不能对系统消息与对话文本分别调用后在 Python 里手动求和。
+        agent.llm_client.count_tokens.assert_called_once()
+        virtual_messages = agent.llm_client.count_tokens.call_args[0][0]
+        assert len(virtual_messages) == len(
+            agent._build_base_messages(session, "")
+        ) + 1
+
+    @pytest.mark.asyncio
+    async def test_large_conversation_routes_to_chunked(self, tmp_path, monkeypatch):
+        agent = _make_eval_agent(tmp_path)
+        await agent._memory_module.save_candidate(
+            CandidateProfile(id="c-001", name="张三"), ""
+        )
+        session = _make_session_with_rounds(n=2)
+
+        agent.llm_client.count_tokens = MagicMock(return_value=40000)
+        single_mock = AsyncMock()
+        chunked_mock = AsyncMock(
+            return_value='{"overall_score": 7.0, "summary": "候选人表现良好，技术能力扎实，沟通清晰，符合岗位要求，建议录用。"}'
+        )
+        monkeypatch.setattr(agent, "_eval_single", single_mock)
+        monkeypatch.setattr(agent, "_eval_chunked", chunked_mock)
+
+        req = AgentRequest(type="generate_eval", payload={}, session=session)
+        resp = await agent.handle_request(req)
+
+        assert resp.success is True
+        chunked_mock.assert_called_once()
+        single_mock.assert_not_called()
+        agent.llm_client.count_tokens.assert_called_once()

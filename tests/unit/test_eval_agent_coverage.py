@@ -54,6 +54,9 @@ def _make_eval_agent(
 ) -> EvalAgent:
     mock_llm = AsyncMock()
     mock_llm.chat = AsyncMock(return_value=ChatResponse(content=llm_content))
+    # count_tokens 是同步 Protocol 方法；AsyncMock 未显式配置的子属性默认也是
+    # AsyncMock，同步调用会拿到未 await 的 coroutine，需显式配置为 MagicMock。
+    mock_llm.count_tokens = MagicMock(return_value=100)
     candidates_dir = tmp_path / "candidates"
     candidates_dir.mkdir()
     memory_module = MemoryModule(candidates_dir=str(candidates_dir))
