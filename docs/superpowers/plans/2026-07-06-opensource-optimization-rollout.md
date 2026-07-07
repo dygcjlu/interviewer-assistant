@@ -397,7 +397,7 @@ git commit -m "docs: add issue templates (bug_report, feature_request)"
 **Files:**
 - Create: `.github/PULL_REQUEST_TEMPLATE.md`
 
-- [ ] **Step 1: 写模板**
+- [x] **Step 1: 写模板**
 
 ```markdown
 ## 变更说明
@@ -417,7 +417,7 @@ git commit -m "docs: add issue templates (bug_report, feature_request)"
 - [ ] 已同步更新 docs/arc/ 相关文档（如适用）
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add .github/PULL_REQUEST_TEMPLATE.md
@@ -429,7 +429,7 @@ git commit -m "docs: add pull request template"
 **Files:**
 - Create: `docs/demo-recording-checklist.md`
 
-- [ ] **Step 1: 写 checklist（含 MOCK 启动步骤 + 完整操作脚本）**
+- [x] **Step 1: 写 checklist（含 MOCK 启动步骤 + 完整操作脚本）**（核实后修正第 6 步「停止面试」→「结束面试」，与 `src/web/ui.py:142` 实际按钮文案一致）
 
 ```markdown
 # Demo 录制 Checklist
@@ -455,7 +455,7 @@ $env:MOCK_AUDIO = "true"
 - 输出 GIF/截图放入 docs/assets/（见 Task 1.12）
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/demo-recording-checklist.md
@@ -469,7 +469,7 @@ git commit -m "docs: add demo recording checklist"
 - Create: `docs/assets/README.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: 创建 assets 目录说明**
+- [x] **Step 1: 创建 assets 目录说明**
 
 `docs/assets/README.md`：
 ```markdown
@@ -480,7 +480,7 @@ git commit -m "docs: add demo recording checklist"
 ```
 并创建空的 `docs/assets/.gitkeep`。
 
-- [ ] **Step 2: 在 README 预留嵌入位置**
+- [x] **Step 2: 在 README 预留嵌入位置**
 
 在 `README.md` 顶部功能介绍区插入占位（先 Read `README.md` 定位合适锚点）：
 ```markdown
@@ -488,7 +488,7 @@ git commit -m "docs: add demo recording checklist"
 <!-- ![Demo](docs/assets/demo.gif) -->
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/assets/ README.md
