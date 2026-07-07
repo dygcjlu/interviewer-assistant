@@ -1204,7 +1204,7 @@ git add src/web/routes.py tests/integration/test_routes.py
 git commit -m "feat: add resolve-duplicate endpoint (overwrite/keep_both/cancel)"
 ```
 
-### Task 4.4（对应 tasks.md 4.3，尚未实现）: 前端——三选一弹窗交互
+### Task 4.4（对应 tasks.md 4.3）: 前端——三选一弹窗交互（已完成，commit `06e8921`，单任务审查 Approved）
 
 **Files:**
 - Modify: `src/web/ui.py:548-566`（`_chat_stream` 的 WS/SSE 事件处理，或 `_chat_stream` 内 SSE 分支 `:940-944`）、新增 `_confirm_dedup_dialog`
@@ -1214,7 +1214,7 @@ git commit -m "feat: add resolve-duplicate endpoint (overwrite/keep_both/cancel)
 - Consumes: SSE 事件 `{"type":"duplicate_candidate", "pending_id", "existing_candidate_name", "new_name", ...}`（Task 4.2 产出）。
 - Produces: 用户选择后 `POST /api/resume/resolve-duplicate`（Task 4.3）。
 
-- [ ] **Step 1: 新增三选一弹窗**
+- [x] **Step 1: 新增三选一弹窗**（`_confirm_dedup_dialog()`，与本节示例代码基本一致，采用同样的 `asyncio.Future` 模式）
 
 在 `ui.py` 新增（参考现有 `_confirm_overwrite_dialog` 的 future 模式）：
 
@@ -1239,7 +1239,7 @@ async def _confirm_dedup_dialog(existing_name: str) -> str:
     return await done
 ```
 
-- [ ] **Step 2: 在 `_chat_stream` SSE 分支处理 `duplicate_candidate` 事件**
+- [x] **Step 2: 在 `_chat_stream` SSE 分支处理 `duplicate_candidate` 事件**（实际实现给 `_chat_stream`/`_trigger_parse` 新增 `state: dict | None = None` 形参一路穿透，分支内更新 `state["candidate_id"]`/`state["candidate_name"]` 后交由既有 `finally: await on_complete()` 完成面板刷新，未额外手动调用 `_sync_candidate_panel()`；三个 action 分支 + 404/500/网络异常均已处理，reviewer 确认字段名与后端完全一致）
 
 在 `_chat_stream`（`:940`）的 `chunk_type` 分支中新增：
 
@@ -1267,11 +1267,11 @@ async def _confirm_dedup_dialog(existing_name: str) -> str:
                         await _scroll(chat_scroll)
 ```
 
-- [ ] **Step 3: 移除/保留上传期两选弹窗**
+- [x] **Step 3: 移除/保留上传期两选弹窗**（已确认 `_confirm_overwrite_dialog`、`_conflict` 分支及 `_do_upload_request` 的 `candidate_id`/`overwrite` 请求参数均为死代码并移除，reviewer 用 grep 独立确认无残留引用）
 
 因去重改到解析后，`_handle_upload` 中依赖 409 的 `_conflict` 分支（`ui.py:856-867`）不再触发（上传期去重已删除）。保留代码不删亦可（不会触发），但为避免死代码，建议在本任务同时移除 `_conflict` 处理分支并在 commit 说明"上传期去重已迁移到解析后"。旧 `_confirm_overwrite_dialog` 若无其它引用一并移除（Grep 确认无引用）。
 
-- [ ] **Step 4: 前端逻辑无法单测的部分，用集成/端到端覆盖**
+- [x] **Step 4: 前端逻辑无法单测的部分，用集成/端到端覆盖**（`ruff check src/web/ui.py` 全清；全量 504 项单测/集成测试通过，无回归；`ui.py` 覆盖率仍接近 0% 属已知既有状态，非本任务引入；真正的弹窗 UX 需 Task 4.6 端到端浏览器测试验证，当前仍受 `cursor-ide-browser` MCP 不可用阻塞）
 
 前端交互主要靠 Task 4.6 端到端验证；后端三分支已在 4.3 覆盖。此步仅做 `ruff check` + 应用能正常启动的冒烟。
 
@@ -1281,7 +1281,7 @@ Run:
 ```
 Expected: 无 lint 错误。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**（`06e8921`，单任务审查 Approved，仅 2 项不阻塞的 Minor：`existing_name` 兜底字段语义颠倒但不可达、cancel 与 HTTP 错误共用异常处理导致文案不够精确）
 
 ```bash
 git add src/web/ui.py

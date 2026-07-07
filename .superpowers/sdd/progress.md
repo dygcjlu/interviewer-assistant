@@ -41,4 +41,6 @@ Task 4.1: complete (design/investigation task, no code commit; report .superpowe
 Task 4.2: complete (commit 1040a5b, batch review with 4.4 Approved after 1 fix round; fix commit a2654e3 for shared pending-object mutation bug in resolve_duplicate's overwrite branch, re-review Approved)
 Task 4.4: complete (commit 1040a5b + fix a2654e3, batch review with 4.2 — see above; same fix round covers both)
 
-## Phase 2 — 候选人去重改为按真实姓名 sub-phase: Tasks 4.1, 4.2, 4.4 (backend) complete; Task 4.3 (frontend three-way dialog) and Task 4.6 (e2e browser, likely blocked same as 3.5) still pending; Task 4.5 (tests) backend portion covered via TDD in 4.2/4.4, frontend portion pending 4.3
+Task 4.3: complete (commit 06e8921, individual review Approved; corrected implementer's brief in-flight — threaded new `state` param through `_chat_stream`/`_trigger_parse` since plan's sample code assumed access that didn't exist; removed dead `_confirm_overwrite_dialog`/`_conflict` upload-time 409 path; 2 accepted Minor findings, neither blocking)
+
+## Phase 2 — 候选人去重改为按真实姓名 sub-phase: Tasks 4.1, 4.2, 4.3, 4.4 complete (backend + frontend); Task 4.6 (e2e browser, likely blocked same as 3.5) still pending; Task 4.5 (tests) backend portion covered via TDD in 4.2/4.4, frontend portion has no dedicated automated test (ui.py near-zero coverage is a pre-existing accepted state) — real UX validation deferred to Task 4.6
