@@ -27,14 +27,18 @@ REST API 前缀统一为 `/api`，WebSocket 端点为 `/ws/interview`。
 ```
 data: {"type": "delta", "delta": "你好"}
 data: {"type": "delta", "delta": "，当前候选人是..."}
-data: {"type": "tool_call", "name": "dispatch_to_agent", "arguments": {...}}
+data: {"type": "tool_call", "tool_call_id": "call_abc", "name": "dispatch_to_agent", "args": "{...}"}
+data: {"type": "tool_result", "tool_call_id": "call_abc", "name": "dispatch_to_agent", "result_summary": "parse_done", "success": true}
+data: {"type": "duplicate_candidate", "pending_id": "...", "new_name": "...", "existing_candidate_id": "...", "existing_candidate_name": "..."}
 data: [DONE]
 ```
 
 | 事件类型 | 说明 |
 |---|---|
 | `delta` | LLM 流式文字片段 |
-| `tool_call` | LLM 发起工具调用（透传给前端，供展示） |
+| `tool_call` | LLM 发起工具调用（含 `tool_call_id`，供前端与后续 `tool_result` 关联展示） |
+| `tool_result` | 工具执行完成后推送（字段：`tool_call_id`/`name`/`result_summary`/`success`），前端按 `tool_call_id` 原地更新对应的工具调用卡片 |
+| `duplicate_candidate` | 简历解析判重命中（`parse_done` 检测到同名候选人），前端弹出三选一去重弹窗，处理结果通过 `POST /api/resume/resolve-duplicate` 提交 |
 
 **错误码**：
 
