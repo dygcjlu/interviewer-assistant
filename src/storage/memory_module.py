@@ -13,6 +13,10 @@
               ├── transcript.md         # 完整对话记录
               ├── eval_report.md        # 评价报告
               └── session.json          # 会话元数据
+
+`MemoryModule` 本身是一个 Facade：候选人 CRUD 委托给 `CandidateStore`
+（`candidate_store.py`），面试生命周期 + WAL 委托给 `InterviewStore`
+（`interview_store.py`），评价报告持久化委托给 `EvalStore`（`eval_store.py`）。
 """
 
 from __future__ import annotations
@@ -20,246 +24,69 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
-import uuid
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
-
-import yaml
 
 from ..models.candidate import CandidateProfile
 from ..models.evaluation import DimensionScore, EvalReport
 from ..models.exceptions import StorageError
 from ..models.session import ConversationRound, InterviewSession
 from ..utils import write_atomic as _write_atomic
+from ._store_common import (
+    CandidateHistory,
+    InterviewDetail,
+    InterviewSummary,
+    RecordingPaths,
+    _build_candidates_index,
+    _build_eval_report_md,
+    _build_interviews_index,
+    _build_profile_md,
+    _build_transcript_md,
+    _format_history_summary,
+    _normalize_inline,
+    _parse_dt,
+    _parse_frontmatter,
+    _parse_transcript,
+    _render_frontmatter,
+)
+from .candidate_store import CandidateStore
 
 logger = logging.getLogger(__name__)
 
-
-# ─── 辅助数据结构 ──────────────────────────────────────────────────────
-
-
-@dataclass
-class InterviewSummary:
-    interview_id: str
-    date: datetime
-    overall_score: float | None
-    recommendation: str | None
-    key_findings: str
-
-
-@dataclass
-class CandidateHistory:
-    past_interviews: list[InterviewSummary]
-    history_summary: str
-
-
-@dataclass
-class RecordingPaths:
-    full_candidate: str
-    full_interviewer: str
-
-
-@dataclass
-class InterviewDetail:
-    interview_id: str
-    candidate_id: str
-    start_time: datetime
-    end_time: datetime | None
-    rounds: list[ConversationRound] = field(default_factory=list)
-    eval_report: EvalReport | None = None
-    recording_paths: RecordingPaths | None = None
-
-
-# ─── YAML frontmatter 解析 ────────────────────────────────────────────
-
-
-def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    """解析 YAML frontmatter，返回 (meta_dict, body_text)。"""
-    if not text.startswith("---"):
-        return {}, text
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}, text
-    yaml_text = text[3:end].strip()
-    body = text[end + 4 :].lstrip("\n")
-    try:
-        meta = yaml.safe_load(yaml_text) or {}
-    except yaml.YAMLError:
-        logger.warning("Failed to parse YAML frontmatter")
-        meta = {}
-    return meta, body
-
-
-def _render_frontmatter(meta: dict[str, Any]) -> str:
-    """将 dict 渲染为 YAML frontmatter 块（含首尾 ---）。"""
-    return (
-        "---\n"
-        + yaml.dump(meta, allow_unicode=True, default_flow_style=False)
-        + "---\n"
-    )
-
-
-def _parse_dt(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value))
-    except (ValueError, TypeError):
-        return None
-
-
-# ─── 文件格式构建 ─────────────────────────────────────────────────────
-
-
-def _build_candidates_index(candidates: list[dict]) -> str:
-    meta = {"candidates": candidates}
-    lines = [_render_frontmatter(meta), "# 候选人目录\n"]
-    lines.append("| 候选人 | ID | 创建时间 | 最近面试 |")
-    lines.append("|---|---|---|---|")
-    for c in candidates:
-        latest = c.get("latest_interview") or "—"
-        lines.append(
-            f"| {c['name']} | {c['id']} | {c.get('created_at', '')} | {latest} |"
-        )
-    return "\n".join(lines) + "\n"
-
-
-def _build_profile_md(profile: CandidateProfile, resume_markdown: str) -> str:
-    meta: dict[str, Any] = {
-        "id": profile.id,
-        "name": profile.name,
-        "created_at": profile.created_at or datetime.now().isoformat(),
-        "resume_pdf": profile.resume_pdf or "resume.pdf",
-    }
-    if profile.email:
-        meta["email"] = profile.email
-    if profile.phone:
-        meta["phone"] = profile.phone
-    if profile.age is not None:
-        meta["age"] = profile.age
-    if profile.current_position:
-        meta["current_position"] = profile.current_position
-    if profile.years_of_experience is not None:
-        meta["years_of_experience"] = profile.years_of_experience
-    if profile.skills:
-        meta["skills"] = list(profile.skills)
-    return _render_frontmatter(meta) + "\n" + resume_markdown
-
-
-def _build_interviews_index(candidate_name: str, interviews: list[dict]) -> str:
-    meta = {"interviews": interviews}
-    lines = [_render_frontmatter(meta), f"# {candidate_name} · 面试历史\n"]
-    lines.append(
-        "| 面试 ID | 开始时间 | 状态 | 触发模式 | 综合评分 | 推荐结论 | 关键结论 |"
-    )
-    lines.append("|---|---|---|---|---|---|---|")
-    for iv in interviews:
-        score = iv.get("overall_score")
-        score_str = f"{score}/10" if score is not None else "—"
-        rec = iv.get("recommendation") or "—"
-        findings = iv.get("key_findings") or "—"
-        start = iv.get("start_time", "")[:16].replace("T", " ")
-        stage_map = {"interviewing": "进行中", "completed": "已完成", "idle": "未开始"}
-        stage_str = stage_map.get(iv.get("stage", ""), iv.get("stage", ""))
-        trigger_map = {"auto": "自动", "manual": "手动"}
-        trigger_str = trigger_map.get(iv.get("trigger_mode", ""), "自动")
-        lines.append(
-            f"| {iv['interview_id']} | {start} | {stage_str} | {trigger_str} | {score_str} | {rec} | {findings} |"
-        )
-    return "\n".join(lines) + "\n"
-
-
-def _normalize_inline(text: str) -> str:
-    """将多行文本压缩为单行（换行符替换为空格），保证 transcript 逐行解析时不丢内容。"""
-    return " ".join(text.splitlines()).strip() if text else ""
-
-
-def _build_transcript_md(session: InterviewSession) -> str:
-    candidate = session.candidate
-    start_time = session.metadata.start_time
-    end_time = session.metadata.end_time or datetime.now()
-    meta = {
-        "interview_id": session.id,
-        "candidate_id": candidate.id,
-        "start_time": start_time.isoformat(),
-        "end_time": end_time.isoformat(),
-        "rounds": len(session.rounds),
-    }
-    date_str = start_time.strftime("%Y-%m-%d")
-    lines = [_render_frontmatter(meta), f"# 面试记录 · {candidate.name} · {date_str}\n"]
-    for r in session.rounds:
-        ts = r.timestamp.strftime("%H:%M") if r.timestamp else ""
-        lines.append(f"\n## Round {r.round_number} · {ts}\n")
-        lines.append(f"**面试官：** {_normalize_inline(r.interviewer_text)}\n")
-        lines.append(f"**候选人：** {_normalize_inline(r.candidate_text)}\n")
-        if r.llm_suggestion:
-            lines.append(f"**追问建议：** {_normalize_inline(r.llm_suggestion)}\n")
-        lines.append("---")
-    return "\n".join(lines) + "\n"
-
-
-def _build_eval_report_md(report: EvalReport, candidate_name: str) -> str:
-    meta: dict[str, Any] = {
-        "interview_id": report.interview_id,
-        "overall_score": report.overall_score,
-        "recommendation": report.recommendation,
-        "generated_at": report.generated_at.isoformat(),
-    }
-    if report.strengths:
-        meta["strengths"] = list(report.strengths)
-    if report.weaknesses:
-        meta["weaknesses"] = list(report.weaknesses)
-    if report.dimensions:
-        meta["dimensions"] = [
-            {"dimension": d.dimension, "score": d.score, "comment": d.comment}
-            for d in report.dimensions
-        ]
-    lines = [_render_frontmatter(meta), f"# 面试评价报告 · {candidate_name}\n"]
-    lines.append(f"## 综合评分：{report.overall_score} / 10\n")
-    lines.append("## 推荐结论\n")
-    lines.append(report.recommendation + "\n")
-    if report.summary:
-        lines.append(report.summary + "\n")
-    if report.strengths:
-        lines.append("## 优势\n")
-        for s in report.strengths:
-            lines.append(f"- {s}")
-        lines.append("")
-    if report.weaknesses:
-        lines.append("## 不足\n")
-        for w in report.weaknesses:
-            lines.append(f"- {w}")
-        lines.append("")
-    if report.dimensions:
-        lines.append("## 各维度评分\n")
-        lines.append("| 维度 | 得分 | 评语 |")
-        lines.append("|---|---|---|")
-        for d in report.dimensions:
-            lines.append(f"| {d.dimension} | {d.score} | {d.comment} |")
-    return "\n".join(lines) + "\n"
+__all__ = [
+    "MemoryModule",
+    "CandidateHistory",
+    "InterviewDetail",
+    "InterviewSummary",
+    "RecordingPaths",
+    "_build_candidates_index",
+    "_build_eval_report_md",
+    "_build_profile_md",
+    "_build_transcript_md",
+    "_normalize_inline",
+    "_parse_dt",
+    "_parse_frontmatter",
+    "_render_frontmatter",
+    "_parse_transcript",
+]
 
 
 # ─── 主接口 ───────────────────────────────────────────────────────────
 
 
 class MemoryModule:
-    """基于文件系统的候选人与面试数据管理。"""
+    """基于文件系统的候选人与面试数据管理（Facade）。"""
 
     def __init__(self, candidates_dir: str = "candidates") -> None:
         self._root = Path(candidates_dir)
         self._root.mkdir(parents=True, exist_ok=True)
         self._index_path = self._root / "index.md"
+        self._candidates = CandidateStore(self._root)
 
     # ─── 内部路径工具 ─────────────────────────────────────────────────
 
     def _candidate_dir(self, candidate_id: str) -> Path:
         return self._root / candidate_id
-
-    def _profile_path(self, candidate_id: str) -> Path:
-        return self._candidate_dir(candidate_id) / "profile.md"
 
     def _interviews_dir(self, candidate_id: str) -> Path:
         return self._candidate_dir(candidate_id) / "interviews"
@@ -273,9 +100,6 @@ class MemoryModule:
     def _session_json_path(self, candidate_id: str, interview_id: str) -> Path:
         return self._interview_dir(candidate_id, interview_id) / "session.json"
 
-    def _brief_path(self, candidate_id: str) -> Path:
-        return self._candidate_dir(candidate_id) / "brief.md"
-
     def _transcript_path(self, candidate_id: str, interview_id: str) -> Path:
         return self._interview_dir(candidate_id, interview_id) / "transcript.md"
 
@@ -286,22 +110,6 @@ class MemoryModule:
 
     def _eval_report_path(self, candidate_id: str, interview_id: str) -> Path:
         return self._interview_dir(candidate_id, interview_id) / "eval_report.md"
-
-    # ─── 候选人 index 读写 ────────────────────────────────────────────
-
-    def _read_candidates_index(self) -> list[dict]:
-        if not self._index_path.exists():
-            return []
-        try:
-            text = self._index_path.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(text)
-            return meta.get("candidates") or []
-        except Exception:
-            logger.exception("Failed to read candidates index")
-            return []
-
-    def _write_candidates_index(self, candidates: list[dict]) -> None:
-        _write_atomic(self._index_path, _build_candidates_index(candidates))
 
     # ─── 面试 index 读写 ──────────────────────────────────────────────
 
@@ -320,136 +128,46 @@ class MemoryModule:
     def _write_interviews_index(
         self, candidate_id: str, interviews: list[dict]
     ) -> None:
-        profile = self._read_profile_meta(candidate_id)
+        profile = self._candidates.read_profile_meta(candidate_id)
         candidate_name = profile.get("name", candidate_id) if profile else candidate_id
         path = self._interviews_index_path(candidate_id)
         _write_atomic(path, _build_interviews_index(candidate_name, interviews))
-
-    def _read_profile_meta(self, candidate_id: str) -> dict | None:
-        path = self._profile_path(candidate_id)
-        if not path.exists():
-            return None
-        try:
-            text = path.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(text)
-            return meta
-        except Exception:
-            return None
 
     # ─── 候选人 CRUD ─────────────────────────────────────────────────
 
     async def save_candidate(
         self, profile: CandidateProfile, resume_markdown: str
     ) -> str:
-        candidate_id = profile.id or f"c-{uuid.uuid4().hex[:12]}"
-        profile.id = candidate_id
-
-        if not profile.created_at:
-            profile.created_at = datetime.now().isoformat()
-
-        # 写 profile.md
-        profile_path = self._profile_path(candidate_id)
-        _write_atomic(profile_path, _build_profile_md(profile, resume_markdown))
-
-        # 更新 candidates/index.md
-        candidates = self._read_candidates_index()
-        entry = {
-            "id": candidate_id,
-            "name": profile.name,
-            "created_at": profile.created_at[:10],
-            "latest_interview": None,
-        }
-        existing_idx = next(
-            (i for i, c in enumerate(candidates) if c["id"] == candidate_id), -1
-        )
-        if existing_idx >= 0:
-            entry["latest_interview"] = candidates[existing_idx].get("latest_interview")
-            candidates[existing_idx] = entry
-        else:
-            candidates.append(entry)
-        self._write_candidates_index(candidates)
-
-        logger.info(
-            "save_candidate done candidate_id=%s name=%r", candidate_id, profile.name
-        )
-        return candidate_id
+        return await self._candidates.save_candidate(profile, resume_markdown)
 
     async def get_candidate(self, candidate_id: str) -> CandidateProfile | None:
-        path = self._profile_path(candidate_id)
-        if not path.exists():
-            return None
-        try:
-            text = path.read_text(encoding="utf-8")
-            meta, _ = _parse_frontmatter(text)
-            return _profile_from_meta(meta)
-        except Exception:
-            logger.exception("get_candidate failed for %s", candidate_id)
-            return None
+        return await self._candidates.get_candidate(candidate_id)
 
     async def get_resume_markdown(self, candidate_id: str) -> str:
         """返回 profile.md 的正文 Markdown（frontmatter 之后的部分）。"""
-        path = self._profile_path(candidate_id)
-        if not path.exists():
-            return ""
-        try:
-            text = path.read_text(encoding="utf-8")
-            _, body = _parse_frontmatter(text)
-            return body
-        except Exception:
-            logger.exception("get_resume_markdown failed for %s", candidate_id)
-            return ""
+        return await self._candidates.get_resume_markdown(candidate_id)
 
     async def get_candidate_by_name(self, name: str) -> CandidateProfile | None:
-        candidates = self._read_candidates_index()
-        for c in candidates:
-            if c.get("name") == name:
-                return await self.get_candidate(c["id"])
-        return None
+        return await self._candidates.get_candidate_by_name(name)
 
     async def search_candidates(
         self, keyword: str = "", limit: int = 20, offset: int = 0
     ) -> list[CandidateProfile]:
-        candidates = self._read_candidates_index()
-        if keyword:
-            candidates = [
-                c
-                for c in candidates
-                if keyword.lower() in (c.get("name") or "").lower()
-            ]
-        paged = candidates[offset : offset + limit]
-        results = []
-        for c in paged:
-            profile = await self.get_candidate(c["id"])
-            if profile:
-                results.append(profile)
-        return results
+        return await self._candidates.search_candidates(keyword, limit, offset)
 
     async def count_candidates(self, keyword: str = "") -> int:
         """返回符合关键词筛选的候选人总数（不受 limit/offset 影响）。"""
-        candidates = self._read_candidates_index()
-        if keyword:
-            candidates = [
-                c
-                for c in candidates
-                if keyword.lower() in (c.get("name") or "").lower()
-            ]
-        return len(candidates)
+        return await self._candidates.count_candidates(keyword)
 
     async def delete_candidate(self, candidate_id: str) -> None:
-        cand_dir = self._candidate_dir(candidate_id)
-        if cand_dir.exists():
-            shutil.rmtree(cand_dir)
-        candidates = self._read_candidates_index()
-        candidates = [c for c in candidates if c["id"] != candidate_id]
-        self._write_candidates_index(candidates)
-        logger.info("delete_candidate done candidate_id=%s", candidate_id)
+        await self._candidates.delete_candidate(candidate_id)
 
     # ─── 候选人历史 ───────────────────────────────────────────────────
 
     async def get_candidate_history(
         self, candidate_id: str, limit: int = 3
     ) -> CandidateHistory | None:
-        meta = self._read_profile_meta(candidate_id)
+        meta = self._candidates.read_profile_meta(candidate_id)
         if meta is None:
             return None
         interviews = self._read_interviews_index(candidate_id)
@@ -555,7 +273,7 @@ class MemoryModule:
             interviews_dir = cand_dir / "interviews"
             if not interviews_dir.is_dir():
                 continue
-            cand_meta = self._read_profile_meta(cand_dir.name) or {}
+            cand_meta = self._candidates.read_profile_meta(cand_dir.name) or {}
             for iv_dir in interviews_dir.iterdir():
                 if not iv_dir.is_dir():
                     continue
@@ -669,7 +387,7 @@ class MemoryModule:
         end_time = rounds[-1].timestamp
 
         # 用一个最小 session 拼 transcript.md（复用已有渲染逻辑）
-        candidate_meta = self._read_profile_meta(candidate_id) or {}
+        candidate_meta = self._candidates.read_profile_meta(candidate_id) or {}
         candidate = CandidateProfile(
             id=candidate_id,
             name=str(candidate_meta.get("name", "")) if candidate_meta else "",
@@ -794,12 +512,9 @@ class MemoryModule:
         self._write_interviews_index(candidate_id, interviews)
 
         # 4. 更新 candidates/index.md 中的 latest_interview
-        candidates = self._read_candidates_index()
-        for c in candidates:
-            if c["id"] == candidate_id:
-                c["latest_interview"] = end_time.strftime("%Y-%m-%d")
-                break
-        self._write_candidates_index(candidates)
+        self._candidates.touch_latest_interview(
+            candidate_id, end_time.strftime("%Y-%m-%d")
+        )
 
         # 5. 归档 rounds.jsonl WAL（transcript.md 已写入，WAL 完成使命）
         wal_path = self._rounds_wal_path(candidate_id, interview_id)
@@ -829,52 +544,21 @@ class MemoryModule:
 
     def save_brief(self, candidate_id: str, content: str) -> None:
         """原子写入候选人简报到 candidates/{id}/brief.md。"""
-        path = self._brief_path(candidate_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _write_atomic(path, content)
-        logger.info(
-            "save_brief done candidate_id=%s chars=%d", candidate_id, len(content)
-        )
+        self._candidates.save_brief(candidate_id, content)
 
     def get_brief(self, candidate_id: str) -> str:
         """读取候选人简报，文件不存在时返回空字符串。"""
-        path = self._brief_path(candidate_id)
-        if not path.exists():
-            return ""
-        try:
-            return path.read_text(encoding="utf-8")
-        except Exception:
-            logger.exception("get_brief failed for %s", candidate_id)
-            return ""
+        return self._candidates.get_brief(candidate_id)
 
     # ─── 结构化问题清单 ────────────────────────────────────────────────
 
-    def _questions_path(self, candidate_id: str) -> Path:
-        return self._candidate_dir(candidate_id) / "questions.json"
-
     def save_questions(self, candidate_id: str, questions: list) -> None:
         """原子写入结构化问题清单（list[dict]）。"""
-        import json
-
-        path = self._questions_path(candidate_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _write_atomic(path, json.dumps(questions, ensure_ascii=False, indent=2))
-        logger.info(
-            "save_questions done candidate_id=%s count=%d", candidate_id, len(questions)
-        )
+        self._candidates.save_questions(candidate_id, questions)
 
     def get_questions(self, candidate_id: str) -> list:
         """读取问题清单，不存在时返回空列表。"""
-        import json
-
-        path = self._questions_path(candidate_id)
-        if not path.exists():
-            return []
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            logger.exception("get_questions failed for %s", candidate_id)
-            return []
+        return self._candidates.get_questions(candidate_id)
 
     def update_question_coverage(
         self,
@@ -884,14 +568,9 @@ class MemoryModule:
         covered_by: str = "manual",
     ) -> bool:
         """更新单个问题的覆盖状态。返回是否找到该问题。"""
-        questions = self.get_questions(candidate_id)
-        for q in questions:
-            if q.get("id") == question_id:
-                q["covered"] = covered
-                q["covered_by"] = covered_by if covered else ""
-                self.save_questions(candidate_id, questions)
-                return True
-        return False
+        return self._candidates.update_question_coverage(
+            candidate_id, question_id, covered, covered_by
+        )
 
     async def get_latest_eval_report(self, candidate_id: str) -> EvalReport | None:
         interviews = self._read_interviews_index(candidate_id)
@@ -986,7 +665,7 @@ class MemoryModule:
             )
 
         # 写 eval_report.md
-        profile_meta = self._read_profile_meta(candidate_id)
+        profile_meta = self._candidates.read_profile_meta(candidate_id)
         candidate_name = profile_meta.get("name", "") if profile_meta else ""
         path = self._eval_report_path(candidate_id, report.interview_id)
         _write_atomic(path, _build_eval_report_md(report, candidate_name))
@@ -1176,86 +855,5 @@ class MemoryModule:
                 }
             )
 
-        self._write_candidates_index(candidates)
+        self._candidates._write_candidates_index(candidates)
         logger.info("rebuild_index done: %d candidates", len(candidates))
-
-
-# ─── 辅助函数 ─────────────────────────────────────────────────────────
-
-
-def _profile_from_meta(meta: dict) -> CandidateProfile:
-    return CandidateProfile(
-        id=meta.get("id", ""),
-        name=meta.get("name", ""),
-        email=meta.get("email"),
-        phone=meta.get("phone"),
-        age=meta.get("age"),
-        current_position=meta.get("current_position"),
-        years_of_experience=meta.get("years_of_experience"),
-        skills=list(meta.get("skills") or []),
-        created_at=str(meta.get("created_at") or ""),
-        resume_pdf=str(meta.get("resume_pdf") or ""),
-    )
-
-
-def _format_history_summary(
-    candidate_name: str, summaries: list[InterviewSummary]
-) -> str:
-    if not summaries:
-        return ""
-    lines = [f"候选人 {candidate_name} 历史面试记录："]
-    for idx, s in enumerate(summaries, start=1):
-        date_str = s.date.strftime("%Y-%m-%d %H:%M")
-        score_str = (
-            f"{s.overall_score:.1f}/10" if s.overall_score is not None else "未评分"
-        )
-        rec_str = s.recommendation or "未推荐"
-        findings = s.key_findings or "无关键发现"
-        lines.append(
-            f"\n{idx}. {date_str} — 综合评分 {score_str}，推荐 {rec_str}\n   关键发现: {findings}"
-        )
-    return "".join(lines)
-
-
-def _parse_transcript(text: str) -> list[ConversationRound]:
-    """从 transcript.md 正文中解析 ConversationRound 列表（尽力解析）。"""
-    _, body = _parse_frontmatter(text)
-    rounds: list[ConversationRound] = []
-    current: dict[str, str] = {}
-    round_number = 0
-
-    for line in body.splitlines():
-        if line.startswith("## Round "):
-            if current:
-                rounds.append(
-                    ConversationRound(
-                        round_number=round_number,
-                        interviewer_text=current.get("interviewer", ""),
-                        candidate_text=current.get("candidate", ""),
-                        llm_suggestion=current.get("suggestion"),
-                        timestamp=datetime.now(),
-                    )
-                )
-            current = {}
-            try:
-                round_number = int(line.split("Round ")[1].split(" ")[0])
-            except (IndexError, ValueError):
-                round_number += 1
-        elif line.startswith("**面试官：**"):
-            current["interviewer"] = line[len("**面试官：**") :].strip()
-        elif line.startswith("**候选人：**"):
-            current["candidate"] = line[len("**候选人：**") :].strip()
-        elif line.startswith("**追问建议：**"):
-            current["suggestion"] = line[len("**追问建议：**") :].strip()
-
-    if current:
-        rounds.append(
-            ConversationRound(
-                round_number=round_number,
-                interviewer_text=current.get("interviewer", ""),
-                candidate_text=current.get("candidate", ""),
-                llm_suggestion=current.get("suggestion"),
-                timestamp=datetime.now(),
-            )
-        )
-    return rounds
