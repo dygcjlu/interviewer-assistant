@@ -26,7 +26,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.agents.main_agent import _HISTORY_LIMIT, _NUDGE_INTERVAL, MainAgent
+from src.agents.main_agent import (
+    _HISTORY_LIMIT,
+    _NUDGE_INTERVAL,
+    MainAgent,
+    _extract_duplicate_candidate_event,
+    _extract_user_facing_error,
+)
 from src.framework.tool_registry import ToolRegistry
 from src.llm.protocol import ChatResponse, StreamChunk
 from src.models.message import FunctionCallInfo, Message, ToolCallInfo
@@ -409,3 +415,114 @@ class TestMainAgentNudgeTrigger:
         # Crucially, no background review task should have been created
         assert agent._nudge_task is None, "No nudge task when memory tool already ran this round"
         agent._background_memory_review.assert_not_called()
+
+
+# ── Task 6.5 — Helper functions and simple method coverage ───────────────────
+
+
+@pytest.mark.unit
+class TestExtractUserFacingError:
+    def test_returns_none_for_invalid_json(self):
+        """Malformed JSON that contains 'user_facing' keyword returns None without raising."""
+        result = _extract_user_facing_error('{"user_facing": True, broken}')
+        assert result is None
+
+    def test_returns_none_when_user_facing_false(self):
+        """Valid JSON dict with user_facing=False is not an error and returns None."""
+        result = _extract_user_facing_error(
+            json.dumps({"error": "something", "user_facing": False})
+        )
+        assert result is None
+
+    def test_returns_none_for_non_dict_json(self):
+        """Valid JSON that is not a dict (e.g. a list containing 'user_facing') returns None."""
+        result = _extract_user_facing_error('["user_facing", true]')
+        assert result is None
+
+
+@pytest.mark.unit
+class TestExtractDuplicateCandidateEvent:
+    def test_returns_none_for_invalid_json(self):
+        """Malformed JSON that contains 'duplicate_candidate' keyword returns None."""
+        result = _extract_duplicate_candidate_event('{"duplicate_candidate": broken}')
+        assert result is None
+
+    def test_returns_none_for_non_dict_json(self):
+        """Valid JSON array (not a dict) returns None."""
+        result = _extract_duplicate_candidate_event('["duplicate_candidate"]')
+        assert result is None
+
+    def test_returns_none_when_dup_value_is_not_dict(self):
+        """duplicate_candidate value that is not a dict (e.g. a string) returns None."""
+        result = _extract_duplicate_candidate_event(
+            json.dumps({"duplicate_candidate": "only_a_string"})
+        )
+        assert result is None
+
+
+@pytest.mark.unit
+class TestMainAgentSimpleMethods:
+    def test_reload_user_memory_refreshes_layer2_and_clears_cache(self):
+        """reload_user_memory() re-renders from store, updates _layer2_user_memory,
+        and invalidates the cached system prompt."""
+        agent = _minimal_agent()
+        agent._user_memory_store.render.return_value = "岗位：后端工程师"
+        agent._cached_system_prompt = "stale cached value"
+
+        agent.reload_user_memory()
+
+        assert agent._layer2_user_memory == "岗位：后端工程师"
+        assert agent._cached_system_prompt is None
+
+    def test_clear_candidate_context_blanks_layer3_and_invalidates_cache(self):
+        """clear_candidate_context() resets _layer3_candidate to '' and clears cache."""
+        agent = _minimal_agent()
+        agent._layer3_candidate = "some prior candidate info"
+        agent._cached_system_prompt = "stale cached value"
+
+        agent.clear_candidate_context()
+
+        assert agent._layer3_candidate == ""
+        assert agent._cached_system_prompt is None
+
+    def test_set_candidate_context_includes_all_optional_fields(self):
+        """set_candidate_context() appends position, experience, skills, resume, brief,
+        and history_summary when they are all provided."""
+        from src.models.candidate import CandidateProfile
+
+        agent = _minimal_agent()
+        profile = CandidateProfile(
+            id="c001",
+            name="张三",
+            current_position="后端工程师",
+            years_of_experience=5,
+            skills=["Python", "Go", "Redis"],
+            resume_content="工作经历：ABC 公司",
+        )
+
+        agent.set_candidate_context(
+            profile,
+            interview_brief="面试简报：重点考察系统设计",
+            history_summary="上次面试表现良好",
+        )
+
+        ctx = agent._layer3_candidate
+        assert "后端工程师" in ctx
+        assert "5 年" in ctx
+        assert "Python" in ctx
+        assert "工作经历" in ctx
+        assert "面试简报" in ctx
+        assert "历史面试记录" in ctx
+        assert agent._cached_system_prompt is None
+
+    def test_build_system_prompt_includes_user_memory_section_when_non_empty(self):
+        """_build_system_prompt() includes the '面试官偏好与岗位要求' section
+        only when _layer2_user_memory is non-empty."""
+        agent = _minimal_agent()
+        agent._layer2_user_memory = "岗位：前端工程师\n技术栈：React"
+        agent._cached_system_prompt = None
+
+        prompt = agent._build_system_prompt()
+
+        assert "面试官偏好与岗位要求" in prompt
+        assert "前端工程师" in prompt
