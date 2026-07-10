@@ -62,12 +62,14 @@ def live_server():
     env["PORT"] = str(E2E_PORT)
     env["MOCK_AUDIO"] = "true"
 
+    # 注意：不能用 subprocess.PIPE —— 无人消费时管道缓冲区（~64KB）被日志填满后，
+    # 服务器进程会阻塞在控制台写入上，导致后续请求全部超时。日志已写入 logs/app.log。
     proc = subprocess.Popen(
         [sys.executable, "-m", "src.main"],
         cwd=str(project_root),
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
     # 等待服务就绪

@@ -660,6 +660,24 @@ async def update_question(
     return {"updated": True, "question_id": question_id, "covered": covered}
 
 
+def _build_coverage_prompt(round_text: str, uncovered: list[dict]) -> str:
+    """构建问题覆盖判定 prompt（宽松标准：主题被实质讨论即算覆盖）。"""
+    q_list = "\n".join(
+        f'{i + 1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）'
+        for i, q in enumerate(uncovered)
+    )
+    return (
+        f"以下是面试对话记录：\n{round_text}\n\n"
+        f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
+        "请分析对话内容，判断哪些问题已被对话覆盖。\n"
+        "判定标准（宽松）：只要问题的考察主题在对话中被实质性讨论过即视为已覆盖——"
+        "包括面试官换了措辞提问、只问到问题的一部分、或候选人主动谈及该主题并给出了"
+        "具体内容；不要求对话与问题原文逐字匹配。\n"
+        '以 JSON 数组返回已覆盖问题的 ID 列表，格式：["id1", "id2"]，'
+        "未覆盖任何问题则返回 []。"
+    )
+
+
 async def _auto_check_coverage(
     memory,
     llm_client,
@@ -690,16 +708,7 @@ async def _auto_check_coverage(
             f"面试官: {r.interviewer_text}\n候选人: {r.candidate_text}" for r in rounds
         )
 
-        q_list = "\n".join(
-            f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）'
-            for i, q in enumerate(uncovered)
-        )
-        prompt = (
-            f"以下是本轮对话记录：\n{round_text}\n\n"
-            f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
-            "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
-            '以 JSON 数组返回已覆盖问题的 ID 列表，格式：["id1", "id2"]，未覆盖任何问题则返回 []。'
-        )
+        prompt = _build_coverage_prompt(round_text, uncovered)
 
         resp = await llm_client.chat(
             [Message(role="user", content=prompt)], temperature=0.1
@@ -708,6 +717,11 @@ async def _auto_check_coverage(
         start, end = raw.find("["), raw.rfind("]")
         if start != -1 and end != -1:
             covered_ids = _json.loads(raw[start : end + 1])
+            logger.info(
+                "Auto coverage check: candidate=%s covered_ids=%s",
+                candidate_id,
+                covered_ids,
+            )
             for qid in covered_ids:
                 memory.update_question_coverage(
                     candidate_id, str(qid), True, covered_by="auto"
@@ -755,21 +769,17 @@ async def check_question_coverage(request: Request):
         if not llm:
             llm = OpenAICompatibleClient(settings)
 
-        q_list = "\n".join(
-            f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）'
-            for i, q in enumerate(uncovered)
-        )
-        prompt = (
-            f"以下是本轮对话记录：\n{round_text}\n\n"
-            f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
-            "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
-            '以 JSON 数组返回已覆盖问题的 ID 列表，格式：["id1", "id2"]，未覆盖任何问题则返回 []。'
-        )
+        prompt = _build_coverage_prompt(round_text, uncovered)
         resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.1)
         raw = resp.content or ""
         start, end = raw.find("["), raw.rfind("]")
         if start != -1 and end != -1:
             covered_ids = _json.loads(raw[start : end + 1])
+            logger.info(
+                "Coverage check: candidate=%s covered_ids=%s",
+                candidate_id,
+                covered_ids,
+            )
             for qid in covered_ids:
                 if memory.update_question_coverage(
                     candidate_id, str(qid), True, covered_by="auto"

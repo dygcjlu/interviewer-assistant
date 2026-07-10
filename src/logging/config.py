@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
 
 from src.logging.context import (
@@ -54,6 +55,14 @@ def setup_logging(
     global _CONFIGURED
     if _CONFIGURED:
         return
+
+    # Windows 控制台默认 GBK 编码，中文日志重定向到文件时会乱码，统一 UTF-8
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
 
     root = logging.getLogger()
     root.setLevel(level)

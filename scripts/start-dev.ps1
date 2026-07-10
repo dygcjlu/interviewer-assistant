@@ -47,6 +47,17 @@ Write-Host "Backend: $backendUrl"
 Write-Host "Python:  $python"
 Write-Host ""
 
+# Abort early if the port is already occupied (otherwise the health check
+# below would succeed against the old process and mislead the user)
+$existing = Get-NetTCPConnection -LocalPort ([int]$port) -State Listen -ErrorAction SilentlyContinue
+if ($existing) {
+    $ownerPid  = ($existing | Select-Object -First 1).OwningProcess
+    $ownerName = (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue).ProcessName
+    Write-Host "Port $port is already in use by PID $ownerPid ($ownerName)." -ForegroundColor Red
+    Write-Host "Stop it first (.\scripts\stop-dev.ps1) or change PORT in .env." -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "Starting backend..."
 $backendOut = Join-Path $Logs "backend.out.log"
 $backendErr = Join-Path $Logs "backend.err.log"
@@ -65,6 +76,17 @@ for ($i = 0; $i -lt 60; $i++) {
         $req = [System.Net.HttpWebRequest]::Create($healthUrl)
         $req.Timeout = 1000
         $req.GetResponse().Close()
+        # Verify the port is owned by the process we just started (or its
+        # child — NiceGUI dev mode spawns a subprocess that binds the port)
+        $listener = Get-NetTCPConnection -LocalPort ([int]$port) -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($listener -and $listener.OwningProcess -ne $proc.Id) {
+            $ownerParent = (Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)" -ErrorAction SilentlyContinue).ParentProcessId
+            if ($ownerParent -ne $proc.Id) {
+                Write-Host "Port $port is served by an unrelated process (PID $($listener.OwningProcess)), not ours (PID $($proc.Id))." -ForegroundColor Red
+                exit 1
+            }
+        }
         Write-Host "Backend ready (PID $($proc.Id))" -ForegroundColor Green
         break
     } catch {}

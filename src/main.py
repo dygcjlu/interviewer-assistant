@@ -243,8 +243,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.startup_warnings = startup_warnings
 
+    # 注意：此处仅表示依赖装配完成；端口绑定由 uvicorn 在 lifespan 之后执行，
+    # 若端口被占用会在其后报 bind failed
     logger.info(
-        "Interview Assistant ready on http://%s:%d", settings.HOST, settings.PORT
+        "Interview Assistant initialized; binding http://%s:%d ...",
+        settings.HOST,
+        settings.PORT,
     )
 
     yield  # ── server running ──────────────────────────────────────────────

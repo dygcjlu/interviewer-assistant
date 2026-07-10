@@ -142,7 +142,8 @@ class OpenAICompatibleClient:
                     bool(payload_tools),
                     attempt + 1,
                     attempts,
-                    truncate(messages_json),
+                    # INFO 级仅记录摘要（含简历等敏感内容），全量走 DEBUG → llm.log
+                    truncate(messages_json, 200),
                 )
                 response = await self._client.chat.completions.create(**kwargs)
                 result = self._build_chat_response(response)
@@ -216,7 +217,8 @@ class OpenAICompatibleClient:
             self._config.model,
             len(payload_messages),
             bool(payload_tools),
-            truncate(messages_json),
+            # INFO 级仅记录摘要（含简历等敏感内容），全量走 DEBUG → llm.log
+            truncate(messages_json, 200),
         )
 
         # Accumulate streaming tool_calls by index (OpenAI splits args across chunks)

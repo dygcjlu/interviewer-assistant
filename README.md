@@ -158,6 +158,7 @@ python -m src.main
 - Windows：支持 WASAPI 双声道音频采集，适合真实面试场景。
 - Linux / macOS：默认使用 Mock 音频或手动输入流程；真实双声道采集能力未作为主要目标。
 - 所有平台：可通过 `MOCK_AUDIO=true` 使用 `data/mock_script.json` 模拟面试对话。
+  演示时可搭配与脚本对齐的样例简历 `data/sample_resume_zhangwei.pdf`（候选人张伟），保证转写内容与简历自洽。
 
 ## 测试
 
