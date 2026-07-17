@@ -506,25 +506,26 @@ async def index() -> None:
 
     async def _sync_candidate_panel() -> None:
         """解析或对话完成后，同步候选人列表与右侧简历/题目面板。"""
-        # A-5: 先与服务端会话对齐当前候选人 —— 对话中解析简历/切换候选人后，
-        # 前端 state 可能滞后于后端会话
+        # A-5: 与服务端会话对齐当前候选人（对话解析/简报后 state 可能滞后）
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 r = await client.get(f"{_base_url}/api/session/current")
                 r.raise_for_status()
                 session = r.json().get("session") or {}
             sess_cid = session.get("candidate_id")
-            if sess_cid and sess_cid != state.get("candidate_id"):
+            if sess_cid:
+                # 即使 id 未变，也刷新姓名（解析后从文件名变为真实姓名）
                 state["candidate_id"] = sess_cid
-                cname = session.get("candidate_name") or ""
+                cname = (session.get("candidate_name") or "").strip()
                 if cname and cname != "—":
                     state["candidate_name"] = cname
                 _refresh_bar(stage_badge, candidate_label, round_label, state)
         except Exception as exc:
             logger.debug("sync session current failed: %s", exc)
-        await _load_candidates()
+
         cid = state.get("candidate_id")
         if not cid:
+            await _load_candidates()
             return
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -533,11 +534,14 @@ async def index() -> None:
                     params={"candidate_id": cid},
                 )
                 if r.status_code == 404:
+                    # 上传后尚未解析：仍刷新列表高亮，避免顶栏/侧栏脱节
+                    await _load_candidates()
                     return
                 r.raise_for_status()
                 data = r.json()
         except Exception as exc:
             logger.debug("sync_candidate_panel failed: %s", exc)
+            await _load_candidates()
             return
         profile = data.get("profile", {})
         if profile.get("name"):
@@ -561,6 +565,8 @@ async def index() -> None:
                         asyncio.create_task(_retry_questions_later(cid, qs_col))
         except Exception:
             pass
+        # 列表刷新放在 state/name 更新之后，保证高亮与显示名一致
+        await _load_candidates()
 
     asyncio.create_task(_load_candidates())
 
@@ -1128,7 +1134,9 @@ async def _check_question_coverage(
     """调用后端 LLM 检查最新一轮对话覆盖了哪些问题，更新 qs_col。"""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            lr = await client.get(f"{_base_url}/api/interview/last-round")
+            lr = await client.get(
+                f"{_base_url}/api/interview/last-round", params={"n": 5}
+            )
             if lr.status_code != 200:
                 return
             round_text = lr.json().get("round_text", "")

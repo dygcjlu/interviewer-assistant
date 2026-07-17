@@ -1,0 +1,357 @@
+478e55b fix: use injected llm_client instead of direct instantiation
+ src/main.py                             |   1 +
+ src/tools/dispatch_to_agent.py          |   9 +-
+ src/web/routes.py                       |  12 ++-
+ tests/integration/conftest.py           |   1 +
+ tests/integration/test_llm_injection.py | 179 ++++++++++++++++++++++++++++++++
+ 5 files changed, 198 insertions(+), 4 deletions(-)
+diff --git a/src/main.py b/src/main.py
+index be4d9e7..c0b30d9 100644
+--- a/src/main.py
++++ b/src/main.py
+@@ -207,20 +207,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+                 f"POST /api/recovery/finish 或 /api/recovery/discard 处理。"
+             )
+             logger.warning("recovery: %d orphan WAL(s) detected", len(orphans))
+             startup_warnings.append(msg)
+     except Exception:
+         logger.exception("recovery scan at startup failed")
+ 
+     # Inject dependencies into NiceGUI UI module and FastAPI app state
+     _web_ui.set_dependencies(settings)
+     _web_ui.set_startup_warnings(startup_warnings)
++    app.state.llm_client = llm_client
+     app.state.controller = controller
+     app.state.main_agent = main_agent
+     app.state.memory_module = memory_module
+     app.state.context_manager = context_manager
+     app.state.settings = settings
+     app.state.startup_warnings = startup_warnings
+ 
+     logger.info(
+         "Interview Assistant ready on http://%s:%d", settings.HOST, settings.PORT
+     )
+diff --git a/src/tools/dispatch_to_agent.py b/src/tools/dispatch_to_agent.py
+index 23345ac..373f5d0 100644
+--- a/src/tools/dispatch_to_agent.py
++++ b/src/tools/dispatch_to_agent.py
+@@ -180,22 +180,27 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
+ async def _generate_questions_from_brief(candidate_id: str, brief_text: str) -> None:
+     """从面试简报生成结构化问题清单，异步执行，不影响主流程。"""
+     if ctx.memory_module is None:
+         return
+     try:
+         from ..config import get_settings
+         from ..llm.client import OpenAICompatibleClient
+         from ..models.message import Message
+         import json, uuid
+ 
+-        settings = get_settings()
+-        llm = OpenAICompatibleClient(settings)
++        # 使用 ctx.main_agent 的 llm_client，fallback 到直接实例化
++        llm = None
++        if ctx.main_agent is not None:
++            llm = ctx.main_agent._llm
++        if not llm:
++            settings = get_settings()
++            llm = OpenAICompatibleClient(settings)
+ 
+         prompt = (
+             "根据以下面试简报，生成结构化面试问题清单。\n"
+             "要求：\n"
+             "1. 提取 5–10 个关键面试问题\n"
+             "2. 每个问题包含：问题文本（question）和预期考察点（focus）\n"
+             "3. 以 JSON 数组输出，格式如下：\n"
+             '[{"question": "...", "focus": "..."}, ...]\n\n'
+             f"面试简报：\n{brief_text}"
+         )
+diff --git a/src/web/routes.py b/src/web/routes.py
+index 6916bca..cdff80d 100644
+--- a/src/web/routes.py
++++ b/src/web/routes.py
+@@ -562,21 +562,25 @@ async def check_question_coverage(request: Request):
+     settings = getattr(request.app.state, "settings", None)
+     if settings is None:
+         return {"updated": [], "questions": questions}
+ 
+     updated_ids: list[str] = []
+     try:
+         from ..llm.client import OpenAICompatibleClient
+         from ..models.message import Message
+         import json as _json
+ 
+-        llm = OpenAICompatibleClient(settings)
++        # 使用注入的 llm_client，fallback 到直接实例化
++        llm = getattr(request.app.state, "llm_client", None)
++        if not llm:
++            llm = OpenAICompatibleClient(settings)
++
+         q_list = "\n".join(f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）' for i, q in enumerate(uncovered))
+         prompt = (
+             f"以下是本轮对话记录：\n{round_text}\n\n"
+             f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
+             "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
+             "以 JSON 数组返回已覆盖问题的 ID 列表，格式：[\"id1\", \"id2\"]，未覆盖任何问题则返回 []。"
+         )
+         resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.1)
+         raw = resp.content or ""
+         start, end = raw.find("["), raw.rfind("]")
+@@ -677,20 +681,25 @@ async def compare_candidates(request: Request, ids: str = ""):
+ 
+     # LLM 生成对比摘要
+     llm_summary = ""
+     try:
+         from ..llm.client import OpenAICompatibleClient
+         from ..models.message import Message
+ 
+         if settings is None:
+             raise RuntimeError("settings not available")
+ 
++        # 使用注入的 llm_client，fallback 到直接实例化
++        llm = getattr(request.app.state, "llm_client", None)
++        if not llm:
++            llm = OpenAICompatibleClient(settings)
++
+         report_texts = []
+         for row in rows:
+             if row["report"]:
+                 r = row["report"]
+                 dims_text = "; ".join(
+                     f"{d.get('dimension')}={d.get('score')}" for d in r.get("dimensions", [])
+                 )
+                 report_texts.append(
+                     f"【{row['name']}】综合={r.get('overall_score')} | {dims_text} | "
+                     f"优势：{', '.join(r.get('strengths', [])[:2])} | "
+@@ -701,21 +710,20 @@ async def compare_candidates(request: Request, ids: str = ""):
+                 report_texts.append(f"【{row['name']}】暂无评价报告")
+ 
+         prompt = (
+             "以下是多名候选人的面试评价摘要，请生成横向对比分析，包括：\n"
+             "1. 各候选人综合能力排序（附简短理由）\n"
+             "2. 各自核心优势与短板对比\n"
+             "3. 岗位匹配度建议（谁最适合录用）\n\n"
+             + "\n".join(report_texts)
+         )
+ 
+-        llm = OpenAICompatibleClient(settings)
+         resp = await llm.chat([Message(role="user", content=prompt)], temperature=0.3)
+         llm_summary = resp.content or ""
+     except Exception:
+         logger.exception("compare_candidates: LLM summary failed")
+         llm_summary = "（对比摘要生成失败，请查看评分表格）"
+ 
+     return {
+         "candidates": [{"id": r["id"], "name": r["name"], "has_report": r["report"] is not None} for r in rows],
+         "missing_report": missing_report,
+         "dimensions": all_dims,
+diff --git a/tests/integration/conftest.py b/tests/integration/conftest.py
+index 81f0321..c941cf1 100644
+--- a/tests/integration/conftest.py
++++ b/tests/integration/conftest.py
+@@ -210,20 +210,21 @@ def _build_test_app(tmp_path: Path, mock_llm: MockLLMClient):
+             "resumes/",
+             "candidates/",
+         ]
+         tool_ctx.allowed_write_dirs = [
+             str(resumes_dir) + "/",
+             str(candidates_dir) + "/",
+             "resumes/",
+             "candidates/",
+         ]
+ 
++        app.state.llm_client = mock_llm
+         app.state.controller = controller
+         app.state.main_agent = main_agent
+         app.state.memory_module = memory_module
+         app.state.context_manager = context_manager
+         app.state.settings = test_settings
+         app.state.startup_warnings = []
+ 
+         yield
+ 
+         # 清理全局工具上下文
+diff --git a/tests/integration/test_llm_injection.py b/tests/integration/test_llm_injection.py
+new file mode 100644
+index 0000000..77e63cf
+--- /dev/null
++++ b/tests/integration/test_llm_injection.py
+@@ -0,0 +1,179 @@
++"""测试 LLM 客户端依赖注入是否正确生效。
++
++RED phase: 这些测试应该失败，因为当前代码直接实例化 OpenAICompatibleClient，
++绕过了 app.state.llm_client 注入，导致 mock 无法生效。
++"""
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from src.llm.protocol import ChatResponse
++from src.models.candidate import CandidateProfile
++
++
++@pytest.mark.asyncio
++async def test_check_question_coverage_uses_injected_llm(client, mock_llm, tmp_path):
++    """测试 check_question_coverage 使用注入的 llm_client 而非直接实例化。
++
++    RED: 当前会失败，因为 routes.py line 572 直接实例化 OpenAICompatibleClient
++    """
++    # 准备数据
++    memory = client._transport.app.state.memory_module
++    candidate = CandidateProfile(id="test-001", name="张三")
++    await memory.save_candidate(candidate, "# 张三简历\n\nPython 开发")
++
++    # 保存问题清单
++    questions = [
++        {"id": "q1", "question": "介绍项目经验", "focus": "项目", "covered": False, "covered_by": ""}
++    ]
++    memory.save_questions("test-001", questions)
++
++    # 创建会话并添加对话轮次
++    controller = client._transport.app.state.controller
++    await controller.create_session("test-001")
++    await controller.start_interview()
++    session = await controller.get_session()
++
++    from datetime import datetime
++    from src.models.session import ConversationRound
++    session.rounds.append(
++        ConversationRound(
++            round_number=1,
++            interviewer_text="介绍一下你的项目经验",
++            candidate_text="我做过电商系统",
++            timestamp=datetime.now(),
++        )
++    )
++
++    # 预设 mock 响应：LLM 判定 q1 已覆盖
++    mock_llm.push_chat(ChatResponse(content='["q1"]', prompt_tokens=50, completion_tokens=10))
++
++    # 调用 API
++    resp = await client.post(
++        "/api/interview/questions/check-coverage",
++        json={
++            "candidate_id": "test-001",
++            "round_text": "面试官：介绍一下你的项目经验\n候选人：我做过电商系统",
++        },
++    )
++
++    assert resp.status_code == 200
++    data = resp.json()
++
++    # 如果使用了注入的 mock_llm，updated 应该包含 q1
++    # 如果绕过注入直接实例化，会因为没有真实 API key 而失败或返回空
++    assert "q1" in data["updated"], "mock_llm 应该被调用，q1 应被标记为已覆盖"
++
++
++@pytest.mark.asyncio
++async def test_compare_candidates_uses_injected_llm(client, mock_llm, tmp_path):
++    """测试 compare_candidates 使用注入的 llm_client 而非直接实例化。
++
++    RED: 当前会失败，因为 routes.py line 711 直接实例化 OpenAICompatibleClient
++    """
++    # 准备两名候选人及其评价报告文件（绕过 save_eval_report，直接写文件）
++    memory = client._transport.app.state.memory_module
++    c1 = CandidateProfile(id="c1", name="候选人A")
++    c2 = CandidateProfile(id="c2", name="候选人B")
++    await memory.save_candidate(c1, "# A 简历")
++    await memory.save_candidate(c2, "# B 简历")
++
++    # 手动创建评价报告目录结构
++    import yaml
++    from pathlib import Path
++
++    c1_dir = Path(tmp_path) / "candidates" / "c1" / "interviews" / "int-1"
++    c2_dir = Path(tmp_path) / "candidates" / "c2" / "interviews" / "int-2"
++    c1_dir.mkdir(parents=True)
++    c2_dir.mkdir(parents=True)
++
++    report1_data = {
++        "id": "rep-1",
++        "interview_id": "int-1",
++        "candidate_id": "c1",
++        "overall_score": 85,
++        "dimensions": [{"dimension": "技术能力", "score": 90, "comment": "算法强", "evidence": []}],
++        "strengths": ["算法强"],
++        "weaknesses": ["沟通弱"],
++        "recommendation": "推荐",
++        "summary": "优秀候选人",
++        "generated_at": "2024-01-01T00:00:00",
++    }
++    report2_data = {
++        "id": "rep-2",
++        "interview_id": "int-2",
++        "candidate_id": "c2",
++        "overall_score": 75,
++        "dimensions": [{"dimension": "技术能力", "score": 70, "comment": "经验少", "evidence": []}],
++        "strengths": ["态度好"],
++        "weaknesses": ["经验少"],
++        "recommendation": "观察",
++        "summary": "待观察候选人",
++        "generated_at": "2024-01-01T00:00:00",
++    }
++
++    (c1_dir / "eval_report.md").write_text(
++        f"---\n{yaml.dump(report1_data, allow_unicode=True)}---\n\n优秀候选人",
++        encoding="utf-8"
++    )
++    (c2_dir / "eval_report.md").write_text(
++        f"---\n{yaml.dump(report2_data, allow_unicode=True)}---\n\n待观察候选人",
++        encoding="utf-8"
++    )
++
++    # 预设 mock 响应
++    mock_summary = "候选人A综合能力更强，推荐优先录用。"
++    mock_llm.push_chat(ChatResponse(content=mock_summary, prompt_tokens=100, completion_tokens=20))
++
++    # 调用 API (GET with query params)
++    resp = await client.get("/api/candidates/compare", params={"ids": "c1,c2"})
++
++    assert resp.status_code == 200
++    data = resp.json()
++
++    # 如果使用了注入的 mock_llm，llm_summary 应该是预设内容
++    assert data["llm_summary"] == mock_summary, "mock_llm 应该被调用并返回预设摘要"
++
++
++@pytest.mark.asyncio
++async def test_dispatch_generate_questions_uses_injected_llm(client, mock_llm, tmp_path):
++    """测试 dispatch_to_agent._generate_questions_from_brief 使用注入的 llm_client。
++
++    RED: 当前会失败，因为 dispatch_to_agent.py line 191 直接实例化 OpenAICompatibleClient
++    """
++    import asyncio
++
++    # 准备候选人和会话
++    memory = client._transport.app.state.memory_module
++    candidate = CandidateProfile(id="test-002", name="李四")
++    await memory.save_candidate(candidate, "# 李四简历\n\nJava 开发")
++
++    controller = client._transport.app.state.controller
++    await controller.create_session("test-002")
++    session = await controller.get_session()
++
++    # 预设 mock 响应：返回结构化问题
++    questions_json = json.dumps([
++        {"question": "介绍 Java 项目", "focus": "项目经验"},
++        {"question": "并发编程经验", "focus": "技术深度"},
++    ])
++    mock_llm.push_chat(ChatResponse(content=questions_json, prompt_tokens=80, completion_tokens=30))
++
++    # 手动触发 _generate_questions_from_brief
++    from src.tools.dispatch_to_agent import _generate_questions_from_brief
++
++    brief_text = "候选人 Java 背景，需考察项目经验和并发编程能力"
++    await _generate_questions_from_brief("test-002", brief_text)
++
++    # 等待异步任务完成
++    await asyncio.sleep(0.1)
++
++    # 检查问题是否保存
++    questions = memory.get_questions("test-002")
++
++    # 如果使用了注入的 mock_llm，应该有 2 个问题
++    assert len(questions) == 2, "mock_llm 应该被调用，生成 2 个问题"
++    assert any("Java" in q["question"] for q in questions), "问题内容应来自 mock 响应"

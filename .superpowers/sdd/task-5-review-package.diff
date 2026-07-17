@@ -1,0 +1,71 @@
+6872e31 fix: record ASR latency for single final segments
+ src/audio/transcription.py       |  6 ++++--
+ tests/unit/test_transcription.py | 21 +++++++++++++++++++++
+ 2 files changed, 25 insertions(+), 2 deletions(-)
+diff --git a/src/audio/transcription.py b/src/audio/transcription.py
+index 66a1b73..98e1f27 100644
+--- a/src/audio/transcription.py
++++ b/src/audio/transcription.py
+@@ -57,22 +57,24 @@ class TranscriptionManager:
+             logger.exception("TranscriptionManager: ws_sender failed")
+ 
+         if not segment.is_final:
+             return
+ 
+         # 2. Reset silence timeout
+         self._reset_silence_timer()
+ 
+         # 3. Accumulate text + trigger logic
+         if segment.source == "candidate":
+-            if self._candidate_utterance_start is None:
+-                self._candidate_utterance_start = segment.timestamp.timestamp() if not segment.is_final else None
++            # 注意：当前测量的是「候选人发言持续时长」（从第一段到最后一段的时间差），
++            # 而非严格的 ASR 系统处理延迟。这是已知限制，保留 asr_latency 名称以避免 API 破坏性变更。
++            if self._candidate_utterance_start is None and segment.start_time is not None:
++                self._candidate_utterance_start = segment.start_time
+             if segment.is_final:
+                 if self._candidate_utterance_start is not None:
+                     elapsed_ms = (segment.timestamp.timestamp() - self._candidate_utterance_start) * 1000
+                     from ..utils.metrics import Metrics
+                     Metrics.get().record_asr_latency(elapsed_ms)
+                 self._candidate_utterance_start = None
+             self._candidate_text += (" " if self._candidate_text else "") + segment.text
+             self._suggestion_trigger.on_candidate_segment(segment)
+ 
+         elif segment.source == "interviewer":
+diff --git a/tests/unit/test_transcription.py b/tests/unit/test_transcription.py
+index 5db7e9a..954e665 100644
+--- a/tests/unit/test_transcription.py
++++ b/tests/unit/test_transcription.py
+@@ -174,10 +174,31 @@ class TestTranscriptionManager:
+         assert len(finalized) == 1
+ 
+     @pytest.mark.asyncio
+     async def test_multiple_candidate_segments_accumulate(self):
+         mgr, _, _ = _make_manager()
+         await mgr.on_segment(_segment("第一句", True, "candidate"))
+         await mgr.on_segment(_segment("第二句", True, "candidate"))
+         _, cand = mgr.get_current_round_text()
+         assert "第一句" in cand
+         assert "第二句" in cand
++
++    @pytest.mark.asyncio
++    async def test_single_final_segment_records_asr_latency(self):
++        """单句直接 is_final=True 时应记录 ASR 延迟（修复 bug）"""
++        from src.utils.metrics import Metrics
++        Metrics.reset()  # 隔离测试
++        metrics = Metrics.get()
++
++        mgr, _, _ = _make_manager()
++        # 模拟单句直接 final 的场景
++        seg = TranscriptSegment(
++            text="完整的一句话",
++            is_final=True,
++            source="candidate",
++            timestamp=datetime.now(),
++            start_time=100.0  # 设置起始时间
++        )
++        await mgr.on_segment(seg)
++
++        # 验证延迟已记录
++        assert len(metrics._asr_latency_samples) > 0, "单句 final 场景应记录 ASR 延迟"

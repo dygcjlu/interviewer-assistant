@@ -1,0 +1,370 @@
+3c8578f feat: trigger coverage check from backend after suggestion
+ src/tools/dispatch_to_agent.py         |  15 ++-
+ src/web/routes.py                      |  54 +++++++++
+ tests/unit/test_auto_coverage_check.py | 205 +++++++++++++++++++++++++++++++++
+ 3 files changed, 273 insertions(+), 1 deletion(-)
+diff --git a/src/tools/dispatch_to_agent.py b/src/tools/dispatch_to_agent.py
+index 373f5d0..3eb096d 100644
+--- a/src/tools/dispatch_to_agent.py
++++ b/src/tools/dispatch_to_agent.py
+@@ -1,13 +1,14 @@
+ """dispatch_to_agent — 通用 Agent 分发工具，将任务委托给指定 Agent 执行。"""
+ from __future__ import annotations
+ 
++import asyncio
+ import json
+ import logging
+ import time
+ from pathlib import Path
+ 
+ from ..logging import truncate
+ from ._context import ctx
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -89,20 +90,33 @@ async def _enrich_task_with_session_context(task: str) -> str:
+ 
+ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
+     """根据结果类型执行副作用（更新 session、持久化）。"""
+     from ..models.candidate import update_candidate_from_data
+ 
+     session = await ctx.controller.get_session()
+     if session is None:
+         logger.warning("dispatch_to_agent: no active session, skipping side effects")
+         return
+ 
++    # 追问建议生成后触发覆盖检测
++    if result_type == "suggestion":
++        if ctx.memory_module is not None and ctx.main_agent is not None:
++            from ..web.routes import _auto_check_coverage
++            asyncio.create_task(
++                _auto_check_coverage(
++                    memory=ctx.memory_module,
++                    llm_client=ctx.main_agent._llm,
++                    candidate_id=session.candidate.id,
++                    session=session
++                )
++            )
++
+     if result_type == "parse_done":
+         profile_data = result.get("profile") or {}
+         if profile_data:
+             update_candidate_from_data(session.candidate, profile_data)
+ 
+         # 读取 ResumeAgent 写出的 Markdown 文件内容，读取成功后删除临时文件
+         resume_markdown = ""
+         markdown_path = result.get("markdown_path")
+         if markdown_path:
+             md_file = Path(markdown_path)
+@@ -149,21 +163,20 @@ async def _apply_side_effects(result_type: str | None, result: dict) -> None:
+         cid = session.candidate.id
+         brief_text = str(result.get("brief", ""))
+ 
+         if ctx.memory_module is not None:
+             try:
+                 ctx.memory_module.save_brief(cid, brief_text)
+             except Exception:
+                 logger.exception("dispatch_to_agent: save_brief failed")
+ 
+         # 异步生成结构化问题清单（不阻塞主流程）
+-        import asyncio
+         asyncio.create_task(_generate_questions_from_brief(cid, brief_text))
+ 
+         session.interview_brief = brief_text
+ 
+         if ctx.main_agent is not None:
+             history_summary: str | None = None
+             if ctx.memory_module is not None:
+                 try:
+                     h = await ctx.memory_module.get_candidate_history(session.candidate.id)
+                     if h:
+diff --git a/src/web/routes.py b/src/web/routes.py
+index cdff80d..98776aa 100644
+--- a/src/web/routes.py
++++ b/src/web/routes.py
+@@ -537,20 +537,74 @@ async def get_questions(request: Request, candidate_id: str = Query(...)):
+ async def update_question(request: Request, question_id: str, candidate_id: str = Query(...)):
+     body = await request.json()
+     covered = bool(body.get("covered", False))
+     memory = _memory(request)
+     found = memory.update_question_coverage(candidate_id, question_id, covered, covered_by="manual")
+     if not found:
+         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "问题不存在"})
+     return {"updated": True, "question_id": question_id, "covered": covered}
+ 
+ 
++async def _auto_check_coverage(
++    memory,
++    llm_client,
++    candidate_id: str,
++    session,
++):
++    """自动检测问题覆盖情况（后端触发）。"""
++    try:
++        questions = memory.get_questions(candidate_id)
++        if not questions:
++            return
++
++        uncovered = [q for q in questions if not q.get("covered")]
++        if not uncovered:
++            return
++
++        # 获取完整对话历史
++        rounds = session.rounds
++        if not rounds:
++            return
++
++        # 构建对话文本
++        from ..models.message import Message
++        import json as _json
++
++        round_text = "\n\n".join(
++            f"面试官: {r.interviewer_text}\n候选人: {r.candidate_text}"
++            for r in rounds
++        )
++
++        q_list = "\n".join(
++            f'{i+1}. [{q["id"]}] {q["question"]}（考察：{q["focus"]}）'
++            for i, q in enumerate(uncovered)
++        )
++        prompt = (
++            f"以下是本轮对话记录：\n{round_text}\n\n"
++            f"以下是尚未覆盖的面试问题清单：\n{q_list}\n\n"
++            "请分析对话内容，判断哪些问题已被本轮对话覆盖（面试官问过且候选人有实质性回答）。\n"
++            "以 JSON 数组返回已覆盖问题的 ID 列表，格式：[\"id1\", \"id2\"]，未覆盖任何问题则返回 []。"
++        )
++
++        resp = await llm_client.chat([Message(role="user", content=prompt)], temperature=0.1)
++        raw = resp.content or ""
++        start, end = raw.find("["), raw.rfind("]")
++        if start != -1 and end != -1:
++            covered_ids = _json.loads(raw[start:end + 1])
++            for qid in covered_ids:
++                memory.update_question_coverage(candidate_id, str(qid), True, covered_by="auto")
++
++    except Exception as e:
++        # 静默失败，不影响主流程
++        logger.warning(f"Auto coverage check failed: {e}")
++
++
+ @router.post("/interview/questions/check-coverage")
+ async def check_question_coverage(request: Request):
+     """用 LLM 分析一轮对话，自动标记已覆盖问题。"""
+     body = await request.json()
+     candidate_id: str = body.get("candidate_id", "")
+     round_text: str = body.get("round_text", "")
+     if not candidate_id or not round_text:
+         raise HTTPException(status_code=422, detail={"code": "missing_fields", "message": "candidate_id 和 round_text 为必填项"})
+ 
+     memory = _memory(request)
+diff --git a/tests/unit/test_auto_coverage_check.py b/tests/unit/test_auto_coverage_check.py
+new file mode 100644
+index 0000000..0796f5d
+--- /dev/null
++++ b/tests/unit/test_auto_coverage_check.py
+@@ -0,0 +1,205 @@
++"""Unit tests — 自动覆盖检测功能（后端触发）。"""
++from __future__ import annotations
++
++import json
++from datetime import datetime
++from unittest.mock import AsyncMock, MagicMock, patch
++
++import pytest
++
++from src.models.candidate import CandidateProfile
++from src.models.session import ConversationRound, InterviewSession, InterviewStage, SessionMetadata
++from src.tools._context import ToolContext
++
++
++def _make_session() -> InterviewSession:
++    """创建测试用 InterviewSession。"""
++    return InterviewSession(
++        id="s-001",
++        candidate=CandidateProfile(id="c-001", name="张三"),
++        rounds=[
++            ConversationRound(
++                round_number=1,
++                interviewer_text="请介绍一下你的 Python 经验",
++                candidate_text="我有 3 年 Python 开发经验",
++            )
++        ],
++        stage=InterviewStage.INTERVIEWING,
++        context_summary="",
++        interview_brief="",
++        metadata=SessionMetadata(candidate_id="c-001", start_time=datetime.now()),
++    )
++
++
++@pytest.mark.unit
++class TestAutoCheckCoverage:
++    """测试 _auto_check_coverage 函数。"""
++
++    @pytest.mark.asyncio
++    async def test_auto_check_coverage_updates_question_coverage(self):
++        """当 LLM 识别出覆盖的问题时，应更新问题覆盖状态。"""
++        from src.web.routes import _auto_check_coverage
++
++        # 准备测试数据
++        session = _make_session()
++
++        # Mock memory module
++        mock_memory = MagicMock()
++        mock_memory.get_questions = MagicMock(return_value=[
++            {"id": "q1", "question": "Python 经验", "focus": "技术背景", "covered": False}
++        ])
++        mock_memory.update_question_coverage = MagicMock(return_value=True)
++
++        # Mock LLM client
++        mock_llm = MagicMock()
++        mock_response = MagicMock()
++        mock_response.content = '["q1"]'
++        mock_llm.chat = AsyncMock(return_value=mock_response)
++
++        # 执行函数
++        await _auto_check_coverage(
++            memory=mock_memory,
++            llm_client=mock_llm,
++            candidate_id="c-001",
++            session=session
++        )
++
++        # 验证调用
++        mock_memory.get_questions.assert_called_once_with("c-001")
++        mock_llm.chat.assert_awaited_once()
++        mock_memory.update_question_coverage.assert_called_once_with("c-001", "q1", True, covered_by="auto")
++
++    @pytest.mark.asyncio
++    async def test_auto_check_coverage_skips_when_no_questions(self):
++        """当没有问题时，应提前返回。"""
++        from src.web.routes import _auto_check_coverage
++
++        session = _make_session()
++
++        mock_memory = MagicMock()
++        mock_memory.get_questions = MagicMock(return_value=[])
++
++        mock_llm = MagicMock()
++        mock_llm.chat = AsyncMock()
++
++        await _auto_check_coverage(
++            memory=mock_memory,
++            llm_client=mock_llm,
++            candidate_id="c-001",
++            session=session
++        )
++
++        # 应该不调用 LLM
++        mock_llm.chat.assert_not_awaited()
++
++    @pytest.mark.asyncio
++    async def test_auto_check_coverage_skips_when_no_rounds(self):
++        """当没有对话轮次时，应提前返回。"""
++        from src.web.routes import _auto_check_coverage
++
++        session = _make_session()
++        session.rounds = []
++
++        mock_memory = MagicMock()
++        mock_memory.get_questions = MagicMock(return_value=[
++            {"id": "q1", "question": "Python 经验", "focus": "技术背景", "covered": False}
++        ])
++
++        mock_llm = MagicMock()
++        mock_llm.chat = AsyncMock()
++
++        await _auto_check_coverage(
++            memory=mock_memory,
++            llm_client=mock_llm,
++            candidate_id="c-001",
++            session=session
++        )
++
++        # 应该不调用 LLM
++        mock_llm.chat.assert_not_awaited()
++
++    @pytest.mark.asyncio
++    async def test_auto_check_coverage_silently_handles_exceptions(self):
++        """当发生异常时，应静默失败不影响主流程。"""
++        from src.web.routes import _auto_check_coverage
++
++        session = _make_session()
++
++        mock_memory = MagicMock()
++        mock_memory.get_questions = MagicMock(side_effect=Exception("Database error"))
++
++        mock_llm = MagicMock()
++
++        # 不应抛出异常
++        await _auto_check_coverage(
++            memory=mock_memory,
++            llm_client=mock_llm,
++            candidate_id="c-001",
++            session=session
++        )
++
++
++@pytest.mark.unit
++class TestDispatchSideEffectWithCoverage:
++    """测试 dispatch_to_agent 在生成追问建议后触发覆盖检测。"""
++
++    @pytest.mark.asyncio
++    async def test_apply_side_effects_triggers_coverage_check_after_suggestion(self):
++        """当 result_type 为 'suggestion' 时，应异步触发覆盖检测。"""
++        from src.tools.dispatch_to_agent import _apply_side_effects
++        import asyncio as real_asyncio
++
++        session = _make_session()
++
++        mock_controller = MagicMock()
++        mock_controller.get_session = AsyncMock(return_value=session)
++
++        mock_memory = MagicMock()
++        mock_memory.get_questions = MagicMock(return_value=[
++            {"id": "q1", "question": "Python 经验", "focus": "技术背景", "covered": False}
++        ])
++
++        mock_llm = MagicMock()
++        mock_response = MagicMock()
++        mock_response.content = '["q1"]'
++        mock_llm.chat = AsyncMock(return_value=mock_response)
++
++        mock_main_agent = MagicMock()
++        mock_main_agent._llm = mock_llm
++
++        mock_ctx = ToolContext(
++            controller=mock_controller,
++            memory_module=mock_memory,
++            main_agent=mock_main_agent
++        )
++
++        result = {"type": "suggestion", "content": "追问建议"}
++
++        # Mock asyncio.create_task to capture the coroutine
++        with patch("src.tools.dispatch_to_agent.ctx", mock_ctx), \
++             patch("asyncio.create_task") as mock_create_task:
++            await _apply_side_effects("suggestion", result)
++
++            # 验证创建了异步任务
++            mock_create_task.assert_called_once()
++
++    @pytest.mark.asyncio
++    async def test_apply_side_effects_skips_coverage_check_for_other_types(self):
++        """当 result_type 不是 'suggestion' 时，不应触发覆盖检测。"""
++        from src.tools.dispatch_to_agent import _apply_side_effects
++
++        session = _make_session()
++
++        mock_controller = MagicMock()
++        mock_controller.get_session = AsyncMock(return_value=session)
++
++        mock_ctx = ToolContext(controller=mock_controller)
++
++        result = {"type": "parse_done"}
++
++        with patch("src.tools.dispatch_to_agent.ctx", mock_ctx), \
++             patch("asyncio.create_task") as mock_create_task:
++            await _apply_side_effects("parse_done", result)
++
++            # 不应创建覆盖检测任务
++            mock_create_task.assert_not_called()

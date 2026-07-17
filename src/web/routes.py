@@ -660,6 +660,16 @@ async def update_question(
     return {"updated": True, "question_id": question_id, "covered": covered}
 
 
+def _format_rounds_text(rounds: list, *, limit: int | None = None) -> str:
+    """将面试轮次格式化为覆盖判定用的对话文本；limit 取最近 N 轮。"""
+    if not rounds:
+        return ""
+    selected = rounds[-limit:] if limit is not None else rounds
+    return "\n\n".join(
+        f"面试官：{r.interviewer_text}\n候选人：{r.candidate_text}" for r in selected
+    )
+
+
 def _build_coverage_prompt(round_text: str, uncovered: list[dict]) -> str:
     """构建问题覆盖判定 prompt（宽松标准：主题被实质讨论即算覆盖）。"""
     q_list = "\n".join(
@@ -704,9 +714,7 @@ async def _auto_check_coverage(
 
         from ..models.message import Message
 
-        round_text = "\n\n".join(
-            f"面试官: {r.interviewer_text}\n候选人: {r.candidate_text}" for r in rounds
-        )
+        round_text = _format_rounds_text(rounds)
 
         prompt = _build_coverage_prompt(round_text, uncovered)
 
@@ -1149,11 +1157,14 @@ async def get_current_session(request: Request):
 
 
 @router.get("/interview/last-round")
-async def get_last_round(controller=Depends(_require_controller)):
-    """返回当前会话最近一轮对话的文本（用于覆盖检测）。"""
+async def get_last_round(
+    controller=Depends(_require_controller),
+    n: int = Query(3, ge=1, le=20),
+):
+    """返回当前会话最近 N 轮对话文本（默认 3，用于覆盖检测）。"""
     session = await controller.get_session()
     if session is None or not session.rounds:
-        return {"round_text": ""}
-    last = session.rounds[-1]
-    text = f"面试官：{last.interviewer_text}\n候选人：{last.candidate_text}"
-    return {"round_text": text}
+        return {"round_text": "", "rounds_included": 0}
+    text = _format_rounds_text(session.rounds, limit=n)
+    included = min(n, len(session.rounds))
+    return {"round_text": text, "rounds_included": included}

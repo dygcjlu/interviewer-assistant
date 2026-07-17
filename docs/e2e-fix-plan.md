@@ -41,9 +41,16 @@
 
 ## 不在本轮修复（记录原因）
 
-- B-3 的整体视觉重设计（配色系统/组件库替换）——工作量大，独立排期
 - B-7 列表排序/分页——当前数据量下过滤已够用
-- A-3 的触发链路重构（`_auto_check_coverage` 挂载点）——先验证 prompt 放宽的效果再决定
+
+## 后续补强（2026-07-14，视觉 v1 + 残留修复）
+
+| # | 问题 | 处理 |
+|---|---|---|
+| B-3 | 视觉原型感 | 已完成：`ui/visual-redesign-v1` 冷蓝 slate 主题（CSS token / 顶栏品牌 / 气泡 / 空态 / 报告与问题面板） |
+| A-3 残留 | 覆盖检测仅靠 prompt 放宽 | `last-round` 改为最近 N 轮；轮次 finalize 时后端触发 `_auto_check_coverage` |
+| A-5 残留 | 同 id 不刷新姓名 | `_sync_candidate_panel`：会话 id 未变也同步真实姓名；profile 更新后再刷列表 |
+| E2E | `test_interview_lifecycle` 断言 evaluating | 等待 mock 至少 1 轮后再 stop，避免 0 轮直达 completed |
 
 ## 验证结果（2026-07-07 回归通过）
 

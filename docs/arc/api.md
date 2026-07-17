@@ -221,6 +221,25 @@ data: [DONE]
 
 ---
 
+#### `GET /api/interview/last-round`
+
+返回当前会话最近 N 轮对话文本，供问题覆盖检测使用。
+
+**请求参数**（query）：`n`（可选，默认 3，范围 1–20）
+
+**响应** `200 OK`：
+
+```json
+{
+  "round_text": "面试官：...\n候选人：...\n\n面试官：...",
+  "rounds_included": 2
+}
+```
+
+无会话或无轮次时 `round_text` 为空字符串，`rounds_included` 为 0。
+
+---
+
 #### `GET /api/interview/eval`
 
 生成或获取评价报告。

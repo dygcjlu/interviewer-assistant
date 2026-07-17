@@ -246,7 +246,7 @@ class InterviewController:
                 interview_id_ref = self._session.id
 
                 async def _on_round_finalized(round_) -> None:
-                    """每轮 finalize 后：①更新 ContextManager 短记忆；②append 到 rounds.jsonl WAL。"""
+                    """每轮 finalize 后：①短记忆；②WAL；③自动覆盖检测。"""
                     if cm is not None:
                         try:
                             await cm.add_round(round_)
@@ -263,6 +263,25 @@ class InterviewController:
                             "InterviewController: append_round (WAL) failed session_id=%s round=%d",
                             interview_id_ref,
                             getattr(round_, "round_number", -1),
+                        )
+                    # A-3: 实时面试追问不走 dispatch_to_agent，在轮次落盘时直接触发覆盖检测
+                    try:
+                        from ..web.routes import _auto_check_coverage
+
+                        session_ref_local = self._session
+                        llm = getattr(self._interview_agent, "llm_client", None)
+                        if session_ref_local is not None and llm is not None:
+                            asyncio.create_task(
+                                _auto_check_coverage(
+                                    memory=memory_ref,
+                                    llm_client=llm,
+                                    candidate_id=candidate_id_ref,
+                                    session=session_ref_local,
+                                )
+                            )
+                    except Exception:
+                        logger.exception(
+                            "InterviewController: schedule coverage check failed"
                         )
 
                 await self._audio.start(

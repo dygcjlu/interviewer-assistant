@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -139,6 +140,11 @@ def test_interview_lifecycle(live_server, e2e_resume_pdf):
     # WebSocket：收 session_snapshot
     asyncio.run(_assert_ws_snapshot(live_server))
 
+    # MOCK_AUDIO 脚本约 5.5s 产生首轮；0 轮时 stop 会直接进入 completed，跳过评价。
+    # 先等到至少 1 轮落盘，再 stop，保证走 evaluating → eval 路径。
+    rounds = _wait_for_rounds(live_server, min_rounds=1, timeout_sec=20.0)
+    assert rounds >= 1, f"mock 面试未在超时内产生轮次，rounds={rounds}"
+
     # 停止面试
     r_stop = httpx.post(f"{live_server}/api/interview/stop", timeout=30)
     assert r_stop.status_code == 200
@@ -154,6 +160,20 @@ def test_interview_lifecycle(live_server, e2e_resume_pdf):
 def _get_first_candidate_id(base: str) -> str:
     r = httpx.get(f"{base}/api/candidates", timeout=10)
     return r.json()["candidates"][0]["id"]
+
+
+def _wait_for_rounds(base: str, *, min_rounds: int, timeout_sec: float) -> int:
+    """轮询 /api/session/current，直到 rounds_count >= min_rounds 或超时。"""
+    deadline = time.time() + timeout_sec
+    last = 0
+    while time.time() < deadline:
+        r = httpx.get(f"{base}/api/session/current", timeout=5)
+        sess = (r.json() or {}).get("session") or {}
+        last = int(sess.get("rounds_count") or 0)
+        if last >= min_rounds:
+            return last
+        time.sleep(0.5)
+    return last
 
 
 async def _assert_ws_snapshot(base: str) -> None:
@@ -176,12 +196,13 @@ def _assert_eval_report_structure(report: dict) -> None:
         assert "dimension" in dim
         assert "score" in dim
         assert isinstance(dim["score"], (int, float))
-        assert 1 <= dim["score"] <= 10, f"score 超出 1-10 范围: {dim['score']}"
+        # 0 = 未考察（见 EVAL prompt）；1-10 = 正常评分
+        assert 0 <= dim["score"] <= 10, f"score 超出 0-10 范围: {dim['score']}"
         assert "evidence" in dim
         assert isinstance(dim["evidence"], list)
 
     assert "overall_score" in report
-    assert 1 <= report["overall_score"] <= 10
+    assert 0 <= report["overall_score"] <= 10
     assert "recommendation" in report
     assert report["recommendation"] in (
         "strong_hire",

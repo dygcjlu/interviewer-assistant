@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.web.routes import _build_coverage_prompt
+from src.web.routes import _build_coverage_prompt, _format_rounds_text
 from src.web.ui import _clean_suggestion_text, _recommendation_display
 
 
@@ -76,3 +76,34 @@ class TestBuildCoveragePrompt:
         prompt = _build_coverage_prompt("对话", [{"id": "a", "question": "q", "focus": "f"}])
         assert "宽松" in prompt
         assert "不要求" in prompt
+
+
+@pytest.mark.unit
+class TestFormatRoundsText:
+    def test_joins_all_rounds(self):
+        rounds = [
+            _FakeRound("问1", "答1"),
+            _FakeRound("问2", "答2"),
+        ]
+        text = _format_rounds_text(rounds)
+        assert "问1" in text and "答1" in text
+        assert "问2" in text and "答2" in text
+
+    def test_limit_keeps_recent_n(self):
+        rounds = [
+            _FakeRound("旧问", "旧答"),
+            _FakeRound("新问", "新答"),
+            _FakeRound("最新问", "最新答"),
+        ]
+        text = _format_rounds_text(rounds, limit=2)
+        assert "旧问" not in text
+        assert "新问" in text and "最新问" in text
+
+    def test_empty_rounds(self):
+        assert _format_rounds_text([]) == ""
+
+
+class _FakeRound:
+    def __init__(self, interviewer_text: str, candidate_text: str) -> None:
+        self.interviewer_text = interviewer_text
+        self.candidate_text = candidate_text
