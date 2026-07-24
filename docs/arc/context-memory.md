@@ -103,7 +103,7 @@ response = await llm_client.chat(messages, temperature=0.3)
 self._summary = "[以下为早期面试对话的压缩摘要，非原始记录]\n" + response.content
 ```
 
-压缩完成后，`_all_rounds` 截断为只保留最新 `window_size` 轮。同时回调 `_on_compress_done(summary)` 将摘要同步到 `session.context_summary`（供 `finish_interview` 持久化）。
+压缩完成后，`_all_rounds` 截断为只保留最新 `window_size` 轮。同时经 `set_compress_done_handler` 注册的回调将摘要同步到 `session.context_summary`（供 `finish_interview` 持久化）。
 
 ### 1.5 Token 预算监控
 
@@ -127,7 +127,7 @@ utilization = total_used / (token_budget × (1 - token_safety_margin))
 | 面试进行中 | 每轮结束后 `add_round()` 追加轮次 |
 | 维度更新 | `update_covered_dimensions()` 同步已覆盖维度 |
 | Agent 构建 prompt | `get_context()` 快速返回当前数据 |
-| 压缩完成 | `_on_compress_done(summary)` 回调更新 `session.context_summary` |
+| 压缩完成 | `set_compress_done_handler` 回调更新 `session.context_summary` |
 
 ---
 
@@ -277,9 +277,11 @@ PromptBuilder.build() 时注入到 Layer 4
 | 操作 | 时机 | 方法 |
 |---|---|---|
 | 保存候选人档案 | 简历解析完成后（dispatch_to_agent parse_done） | `save_candidate(profile, resume_markdown)` |
-| 面试开始记录 | dispatch_to_agent brief_done 时 | `start_interview(session)`（写 session.json） |
-| 轮次 WAL 追加 | 每轮归档时（TranscriptionManager.finalize_round） | `append_round(session_id, candidate_id, round)` → 写 `rounds.jsonl` |
-| 保存面试记录 | `close_session()` 时 | `finish_interview(session)`（写 transcript.md + 归档 rounds.jsonl + 更新 index） |
+| 保存面试简报 | dispatch_to_agent brief_done 时 | `save_brief(candidate_id, content)` |
+| 生成问题清单 | brief_done 后异步任务 | `save_questions(candidate_id, questions)` → `questions.json` |
+| 面试开始记录 | `InterviewController.start_interview()` | `start_interview(session)`（写 session.json） |
+| 轮次 WAL 追加 | 每轮归档后（`on_round_finalized`） | `append_round(candidate_id, interview_id, round)` → `rounds.jsonl` |
+| 保存面试记录 | `close_session()` 时 | `finish_interview(session)`（写 transcript.md + 归档 WAL + 更新 index） |
 | 保存评价报告 | EvalAgent 生成后 | `save_eval_report(report)` |
 
 ---
@@ -290,15 +292,17 @@ PromptBuilder.build() 时注入到 Layer 4
 
 面试过程中，每次 `finalize_round()` 归档时，`append_round()` 将对话轮次以 JSONL 格式追加写入 `candidates/{id}/interviews/{interview_id}/rounds.jsonl`（Write-Ahead Log）。
 
-`finish_interview()` 完成后 WAL 归档：轮次数据写入 `transcript.md`，WAL 文件重命名为 `rounds.jsonl.done` 归档。
+`finish_interview()` 完成后 WAL 归档：轮次数据写入 `transcript.md`，WAL 文件重命名为 `rounds.jsonl.archived`。
 
-**崩溃恢复场景**：若进程在 `finish_interview()` 之前异常退出，WAL 文件保留在原路径（`rounds.jsonl`，无 `.done` 后缀），可通过 Recovery API 恢复：
+**崩溃恢复场景**：若进程在 `finish_interview()` 之前异常退出，WAL 文件保留在原路径（`rounds.jsonl`，无 `.archived` 后缀），可通过 Recovery API 恢复：
 
 | 步骤 | 操作 | API |
 |---|---|---|
 | 1. 扫描 | `scan_orphan_wal()` 找出所有未归档的 `rounds.jsonl` | `GET /api/recovery/scan` |
 | 2. 恢复 | `recover_interview_from_wal()` 重建 rounds → 写 `transcript.md` → 归档 WAL | `POST /api/recovery/finish` |
 | 3. 丢弃 | `discard_orphan_wal()` 删除不需要恢复的 WAL | `POST /api/recovery/discard` |
+
+启动时 `lifespan` 也会调用 `scan_orphan_wal()`，将残留提示写入 `startup_warnings` 供 UI 横幅展示。
 
 ---
 

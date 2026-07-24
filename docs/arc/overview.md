@@ -75,7 +75,7 @@ src/
 │   ├── base.py              # BaseAgent、AgentRequest、AgentResponse 基类
 │   ├── main_agent.py        # MainAgent：面试官唯一对话入口（常驻单例）
 │   ├── interview_controller.py  # InterviewController：面试状态机控制器
-│   ├── resume_agent.py      # 简历解析与题目生成（ReAct 模式）
+│   ├── resume_agent.py      # 简历解析与简报生成（ReAct 模式）
 │   ├── interview_agent.py   # 实时追问建议（流式），持有 SuggestionTrigger
 │   ├── eval_agent.py        # 评价报告生成
 │   └── prompts.py           # Agent system prompt 常量
@@ -88,6 +88,7 @@ src/
 │   ├── client.py            # OpenAICompatibleClient：调用 OpenAI 兼容 API
 │   ├── config.py            # LLMConfig 数据类
 │   ├── protocol.py          # LLMClient 协议/抽象接口
+│   ├── providers.py         # ProviderProfile 注册表（平台能力声明）
 │   └── errors.py            # LLM 相关异常
 ├── audio/
 │   ├── manager.py           # AudioManager：协调采集/转写/录音全流程
@@ -97,9 +98,10 @@ src/
 │   ├── recorder.py          # AudioRecorder：录音文件写入
 │   ├── script_player.py     # ScriptPlayer：按 JSON 脚本注入转写片段（调试模式）
 │   ├── wasapi.py            # WasapiCapturer：Windows 双声道采集（生产）
-│   ├── baidu_stt.py         # BaiduRealtimeSTT：百度实时语音识别（生产）
-│   ├── xunfei_stt.py        # XunfeiRealtimeSTT：讯飞实时语音转写（生产可选）
-│   ├── mock.py              # MockAudioCapturer + MockSTTEngine（非 Windows）[Mock]
+│   ├── baidu_stt.py         # BaiduRealtimeSTT：百度实时语音识别（默认）
+│   ├── xunfei_stt.py        # XunfeiRealtimeSTT：讯飞实时语音转写
+│   ├── volc_stt.py          # VolcRealtimeSTT：火山引擎实时 ASR
+│   ├── mock.py              # MockAudioCapturer + MockSTTEngine（非 Windows）
 │   ├── stream.py            # 音频流处理辅助
 │   └── protocol.py          # AudioFrame、TranscriptSegment 协议数据类
 ├── tools/
@@ -113,30 +115,40 @@ src/
 │   ├── skill_view.py        # skill_view 工具
 │   ├── pdf_parsers/         # PDF 解析引擎（Strategy 模式）
 │   │   ├── base.py          # BasePDFParser 抽象基类
-│   │   ├── pymupdf_parser.py# PymupdfParser：本地文本提取（快速，无图像理解）
-│   │   ├── qwen_vl_parser.py# QwenVLParser：Qwen-VL 多模态解析（支持复杂排版）
-│   │   └── mineru_parser.py # MineruParser：MinerU Cloud API 解析
+│   │   ├── pymupdf_parser.py# PymupdfParser：本地文本提取
+│   │   ├── qwen_vl_parser.py# QwenVLParser：多模态解析
+│   │   └── mineru_parser.py # MineruParser：MinerU Cloud API
 │   └── __init__.py          # 统一导出
 ├── storage/
-│   ├── memory_module.py     # MemoryModule：文件系统存储（candidates/ 目录）
+│   ├── memory_module.py     # MemoryModule：存储 Facade（对外唯一入口）
+│   ├── candidate_store.py   # CandidateStore：档案 / 简报 / questions.json
+│   ├── interview_store.py   # InterviewStore：面试生命周期 + rounds.jsonl WAL
+│   ├── eval_store.py        # EvalStore：评价报告
+│   ├── _store_common.py     # frontmatter / index / transcript 等纯函数
 │   ├── user_memory.py       # UserMemoryStore：USER.md 条目化读写
-│   └── conversation_logger.py  # ConversationLogger：JSONL 格式 Agent 对话持久化
-└── models/
-    ├── session.py           # InterviewSession、ConversationRound、InterviewStage 等
-    ├── candidate.py         # CandidateProfile、update_candidate_from_data
-    ├── evaluation.py        # EvalReport、DimensionScore
-    ├── message.py           # LLM 消息 Message 数据类
-    └── exceptions.py        # 业务异常定义（SessionError、StorageError 等）
+│   └── conversation_logger.py  # ConversationLogger：JSONL Agent 对话持久化
+├── models/
+│   ├── session.py           # InterviewSession、ConversationRound、InterviewStage 等
+│   ├── candidate.py         # CandidateProfile、update_candidate_from_data
+│   ├── evaluation.py        # EvalReport、DimensionScore
+│   ├── question.py          # 结构化面试问题模型
+│   ├── message.py           # LLM 消息 Message 数据类
+│   └── exceptions.py        # 业务异常定义
+└── utils/
+    ├── atomic_io.py         # 原子写文件
+    ├── metrics.py           # 进程级 LLM 指标
+    ├── numeric.py           # 数值辅助
+    └── pdf_export.py        # 评价报告 PDF 导出
 
 skills/                      # SKILL.md 面试技巧文件，由 SkillLoader 读取
 ├── question_generation/     # 出题方法论（ResumeAgent 通过 skill_view 调用）
-├── deep_dive/               # 技术深挖追问策略（InterviewAgent）
-├── dimension_switch/        # 考察维度切换引导（InterviewAgent）
-└── behavioral_probe/        # 行为追问策略（InterviewAgent）
+├── deep_dive/               # 技术深挖追问策略
+├── dimension_switch/        # 考察维度切换引导
+└── behavioral_probe/        # 行为追问策略
 recordings/                  # 录音文件（按 session_id 分目录）
-candidates/                  # 候选人档案（profile.md / interviews/ 等）
+candidates/                  # 候选人档案（profile.md / questions.json / interviews/ 等）
 resumes/                     # 临时存放上传的简历 PDF（解析完成后 PDF 迁移至 candidates/{id}/）
-data/                        # 调试数据（如 mock_script.json 脚本回放文件）
+data/                        # 调试数据（如 mock_script.json）
 conversations/               # Agent 对话日志 JSONL（调试用，已加入 .gitignore）
 ```
 
@@ -150,12 +162,12 @@ conversations/               # Agent 对话日志 JSONL（调试用，已加入 
 | Web 框架 | FastAPI | — | REST API 和 WebSocket |
 | Web 服务器 | uvicorn | — | ASGI 服务器 |
 | 前端 UI | NiceGUI | — | Python 声明式单页面 UI，与后端同进程 |
-| LLM | OpenAI SDK（兼容） | — | 通义千问 / DeepSeek 等 OpenAI 兼容端点 |
-| 配置管理 | pydantic-settings | — | 从 `.env` 加载配置，类型安全 |
-| 文件存储 | 文件系统 + PyYAML | — | 候选人档案与面试数据，原子写入（mkstemp+os.replace） |
+| LLM | OpenAI SDK（兼容） | — | 经 `LLM_PROVIDER` / ProviderProfile 接入任意 OpenAI 兼容端点 |
+| 配置管理 | pydantic-settings | — | 从 `.env` 加载配置，类型安全；入口 `get_settings()` |
+| 文件存储 | 文件系统 + PyYAML | — | 候选人档案与面试数据，原子写入 |
 | 音频采集 | Windows WASAPI | Windows 专属 | 双声道实时音频采集（生产） |
-| 语音识别 | 百度实时 ASR / 讯飞实时 | Windows 专属 | 候选人和面试官实时转写（生产，通过 `STT_ENGINE` 选择） |
-| PDF 解析 | Strategy 模式（pymupdf / qwen_vl / mineru） | — | 简历 PDF 解析，通过 `PDF_PARSER` 配置切换引擎：`pymupdf` 本地文本提取；`qwen_vl` 多模态（支持复杂排版）；`mineru` Cloud API |
+| 语音识别 | 百度 / 讯飞 / 火山引擎 | Windows 专属 | 通过 `STT_ENGINE=baidu\|xunfei\|volc` 选择；非 Windows 用 Mock |
+| PDF 解析 | Strategy（pymupdf / qwen_vl / mineru） | — | 通过 `PDF_PARSER` 切换；VL 可用独立 `VL_LLM_*` |
 | HTTP 客户端 | httpx | — | UI Agent 工具调本地 REST 接口 |
 
 ---
@@ -169,30 +181,35 @@ main.py 执行时：
 
 lifespan(app) 启动时（FastAPI 生命周期钩子）：
 3. mkdir recordings/ candidates/ resumes/  → 确保目录存在
-4. MemoryModule(candidates_dir)  → 文件系统存储（candidates/ 目录）
-5. UserMemoryStore(USER.md)      → 加载面试官偏好记忆
-6. OpenAICompatibleClient(...)   → LLM 客户端
-7. SkillLoader(SKILLS_DIR)       → 加载 skills/ 下所有 SKILL.md
-8. ToolRegistry()                → 工具注册表
-9. register_all(tool_registry)   → 统一注册所有工具（dispatch_to_agent / manage_user_memory / parse_resume_pdf / file_read / file_write / skill_view 等）
+4. S-15 配置校验（不阻断启动）
+    - LLM_API_KEY 缺失 → ERROR + startup_warnings
+    - MOCK_AUDIO 但脚本不存在 → ERROR + startup_warnings
+5. MemoryModule(candidates_dir)  → 文件系统存储 Facade
+6. UserMemoryStore(USER.md)      → 加载面试官偏好记忆
+7. OpenAICompatibleClient(LLMConfig)  → LLM 客户端（含 provider / thinking 配置）
+8. SkillLoader(SKILLS_DIR)       → 加载 skills/ 下所有 SKILL.md
+9. ToolRegistry() + register_all → 注册工具
 10. ContextManager(...)          → 滑动窗口上下文管理器
 11. PromptBuilder(...)           → 组装 LLM Messages（注入 UserMemoryStore）
-12. ResumeAgent(...)             → 简历分析 Agent（ReAct 模式，最大 15 轮工具调用）
-13. InterviewAgent(...)          → 面试 Agent
-14. EvalAgent(...)               → 评价 Agent（注入 UserMemoryStore）
-15. 根据配置选择音频实现
-    - MOCK_AUDIO=true  → MockAudioManager（按 mock_script.json 脚本回放，跳过采集和 STT）
-    - Windows + STT_ENGINE=xunfei → WasapiCapturer + XunfeiRealtimeSTT（生产）
-    - Windows（默认）  → WasapiCapturer + BaiduRealtimeSTT（生产）
-    - 其他平台         → MockAudioCapturer + MockSTTEngine（开发）
-    注：PDF 解析引擎由 PDF_PARSER 配置决定（pymupdf / qwen_vl / mineru），在 parse_resume_pdf 工具调用时动态选择，不影响启动流程
-16. AudioManager 或 MockAudioManager(...)  → 组装音频管道
-17. InterviewController(...)     → 面试状态机控制器
-18. MainAgent(...)               → 常驻对话入口（依赖通过 tool_ctx 注入，见步骤 19）
-19. tool_ctx.* = ...             → 注入工具依赖（main_agent / resume_agent / controller / memory_module / user_memory_store / prompt_builder / skill_loader）
-20. app.state.* = ...            → 注入依赖到 FastAPI app.state
+12. ResumeAgent / InterviewAgent / EvalAgent
+13. 音频实现选择
+    - MOCK_AUDIO=true  → MockAudioManager（脚本回放）
+    - Windows + STT_ENGINE=xunfei → WasapiCapturer + XunfeiRealtimeSTT
+    - Windows + STT_ENGINE=volc   → WasapiCapturer + VolcRealtimeSTT
+    - Windows（默认 baidu）       → WasapiCapturer + BaiduRealtimeSTT
+    - 其他平台                    → MockAudioCapturer + MockSTTEngine
+    注：PDF 解析引擎由 PDF_PARSER 在工具调用时动态选择，不影响启动组装
+14. InterviewController(...)     → 面试状态机（注入 interview/eval/memory/audio）
+15. MainAgent(...)               → 常驻对话入口
+16. tool_ctx.* = ...             → 注入工具依赖
+17. scan_orphan_wal()            → 崩溃残留提示（写入 startup_warnings）
+18. app.state.* / UI 依赖注入     → 含 startup_warnings 供 UI 横幅展示
+
+关闭时（lifespan yield 之后）：
+- 若仍在 interviewing → stop_interview()
+- close_session()
 
 启动完成后：
-- ui.run_with(app)   → NiceGUI 挂载到 FastAPI，提供 http://HOST:PORT/
-- uvicorn.run(app)   → 启动 ASGI 服务器，监听 HOST:PORT
+- ui.run_with(app)   → NiceGUI 挂载到 FastAPI
+- uvicorn.run(app)   → 监听 HOST:PORT
 ```

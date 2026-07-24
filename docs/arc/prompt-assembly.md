@@ -73,6 +73,7 @@ _build_system_prompt()
 - 技能列表（最多 15 项）
 - 简历内容（`profile.resume_content` 前 1500 字，即 profile.md 正文）
 - 面试简报预览（`interview_brief` 前 800 字）
+- 历史面试摘要（可选，`history_summary` 前 1200 字）
 
 **注入格式**：
 ```
@@ -86,10 +87,13 @@ _build_system_prompt()
 {resume_content[:1500]}
 面试简报（前800字）：
 {interview_brief[:800]}
+历史面试记录：
+{history_summary[:1200]}
 ```
 
 **更新时机**：
 - 前端选中候选人时，API 层调用 `set_candidate_context(profile, interview_brief=brief)` 替换本层
+- `brief_done` 副作用可附带 `history_summary` 一并刷新
 - 切换候选人时只替换本层，**对话历史不清空**（保持上下文连续）
 - 调用 `clear_candidate_context()` 清空本层
 
@@ -328,7 +332,7 @@ user: 面试官：{interviewer_text}
       请结合以上所有对话记录、候选人简历和题目清单，给出一句追问建议或话题切换引导语，直接输出话术，无需解释。
 ```
 
-LLM 返回**一句中文话术**（非 JSON）。`generate_suggestion()` 使用非流式 `chat()` 调用，一次性 yield 完整文本，由 `_on_trigger_fired` 以 `suggestion_delta` + `suggestion_final` 形式推送至前端。若无面试轮次（面试刚开始）则提示给出开场问题。
+LLM 返回**一句中文话术**（非 JSON）。`generate_suggestion()` 使用流式 `chat_stream()`，由 `_on_trigger_fired` 以 `suggestion_delta` + `suggestion_final` 推送至前端。若无面试轮次（面试刚开始）则提示给出开场问题。
 
 ### EvalAgent
 

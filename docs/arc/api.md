@@ -122,7 +122,30 @@ data: [DONE]
 | 409 | `interview_in_progress` | 当前面试进行中或正在评价，无法上传新简历 |
 | 413 | `file_too_large` | PDF 超过 20MB 上限 |
 
-**去重逻辑**：`candidate_id` 为空且 `overwrite=false` 时，通过 `memory.get_candidate_by_name(safe_stem)` 按文件名（去掉扩展名）精确匹配候选人姓名，存在则返回 409。
+**去重逻辑**：`candidate_id` 为空且 `overwrite=false` 时，通过 `memory.get_candidate_by_name(safe_stem)` 按文件名（去掉扩展名）精确匹配候选人姓名，存在则返回 409。解析阶段还会按 PDF 解析出的真实姓名再次判重（见下方 `resolve-duplicate`）。
+
+---
+
+#### `POST /api/resume/resolve-duplicate`
+
+处理聊天流中的 `duplicate_candidate` 事件：对 `pending_id` 对应的暂存档案执行决议。
+
+**请求体** `application/json`：
+
+```json
+{
+  "pending_id": "uuid",
+  "action": "overwrite | keep_both | cancel"
+}
+```
+
+| action | 行为 |
+|---|---|
+| `overwrite` | 使用既有候选人 ID 覆盖写入 |
+| `keep_both` | 以新档案 ID `save_candidate`（保留两份） |
+| `cancel` | 丢弃 pending，不落盘 |
+
+**错误码**：404 `pending_not_found`；500 `save_failed`
 
 ---
 
@@ -191,9 +214,9 @@ data: [DONE]
 }
 ```
 
-**处理逻辑**：`InterviewController.start_interview()` → 激活 InterviewAgent → 启动 AudioManager → 广播 session_snapshot
+**处理逻辑**：`InterviewController.start_interview()` → 激活 InterviewAgent → 启动 AudioManager（注册 `on_round_finalized`：WAL + 自动覆盖检测）→ `memory.start_interview(session)` 写 `session.json` → 广播 session_snapshot
 
-> 注意：`memory.start_interview(session)`（写 session.json）在 `brief_done` 副作用中已完成；此处 Controller 的 `start_interview()` 不再重复写入，仅负责音频启动和状态切换。
+> 注意：简报 `brief_done` 只写 `brief.md` / `questions.json`，不写 `session.json`；面试存储起点在 Controller `start_interview()`。
 
 ---
 
@@ -240,6 +263,40 @@ data: [DONE]
 
 ---
 
+### 结构化问题清单
+
+#### `GET /api/interview/questions`
+
+读取候选人问题清单（`candidates/{id}/questions.json`）。
+
+**请求参数**（query）：`candidate_id`（必填）
+
+**响应**：`{"questions": [...]}`（每项含 `id` / `question` / `focus` / `covered` / `covered_by` 等）
+
+---
+
+#### `PATCH /api/interview/questions/{question_id}`
+
+手动更新单题覆盖状态。
+
+**请求参数**（query）：`candidate_id`（必填）
+
+**请求体**：`{"covered": true|false}`
+
+---
+
+#### `POST /api/interview/questions/check-coverage`
+
+用 LLM 根据给定对话文本，将已讨论主题对应的问题标记为 covered。
+
+**请求体**：`{"candidate_id": "...", "round_text": "..."}`
+
+**响应**：`{"updated": ["qid", ...], "questions": [...]}`
+
+> 面试进行中，`on_round_finalized` 也会异步调用同一套自动覆盖检测逻辑（`_auto_check_coverage`），失败不影响主流程。
+
+---
+
 #### `GET /api/interview/eval`
 
 生成或获取评价报告。
@@ -268,6 +325,14 @@ data: [DONE]
 
 > 注意：路由层不再在调用 EvalAgent 前主动调用 `save_interview`，历史数据由 `close_session()` → `memory.finish_interview()` 统一写入。
 > `close_session()` 失败时会重试 3 次，最终仍失败时响应体中附带 `warning` 字段（评价报告已生成，不重新生成）。
+
+---
+
+#### `GET /api/interview/{interview_id}/report/export`
+
+将指定面试的评价报告导出为 PDF 下载（`src/utils/pdf_export.py`）。
+
+**错误码**：404 `not_found`（无评价报告）
 
 ---
 
@@ -312,6 +377,14 @@ data: [DONE]
 #### `GET /api/candidates/{candidate_id}/history`
 
 获取候选人历史面试记录。
+
+---
+
+#### `GET /api/candidates/compare`
+
+横向对比 2–5 名候选人的最新 EvalReport，返回评分表格与 LLM 对比摘要。
+
+**请求参数**（query）：`ids`（逗号分隔的候选人 ID）
 
 ---
 
@@ -451,13 +524,19 @@ data: [DONE]
 | `POST /api/chat` | `MainAgent.handle_chat()` → LLM + 工具调用 |
 | `POST /api/candidate/select` | `MainAgent.set_candidate_context()` |
 | `POST /api/resume/upload` | 保存 PDF 文件，返回 file_path（解析由聊天触发） |
+| `POST /api/resume/resolve-duplicate` | 处理 `pending_duplicates` 三选一决议 |
 | `GET /api/resume/profile` | `memory.get_candidate()` + session 缓存 + `memory.get_resume_markdown()` |
 | `GET /api/interview/brief` | session.interview_brief 或 `memory.get_brief()` |
-| `POST /api/interview/start` | `InterviewController.start_interview()` → AudioManager.start() |
+| `POST /api/interview/start` | `InterviewController.start_interview()` → AudioManager.start() → `memory.start_interview()` |
 | `POST /api/interview/stop` | `InterviewController.stop_interview()` → AudioManager.stop() |
 | `POST /api/session/switch` | 兼容接口：interview → start_interview()，eval → stop_interview() |
 | `POST /api/interview/suggest` | `controller.interview_agent.handle_request("trigger_suggestion")` |
+| `GET /api/interview/questions` | `memory.get_questions()` |
+| `PATCH /api/interview/questions/{id}` | `memory.update_question_coverage(..., covered_by="manual")` |
+| `POST /api/interview/questions/check-coverage` | LLM 判定 + `update_question_coverage(..., covered_by="auto")` |
 | `GET /api/interview/eval` | `EvalAgent.handle_request("generate_eval")` → `memory.save_eval_report()` → `controller.close_session()` |
+| `GET /api/interview/{id}/report/export` | `memory.get_eval_report()` → `build_report_pdf()` |
+| `GET /api/candidates/compare` | 拉取各候选人最新 EvalReport + LLM 对比摘要 |
 | `GET /api/recovery/scan` | `memory.scan_orphan_wal()` |
 | `POST /api/recovery/finish` | `memory.recover_interview_from_wal()` |
 | `POST /api/recovery/discard` | `memory.discard_orphan_wal()` |
